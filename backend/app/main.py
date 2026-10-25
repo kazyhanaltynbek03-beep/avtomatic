@@ -1,5 +1,8 @@
 from dataclasses import asdict
 import os, secrets, json, hashlib, uuid, io, base64, logging, threading, time
+import hmac
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, date
 from decimal import Decimal
@@ -152,6 +155,9 @@ def dump(obj):
         result["barcode"] = specs.get("barcode", "")
         result["purchase_cost"] = int(specs.get("purchase_cost") or 0)
         result["custom_fields"] = specs.get("custom_fields") or {}
+        result["marketplace_stock_allocations"] = specs.get("marketplace_stock_allocations") or {}
+    if isinstance(obj, Account):
+        result.pop("integration_settings", None)
     return result
 
 
@@ -1365,6 +1371,13 @@ def listing(
                 "last_sync": latest_sync,
                 "low_stock": physical_units - int(reserved or 0) <= int(row.get("min_stock") or 0),
             }
+        map_q = scope_query(select(MarketplaceProductMapping), MarketplaceProductMapping, u)
+        mapping_rows = db.scalars(map_q.where(MarketplaceProductMapping.product_id.in_(product_ids))).all()
+        for row in rows:
+            row["marketplace_mappings"] = [
+                {"account_id": m.account_id, "channel": m.channel, "external_key": m.external_key}
+                for m in mapping_rows if m.product_id == row["id"]
+            ]
     return {"items": rows, "total": count}
 
 
@@ -1408,9 +1421,12 @@ def master_values(p, entity):
         barcode = values.pop("barcode", "")
         purchase_cost = values.pop("purchase_cost", 0)
         custom_fields = values.pop("custom_fields", {})
+        marketplace_stock_allocations = values.pop("marketplace_stock_allocations", None)
         specs = dict(values.get("specifications") or {})
         specs.update({"description": description, "barcode": barcode,
                       "purchase_cost": purchase_cost, "custom_fields": custom_fields})
+        if marketplace_stock_allocations is not None:
+            specs["marketplace_stock_allocations"] = marketplace_stock_allocations
         values["specifications"] = specs
     if entity == "users":
         pw = values.pop("password")
@@ -1420,9 +1436,16 @@ def master_values(p, entity):
     return values
 
 
+@app.post("/api/products/ai-draft")
+def product_ai_draft(p: dict, u=Depends(current_user)):
+    """Generate an editable product draft; the caller must review and save it."""
+    require(u, "catalog", True)
+    return ai.product_draft(p)
+
+
 @app.post("/api/data/{entity}")
 def create_master(
-    entity: str, payload: dict, u=Depends(current_user), db=Depends(get_db)
+    entity: str, payload: dict, tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)
 ):
     model, cap, schema = model_info(entity)
     require(u, cap, True)
@@ -1435,12 +1458,13 @@ def create_master(
     db.flush()
     audit(db, u, "create", entity, obj.id, {"after": dump(obj)})
     db.commit()
+    if entity == "products": _schedule_wb_sync_for_product(tasks, obj.id)
     return dump(obj)
 
 
 @app.put("/api/data/{entity}/{id}")
 def edit_master(
-    entity: str, id: int, payload: dict, u=Depends(current_user), db=Depends(get_db)
+    entity: str, id: int, payload: dict, tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)
 ):
     model, cap, schema = model_info(entity)
     require(u, cap, True)
@@ -1468,6 +1492,7 @@ def edit_master(
         obj.version += 1
     audit(db, u, "update", entity, id, {"before": before, "after": dump(obj)})
     db.commit()
+    if entity == "products": _schedule_wb_sync_for_product(tasks, obj.id)
     return dump(obj)
 
 
@@ -1515,18 +1540,30 @@ OPERATIONS = {
 
 
 @app.post("/api/post/{kind}")
-def post(kind: str, payload: dict, u=Depends(current_user), db=Depends(get_db)):
+def post(kind: str, payload: dict, tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)):
     if kind not in OPERATIONS:
         raise HTTPException(404, "Операция не найдена")
     schema, fn, cap = OPERATIONS[kind]
     require(u, cap, True)
-    obj = canonical.post_event(db, u, {"purchases":"purchase", "sales":"sale", "returns":"return", "expenses":"expense", "cash":"payment", "adjustments":"stock"}[kind], schema.model_validate(payload), reject_duplicates=True)
+    parsed = schema.model_validate(payload)
+    affected = []
+    affected_company = getattr(parsed, "company_id", None)
+    if kind == "purchases": affected = [x.product_id for x in parsed.lines]
+    elif kind in {"sales", "adjustments"}: affected = [parsed.product_id]
+    elif kind == "returns":
+        sale_row = db.get(Sale, parsed.sale_id)
+        if sale_row:
+            affected = [sale_row.product_id]
+            affected_company = sale_row.company_id
+    obj = canonical.post_event(db, u, {"purchases":"purchase", "sales":"sale", "returns":"return", "expenses":"expense", "cash":"payment", "adjustments":"stock"}[kind], parsed, reject_duplicates=True)
     db.commit()
+    if kind in {"purchases", "sales", "returns", "adjustments"}:
+        for product_id in set(affected): _schedule_wb_sync_for_product(tasks, product_id, affected_company)
     return dump(obj)
 
 
 @app.post("/api/returns/{return_id}/status")
-def update_return_status(return_id: int, payload: dict, u=Depends(current_user), db=Depends(get_db)):
+def update_return_status(return_id: int, payload: dict, tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)):
     require(u, "inventory", True)
     ret = db.get(Return, return_id)
     if not ret:
@@ -1561,6 +1598,7 @@ def update_return_status(return_id: int, payload: dict, u=Depends(current_user),
     if change.status == "restocked":
         f.restock_return_inventory(db, u, ret)
     db.commit()
+    if change.status == "restocked": _schedule_wb_sync_for_product(tasks, sale.product_id, sale.company_id)
     return dump(ret)
 
 
@@ -1713,7 +1751,7 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
 
 
 @app.post("/api/inventory/count")
-def inventory_count(p: s.StockCountIn, u=Depends(current_user), db=Depends(get_db)):
+def inventory_count(p: s.StockCountIn, tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)):
     """Reconcile counted physical quantity as one auditable, replay-safe movement."""
     require(u, "inventory", True)
     f.get_company(db, u, p.company_id)
@@ -1747,6 +1785,7 @@ def inventory_count(p: s.StockCountIn, u=Depends(current_user), db=Depends(get_d
         identity=identity, payload={"request": body, "result": result}, target_id=movement_id, status="posted"))
     audit(db, u, "stock_count", "inventory", product.id, {**body, **result, "movement_id": movement_id})
     db.commit()
+    _schedule_wb_sync_for_product(tasks, product.id, p.company_id)
     return {"ok": True, "replayed": False, "movement_id": movement_id, **result}
 
 
@@ -1915,6 +1954,307 @@ def delete_account_credentials(id: int, u=Depends(current_user), db=Depends(get_
     acc.active=False; acc.sync_status="never"; acc.sync_error=""
     audit(db,u,"credentials_delete","accounts",id,{"channel":acc.channel}); db.commit()
     return {"ok":True,"archived":True}
+
+
+@app.get("/api/accounts/{id}/marketplace-settings")
+def marketplace_settings_get(id: int, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "accounts")
+    acc = db.get(Account, id)
+    if not acc or acc.channel not in {"Kaspi", "Wildberries"}:
+        raise HTTPException(404, "Интеграция не найдена")
+    scope(u, acc.company_id)
+    settings = acc.integration_settings or {}
+    return {"channel": acc.channel, "auto_sync": bool(settings.get("auto_sync", False)),
+            "kaspi_store_id": settings.get("kaspi_store_id", ""),
+            "kaspi_merchant_id": settings.get("kaspi_merchant_id", ""),
+            "kaspi_full_catalog_confirmed": bool(settings.get("kaspi_full_catalog_confirmed", False)),
+            "kaspi_feed_configured": bool(settings.get("kaspi_feed_token_hash")),
+            "wb_warehouse_id": str(settings.get("wb_warehouse_id", ""))}
+
+
+@app.put("/api/accounts/{id}/marketplace-settings")
+def marketplace_settings_save(id: int, p: dict, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "accounts", True)
+    acc = db.get(Account, id)
+    if not acc or acc.channel not in {"Kaspi", "Wildberries"}:
+        raise HTTPException(404, "Интеграция не найдена")
+    scope(u, acc.company_id)
+    settings = dict(acc.integration_settings or {})
+    if acc.channel == "Kaspi":
+        allowed = {"kaspi_store_id", "kaspi_merchant_id", "kaspi_full_catalog_confirmed", "auto_sync"}
+        if set(p) - allowed:
+            raise HTTPException(422, "Неизвестная настройка Kaspi")
+        store = str(p.get("kaspi_store_id", settings.get("kaspi_store_id", ""))).strip()
+        merchant = str(p.get("kaspi_merchant_id", settings.get("kaspi_merchant_id", ""))).strip()
+        if len(store) > 120 or len(merchant) > 120:
+            raise HTTPException(422, "Код магазина или продавца слишком длинный")
+        settings.update({"kaspi_store_id": store, "kaspi_merchant_id": merchant,
+                         "kaspi_full_catalog_confirmed": bool(p.get("kaspi_full_catalog_confirmed", settings.get("kaspi_full_catalog_confirmed", False)))})
+    else:
+        allowed = {"wb_warehouse_id", "auto_sync"}
+        if set(p) - allowed:
+            raise HTTPException(422, "Неизвестная настройка Wildberries")
+        warehouse_id = str(p.get("wb_warehouse_id", settings.get("wb_warehouse_id", ""))).strip()[:40]
+        if warehouse_id and not warehouse_id.isdigit():
+            raise HTTPException(422, "ID склада WB должен быть числовым")
+        settings["wb_warehouse_id"] = warehouse_id
+    if "auto_sync" in p:
+        settings["auto_sync"] = bool(p["auto_sync"])
+    acc.integration_settings = settings
+    audit(db, u, "marketplace_settings_update", "accounts", acc.id,
+          {"channel": acc.channel, "keys": sorted(set(p) - {"auto_sync"})})
+    db.commit()
+    return {"ok": True, "channel": acc.channel, "auto_sync": bool(settings.get("auto_sync", False))}
+
+
+@app.post("/api/accounts/{id}/kaspi/feed-url")
+def kaspi_feed_url(id: int, request: Request, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "accounts", True)
+    acc = db.get(Account, id)
+    if not acc or acc.channel != "Kaspi" or not acc.active:
+        raise HTTPException(404, "Активный магазин Kaspi не найден")
+    scope(u, acc.company_id)
+    settings = dict(acc.integration_settings or {})
+    if not settings.get("kaspi_store_id") or not settings.get("kaspi_merchant_id"):
+        raise HTTPException(422, "Сначала укажите код склада и merchant ID из кабинета Kaspi")
+    if not settings.get("kaspi_full_catalog_confirmed"):
+        raise HTTPException(409, "Подтвердите, что все товары действующего прайс-листа Kaspi будут связаны с QOR")
+    token = secrets.token_urlsafe(32)
+    settings["kaspi_feed_token_hash"] = hashlib.sha256(token.encode()).hexdigest()
+    acc.integration_settings = settings
+    audit(db, u, "kaspi_feed_token_rotated", "accounts", acc.id, {"channel": "Kaspi"})
+    db.commit()
+    base = str(request.base_url).rstrip("/")
+    return {"feed_url": f"{base}/public/kaspi-feeds/{acc.id}/{token}.xml",
+            "setup_note": "Добавьте эту ссылку в кабинете Kaspi → Товары → Прайс-лист → Автоматическая загрузка. Kaspi проверяет обновления примерно раз в час. Ссылка показывает только сопоставленные товары этого магазина."}
+
+
+@app.get("/public/kaspi-feeds/{account_id}/{token}.xml")
+def kaspi_public_feed(account_id: int, token: str, db=Depends(get_db)):
+    acc = db.get(Account, account_id)
+    if not acc or not acc.active or acc.channel != "Kaspi":
+        raise HTTPException(404, "Прайс-лист не найден")
+    settings = acc.integration_settings or {}
+    expected = str(settings.get("kaspi_feed_token_hash") or "")
+    actual = hashlib.sha256(token.encode()).hexdigest()
+    if not expected or not hmac.compare_digest(expected, actual):
+        raise HTTPException(404, "Прайс-лист не найден")
+    if not settings.get("kaspi_full_catalog_confirmed") or not settings.get("kaspi_store_id") or not settings.get("kaspi_merchant_id"):
+        raise HTTPException(409, "Настройки прайс-листа не завершены")
+    mappings = db.scalars(select(MarketplaceProductMapping).where(
+        MarketplaceProductMapping.account_id == acc.id,
+        MarketplaceProductMapping.company_id == acc.company_id,
+        MarketplaceProductMapping.channel == "Kaspi",
+    )).all()
+    product_ids = sorted({m.product_id for m in mappings})
+    products = {p.id: p for p in db.scalars(select(Product).where(Product.id.in_(product_ids), Product.active.is_(True))).all()} if product_ids else {}
+    sku_by_product = {}
+    for mapping in mappings:
+        key = mapping.external_key
+        if key.startswith("sku:"):
+            sku = key[4:]
+            if re.fullmatch(r"[A-Za-z0-9]{1,20}", sku):
+                sku_by_product.setdefault(mapping.product_id, sku)
+    root = ET.Element("kaspi_catalog", {"date": business_today().isoformat(), "xmlns": "kaspiShopping",
+        "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+        "xsi:schemaLocation": "kaspiShopping http://kaspi.kz/kaspishopping.xsd"})
+    ET.SubElement(root, "company").text = acc.name
+    ET.SubElement(root, "merchantid").text = str(settings["kaspi_merchant_id"])
+    offers = ET.SubElement(root, "offers")
+    physical_by_product = dict(db.execute(select(Batch.product_id, func.coalesce(func.sum(Batch.remaining), 0))
+        .where(Batch.company_id == acc.company_id, Batch.product_id.in_(list(products)))
+        .group_by(Batch.product_id)).all()) if products else {}
+    allocated_elsewhere = {}
+    for product_id, product in products.items():
+        specs = product.specifications or {}
+        allocation_map = specs.get("marketplace_stock_allocations") or {}
+        for other_id, value in allocation_map.items():
+            try:
+                count = int(value.get("quantity", 0)) if isinstance(value, dict) else int(value or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if isinstance(value, dict):
+                for size_amount in (value.get("sizes") or {}).values():
+                    try: count += max(0, int(size_amount or 0))
+                    except (TypeError, ValueError): pass
+            allocated_elsewhere[product_id] = allocated_elsewhere.get(product_id, 0) + max(0, count)
+    for product_id, product in products.items():
+        sku = sku_by_product.get(product_id)
+        if not sku or product.price <= 0:
+            continue
+        specs = product.specifications or {}
+        allocation_map = specs.get("marketplace_stock_allocations") or {}
+        try:
+            qty_value = allocation_map.get(str(acc.id), 0)
+            qty = int(qty_value.get("quantity", 0)) if isinstance(qty_value, dict) else int(qty_value or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        qty = max(0, qty)
+        physical = max(0, int(physical_by_product.get(product_id, 0) or 0) - int(specs.get("reserved_quantity") or 0))
+        # Do not publish a platform allocation that exceeds the verified shared physical pool.
+        if qty > physical or allocated_elsewhere.get(product_id, 0) > physical:
+            qty = 0
+        offer = ET.SubElement(offers, "offer", {"sku": sku})
+        ET.SubElement(offer, "model").text = product.name
+        ET.SubElement(offer, "brand").text = product.brand or "Без бренда"
+        availabilities = ET.SubElement(offer, "availabilities")
+        ET.SubElement(availabilities, "availability", {
+            "available": "yes" if qty > 0 else "no", "storeId": str(settings["kaspi_store_id"]), "stockCount": str(qty)})
+        ET.SubElement(offer, "price").text = str((int(product.price) + 50) // 100)
+    xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    return Response(content=xml, media_type="application/xml", headers={"Cache-Control": "no-store"})
+
+
+def _wb_mapped_ids(db, account_id, product_id):
+    rows = db.scalars(select(MarketplaceProductMapping).where(
+        MarketplaceProductMapping.account_id == account_id,
+        MarketplaceProductMapping.product_id == product_id,
+        MarketplaceProductMapping.channel == "Wildberries",
+    )).all()
+    nm_ids, chrt_ids = set(), set()
+    for row in rows:
+        key = row.external_key
+        if key.startswith("product:"):
+            parts = key.split(":")
+            if len(parts) >= 2 and parts[1].isdigit(): nm_ids.add(int(parts[1]))
+            if len(parts) >= 3 and parts[2].isdigit(): chrt_ids.add(int(parts[2]))
+        elif key.startswith("size:") and key[5:].isdigit():
+            chrt_ids.add(int(key[5:]))
+    return rows, sorted(nm_ids), sorted(chrt_ids)
+
+
+def sync_wb_product(db, account, product):
+    settings = account.integration_settings or {}
+    warehouse_id = str(settings.get("wb_warehouse_id") or "")
+    if not warehouse_id:
+        raise HTTPException(409, "Сначала выберите склад продавца Wildberries в настройках интеграции")
+    if not account.active or account.mode != "api":
+        raise HTTPException(409, "Интеграция Wildberries выключена")
+    if account.settlement_currency != product.currency:
+        raise HTTPException(409, f"Валюта магазина WB ({account.settlement_currency}) не совпадает с валютой товара ({product.currency})")
+    mappings, nm_ids, chrt_ids = _wb_mapped_ids(db, account.id, product.id)
+    if not mappings or not nm_ids or not chrt_ids:
+        raise HTTPException(409, "Товар не сопоставлен с карточкой и размерами Wildberries")
+    allocation_map = (product.specifications or {}).get("marketplace_stock_allocations") or {}
+    own = allocation_map.get(str(account.id)) or {}
+    sizes = own.get("sizes") or {} if isinstance(own, dict) else {}
+    if not sizes:
+        raise HTTPException(409, "Укажите отдельное распределение остатка по размерам WB в карточке товара")
+    physical = int(db.scalar(select(func.coalesce(func.sum(Batch.remaining), 0)).where(
+        Batch.company_id == account.company_id, Batch.product_id == product.id)) or 0)
+    reserved = int((product.specifications or {}).get("reserved_quantity") or 0)
+    usable = max(0, physical - reserved)
+    all_allocations = 0
+    for account_alloc in allocation_map.values():
+        if not isinstance(account_alloc, dict): continue
+        try: all_allocations += max(0, int(account_alloc.get("quantity", 0) or 0))
+        except (TypeError, ValueError): pass
+        for amount in (account_alloc.get("sizes") or {}).values():
+            try: all_allocations += max(0, int(amount or 0))
+            except (TypeError, ValueError): pass
+    if all_allocations > usable:
+        raise HTTPException(409, f"Распределено {all_allocations} шт., доступно на складе {usable}. Исправьте лимиты площадок")
+    stock_rows = []
+    for chrt_id in chrt_ids:
+        try: amount = int(sizes.get(str(chrt_id), 0) or 0)
+        except (TypeError, ValueError): raise HTTPException(422, "Остаток WB должен быть целым неотрицательным числом")
+        if amount < 0: raise HTTPException(422, "Остаток WB не может быть отрицательным")
+        stock_rows.append({"chrtId": chrt_id, "amount": amount})
+    if sum(row["amount"] for row in stock_rows) > usable:
+        raise HTTPException(409, "Выделение WB превышает доступный физический остаток")
+    try:
+        client = connector(account, load_saved_credentials(db, account.id))
+        price_rows = []
+        if int(product.price or 0) <= 0:
+            raise HTTPException(409, "Перед синхронизацией укажите цену товара больше нуля")
+        for nm_id in nm_ids:
+            payload = client.product_prices(nm_id)
+            data = payload.get("data") or payload
+            goods = data.get("listGoods") or data.get("goods") or [] if isinstance(data, dict) else []
+            good = next((g for g in goods if int(g.get("nmID") or g.get("nmId") or 0) == nm_id), None)
+            if not good:
+                raise HTTPException(409, f"WB не вернул текущие скидки nmID {nm_id}; цена не отправлена")
+            discounts = {int(size.get("discount") or 0) for size in (good.get("sizes") or [])}
+            if len(discounts) > 1:
+                raise HTTPException(409, f"У nmID {nm_id} разные скидки по размерам. Сначала выровняйте их в кабинете WB")
+            discount = next(iter(discounts), 0)
+            price_rows.append({"nmID": nm_id, "price": (int(product.price) + 50) // 100, "discount": discount})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, "Wildberries: " + str(exc)[:500])
+    price_result = stock_result = None
+    sync_errors = {}
+    try:
+        price_result = client.upload_prices(price_rows)
+    except Exception as exc:
+        sync_errors["price"] = str(exc)[:400]
+    try:
+        stock_result = client.update_seller_stocks(warehouse_id, stock_rows)
+    except Exception as exc:
+        sync_errors["stock"] = str(exc)[:400]
+    audit(db, None, "wildberries_product_outbound_sync", "accounts", account.id,
+          {"product_id": product.id, "nm_ids": nm_ids, "sizes": len(stock_rows), "stock_total": sum(x["amount"] for x in stock_rows),
+           "price_submitted": price_result is not None, "stock_updated": stock_result is not None, "errors": sync_errors})
+    db.commit()
+    if sync_errors:
+        raise HTTPException(422, "WB: " + "; ".join(f"{key}: {value}" for key, value in sync_errors.items()))
+    return {"ok": True, "channel": "Wildberries", "product_id": product.id,
+            "price_task": price_result, "stock_result": stock_result,
+            "price_kzt": (int(product.price) + 50) // 100,
+            "stock_total": sum(x["amount"] for x in stock_rows)}
+
+
+def _auto_sync_wb_product(account_id, product_id):
+    """Best-effort background sync after ERP commits; failures stay in service logs."""
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        product = db.get(Product, product_id)
+        if not account or not product or not (account.integration_settings or {}).get("auto_sync"):
+            return
+        try:
+            sync_wb_product(db, account, product)
+        except Exception:
+            db.rollback()
+            logger.exception("Automatic Wildberries product sync failed for account=%s product=%s", account_id, product_id)
+
+
+def _schedule_wb_sync_for_product(tasks, product_id, company_id=None):
+    if tasks is None: return
+    with SessionLocal() as db:
+        query = select(Account).join(MarketplaceProductMapping, MarketplaceProductMapping.account_id == Account.id).where(
+            MarketplaceProductMapping.product_id == product_id,
+            Account.channel == "Wildberries", Account.active.is_(True))
+        if company_id is not None: query = query.where(Account.company_id == company_id)
+        accounts = db.scalars(query.distinct()).all()
+        eligible = [a.id for a in accounts if (a.integration_settings or {}).get("auto_sync")]
+    for account_id in eligible:
+        tasks.add_task(_auto_sync_wb_product, account_id, product_id)
+
+
+@app.get("/api/accounts/{id}/wb/warehouses")
+def wb_seller_warehouses(id: int, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "accounts")
+    account = db.get(Account, id)
+    if not account or account.channel != "Wildberries": raise HTTPException(404, "Магазин Wildberries не найден")
+    scope(u, account.company_id)
+    try:
+        client = connector(account, load_saved_credentials(db, account.id))
+        result = client.list_seller_warehouses()
+        return {"items": result if isinstance(result, list) else result.get("warehouses", [])}
+    except Exception as exc:
+        raise HTTPException(422, "Не удалось получить склады продавца WB: " + str(exc)[:400])
+
+
+@app.post("/api/accounts/{id}/wb/products/{product_id}/sync")
+def wb_product_sync(id: int, product_id: int, p: dict, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "accounts", True)
+    account = db.get(Account, id)
+    product = db.get(Product, product_id)
+    if not account or account.channel != "Wildberries" or not product: raise HTTPException(404, "Магазин или товар не найден")
+    scope(u, account.company_id)
+    if p.get("confirm") is not True: raise HTTPException(428, "Подтвердите отправку текущей цены и распределённых остатков в Wildberries")
+    return sync_wb_product(db, account, product)
 
 @app.post("/api/accounts/{id}/kaspi/orders/{order_id}/status")
 def kaspi_order_status(id: int, order_id: str, p: dict, u=Depends(current_user), db=Depends(get_db)):

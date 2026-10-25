@@ -1298,7 +1298,7 @@ function ProductImage({ product, label = "Фото не добавлено" }) {
   </div>;
 }
 
-function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selected, onSelect }) {
+function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selected, onSelect, accounts = [], onSync }) {
   return <article className="qor-item-card">
     <ProductImage product={product}/>
     <div className="qor-item-body">
@@ -1307,6 +1307,7 @@ function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selec
       <h3>{product.name || "Товар без названия"}</h3>
       <div className="qor-item-price">{Number(product.price || 0) > 0 ? money(product.price) : <span className="muted">Цена не указана</span>}</div>
       <div className="qor-item-facts"><span>{product.category || "Без категории"}</span><b>Мин. остаток {product.min_stock ?? 0}</b></div>
+      <div className="marketplace-product-details"><div><span>Связь с площадками</span><b>{[...new Set((product.marketplace_mappings || []).map(m=>m.channel))].join(", ") || "не настроена"}</b></div></div>
       <div className="qor-stock-facts">
         <span>Доступно <b>{product.inventory?.available ?? "—"}</b></span>
         <span>Резерв <b>{product.inventory?.reserved ?? "—"}</b></span>
@@ -1317,7 +1318,7 @@ function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selec
       </div>
       {product.inventory?.low_stock && <div className="low-stock-note">Низкий остаток</div>}
       <small className="muted">Физически: {product.inventory?.physical ?? "—"} · Синхронизация: {product.inventory?.last_sync ? new Date(product.inventory.last_sync).toLocaleString("ru-RU") : "нет данных"}</small>
-      <div className="row-actions"><button className="secondary" onClick={onEdit}>Изменить</button><button className="secondary" onClick={onPrice}>Цена</button><button className="secondary" onClick={onCount}>Изменить остаток</button><button className="icon-button danger" title="Архивировать товар" onClick={onDelete}><Trash2 size={16}/></button></div>
+      <div className="row-actions"><button className="secondary" onClick={onEdit}>Изменить</button><button className="secondary" onClick={onPrice}>Цена</button><button className="secondary" onClick={onCount}>Изменить остаток</button>{[...new Set((product.marketplace_mappings || []).filter(m=>m.channel === "Wildberries").map(m=>m.account_id))].map(id=><button className="secondary" key={id} onClick={()=>onSync?.(id)} title="Отправить текущую цену и выделенный остаток">Синхр. WB · {accounts.find(a=>a.id === id)?.name || id}</button>)}<button className="icon-button danger" title="Архивировать товар" onClick={onDelete}><Trash2 size={16}/></button></div>
     </div>
   </article>;
 }
@@ -1357,7 +1358,7 @@ function ProductOperationModal({ operation, company, onClose, onSaved }) {
       } else {
         const price = Math.round(Number(String(value).replace(",", ".")) * 100);
         if (!Number.isFinite(price) || price < 0) throw new Error("Введите корректную цену");
-        const body = {version:product.version, description:product.description || "", barcode:product.barcode || "", purchase_cost:product.purchase_cost || 0, custom_fields:product.custom_fields || {}, sku:product.sku, name:product.name, category:product.category || "", article:product.article || "", brand:product.brand || "", supplier:product.supplier || "", country:product.country || "", media:product.media || [], currency:product.currency || "KZT", fx_rate:product.fx_rate || 10000, weight_g:product.weight_g || 0, volume_cm3:product.volume_cm3 || 0, min_price:product.min_price || 0, recommended_price:product.recommended_price || 0, price, min_stock:product.min_stock || 0, active:product.active !== false, specifications:product.specifications || {}};
+        const body = {version:product.version, description:product.description || "", barcode:product.barcode || "", purchase_cost:product.purchase_cost || 0, custom_fields:product.custom_fields || {}, marketplace_stock_allocations:product.marketplace_stock_allocations || {}, sku:product.sku, name:product.name, category:product.category || "", article:product.article || "", brand:product.brand || "", supplier:product.supplier || "", country:product.country || "", media:product.media || [], currency:product.currency || "KZT", fx_rate:product.fx_rate || 10000, weight_g:product.weight_g || 0, volume_cm3:product.volume_cm3 || 0, min_price:product.min_price || 0, recommended_price:product.recommended_price || 0, price, min_stock:product.min_stock || 0, active:product.active !== false, specifications:product.specifications || {}};
         await api(`/data/products/${product.id}`, {method:"PUT", body});
         onSaved("Цена сохранена");
       }
@@ -1646,6 +1647,9 @@ function DataPage({ page, ctx }) {
     [busy, setBusy] = useState(false),
     [integration, setIntegration] = useState(null),
     [integrationForm, setIntegrationForm] = useState({token:"",client_id:"",api_key:""}),
+    [integrationSettings, setIntegrationSettings] = useState({}),
+    [wbWarehouses, setWbWarehouses] = useState([]),
+    [kaspiFeedUrl, setKaspiFeedUrl] = useState(""),
     [selectedProducts, setSelectedProducts] = useState([]),
     [productOperation, setProductOperation] = useState(null),
     [catalogView, setCatalogView] = useState("cards"),
@@ -1688,7 +1692,7 @@ function DataPage({ page, ctx }) {
   const saveProductPrice = async (product, price) => {
     const normalized = Math.round(Number(String(price).replace(",", ".")) * 100);
     if (!Number.isFinite(normalized) || normalized < 0) throw new Error("Введите корректную цену");
-    const body = {version:product.version, description:product.description || "", barcode:product.barcode || "", purchase_cost:product.purchase_cost || 0, custom_fields:product.custom_fields || {}, sku:product.sku, name:product.name, category:product.category || "", article:product.article || "", brand:product.brand || "", supplier:product.supplier || "", country:product.country || "", media:product.media || [], currency:product.currency || "KZT", fx_rate:product.fx_rate || 10000, weight_g:product.weight_g || 0, volume_cm3:product.volume_cm3 || 0, min_price:product.min_price || 0, recommended_price:product.recommended_price || 0, price:normalized, min_stock:product.min_stock || 0, active:product.active !== false, specifications:product.specifications || {}};
+    const body = {version:product.version, description:product.description || "", barcode:product.barcode || "", purchase_cost:product.purchase_cost || 0, custom_fields:product.custom_fields || {}, marketplace_stock_allocations:product.marketplace_stock_allocations || {}, sku:product.sku, name:product.name, category:product.category || "", article:product.article || "", brand:product.brand || "", supplier:product.supplier || "", country:product.country || "", media:product.media || [], currency:product.currency || "KZT", fx_rate:product.fx_rate || 10000, weight_g:product.weight_g || 0, volume_cm3:product.volume_cm3 || 0, min_price:product.min_price || 0, recommended_price:product.recommended_price || 0, price:normalized, min_stock:product.min_stock || 0, active:product.active !== false, specifications:product.specifications || {}};
     await api(`/data/products/${product.id}`, {method:"PUT", body});
   };
   const quickPrice = async product => {
@@ -1697,6 +1701,15 @@ function DataPage({ page, ctx }) {
   const countStock = async product => {
     if (!ctx.company) { setError("Для инвентаризации выберите компанию в верхнем фильтре"); return; }
     setProductOperation({kind:"count", product});
+  };
+  const syncProductWB = async (product, accountId) => {
+    if (!globalThis.confirm(`Отправить в WB цену ${money(product.price || 0)} и распределённые остатки для «${product.name}»?`)) return;
+    setBusy(true); setError("");
+    try {
+      const result=await api(`/accounts/${accountId}/wb/products/${product.id}/sync`,{method:"POST",body:{confirm:true}});
+      ctx.notify(`WB: задача цены отправлена; остаток обновлён (${result.stock_total} шт.)`);
+    } catch(e) { setError(e.message); }
+    finally { setBusy(false); }
   };
   const bulkPrice = async () => {
     const rows = (state.data?.items || []).filter(p => selectedProducts.includes(p.id));
@@ -1745,10 +1758,41 @@ function DataPage({ page, ctx }) {
   const openIntegration = async (row) => {
     setError("");
     try {
-      const st = await api(`/accounts/${row.id}/connection-status`);
+      const [st,settings] = await Promise.all([
+        api(`/accounts/${row.id}/connection-status`),
+        ["Kaspi","Wildberries"].includes(row.channel) ? api(`/accounts/${row.id}/marketplace-settings`) : Promise.resolve({})
+      ]);
       setIntegration({...row, connection: st});
       setIntegrationForm({token:"",client_id:"",api_key:""});
+      setIntegrationSettings(settings); setKaspiFeedUrl(""); setWbWarehouses([]);
     } catch(e) { setError(e.message); }
+  };
+  const saveMarketplaceSettings = async () => {
+    setBusy(true); setError("");
+    try {
+      await api(`/accounts/${integration.id}/marketplace-settings`, {method:"PUT", body:integration.channel === "Kaspi" ? {
+        kaspi_store_id:integrationSettings.kaspi_store_id || "",
+        kaspi_merchant_id:integrationSettings.kaspi_merchant_id || "",
+        kaspi_full_catalog_confirmed:!!integrationSettings.kaspi_full_catalog_confirmed,
+        auto_sync:!!integrationSettings.auto_sync
+      } : {wb_warehouse_id:integrationSettings.wb_warehouse_id || "",auto_sync:!!integrationSettings.auto_sync}});
+      ctx.notify("Настройки синхронизации сохранены");
+    } catch(e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const createKaspiFeedUrl = async () => {
+    setBusy(true); setError("");
+    try {
+      const result=await api(`/accounts/${integration.id}/kaspi/feed-url`,{method:"POST"});
+      setKaspiFeedUrl(result.feed_url); setIntegrationSettings({...integrationSettings,kaspi_feed_configured:true});
+    } catch(e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const loadWBWarehouses = async () => {
+    setBusy(true); setError("");
+    try { const r=await api(`/accounts/${integration.id}/wb/warehouses`); setWbWarehouses(r.items || []); }
+    catch(e) { setError(e.message); }
+    finally { setBusy(false); }
   };
   const saveIntegration = async () => {
     setBusy(true); setError("");
@@ -1851,6 +1895,8 @@ function DataPage({ page, ctx }) {
           {integration.connection?.saved_on_site && <p><b>Подключение сохранено</b> · {integration.connection.credential_hint}</p>}
           {integration.channel === "Kaspi" && integration.connection?.saved_on_site && <div className="panel"><h3>Управление реальным заказом Kaspi</h3><p className="muted">Операция отправляется прямо в Kaspi. Перед отправкой QOR попросит подтверждение.</p><label>ID заказа Kaspi<input value={kaspiAction.order_id} onChange={e=>setKaspiAction({...kaspiAction,order_id:e.target.value})} placeholder="ID из синхронизации"/></label><label>Номер заказа<input value={kaspiAction.code} onChange={e=>setKaspiAction({...kaspiAction,code:e.target.value})} placeholder="Код заказа"/></label><label>Действие<select value={kaspiAction.status} onChange={e=>setKaspiAction({...kaspiAction,status:e.target.value})}><option value="ACCEPTED_BY_MERCHANT">Принять заказ</option><option value="ASSEMBLE">Скомплектовать / передать</option><option value="ARRIVED">Прибыл (предзаказ)</option><option value="CANCELLED">Отменить</option><option value="COMPLETED">Выдать покупателю</option></select></label>{kaspiAction.status==="ASSEMBLE"&&<label>Количество мест<input type="number" min="1" value={kaspiAction.number_of_space} onChange={e=>setKaspiAction({...kaspiAction,number_of_space:e.target.value})}/></label>}{kaspiAction.status==="CANCELLED"&&<><label>Причина<select value={kaspiAction.cancellation_reason} onChange={e=>setKaspiAction({...kaspiAction,cancellation_reason:e.target.value})}><option value="BUYER_CANCELLATION_BY_MERCHANT">Покупатель отменил</option><option value="BUYER_NOT_REACHABLE">Не удалось связаться</option><option value="MERCHANT_OUT_OF_STOCK">Нет в наличии</option></select></label><label>Комментарий<input value={kaspiAction.cancellation_comment} onChange={e=>setKaspiAction({...kaspiAction,cancellation_comment:e.target.value})}/></label></>}{kaspiAction.status==="COMPLETED"&&<label>Код покупателя<input value={kaspiAction.security_code} onChange={e=>setKaspiAction({...kaspiAction,security_code:e.target.value})} placeholder="Оставьте пустым для отправки кода"/></label>}<button className="primary" onClick={runKaspiAction} disabled={busy}>{busy?"Отправка…":"Выполнить в Kaspi"}</button></div>}
           {integration.channel === "Ozon" ? <><label>Client ID<input value={integrationForm.client_id} onChange={e=>setIntegrationForm({...integrationForm,client_id:e.target.value})} autoComplete="off"/></label><label>API Key<input type="password" value={integrationForm.api_key} onChange={e=>setIntegrationForm({...integrationForm,api_key:e.target.value})} autoComplete="new-password"/></label></> : <label>API Token<input type="password" value={integrationForm.token} onChange={e=>setIntegrationForm({...integrationForm,token:e.target.value})} placeholder={`Вставьте токен ${integration.channel}`} autoComplete="new-password"/></label>}
+          {integration.connection?.saved_on_site && integration.channel === "Kaspi" && <div className="panel padded wide marketplace-sync-settings"><h3>Автообновление цены и остатка Kaspi</h3><p className="muted">Kaspi забирает XML прайс-лист примерно раз в час. QOR отдаёт только товары, сопоставленные с этим магазином; цена берётся из товара, количество — из выделенного остатка.</p><label>Код склада из Kaspi → «Склады и магазины»<input value={integrationSettings.kaspi_store_id || ""} onChange={e=>setIntegrationSettings({...integrationSettings,kaspi_store_id:e.target.value})}/></label><label>Merchant ID продавца из кабинета Kaspi<input value={integrationSettings.kaspi_merchant_id || ""} onChange={e=>setIntegrationSettings({...integrationSettings,kaspi_merchant_id:e.target.value})}/></label><label className="check-label"><input type="checkbox" checked={!!integrationSettings.kaspi_full_catalog_confirmed} onChange={e=>setIntegrationSettings({...integrationSettings,kaspi_full_catalog_confirmed:e.target.checked})}/> Проверил: все товары действующего прайс-листа Kaspi сопоставлены в QOR</label><button className="secondary" onClick={saveMarketplaceSettings} disabled={busy}>Сохранить настройки прайс-листа</button><button className="primary" onClick={createKaspiFeedUrl} disabled={busy || !integrationSettings.kaspi_full_catalog_confirmed}>{integrationSettings.kaspi_feed_configured ? "Создать новую ссылку прайс-листа" : "Сгенерировать ссылку для Kaspi"}</button>{kaspiFeedUrl&&<label>Ссылка. Скопируйте её в кабинете Kaspi<input readOnly value={kaspiFeedUrl} onFocus={e=>e.target.select()}/><small>Ссылка даёт доступ к этому прайс-листу. При утечке создайте новую ссылку.</small></label>}</div>}
+          {integration.connection?.saved_on_site && integration.channel === "Wildberries" && <div className="panel padded wide marketplace-sync-settings"><h3>Синхронизация цены и остатков WB</h3><p className="muted">Работает для уже сопоставленных карточек и размеров на складе продавца FBS. QOR сохраняет скидку WB при обновлении цены. Настройка автоматической отправки выключена до вашего включения.</p><button className="secondary" onClick={loadWBWarehouses} disabled={busy}>{busy?"Загрузка…":"Загрузить склады продавца"}</button><label>Склад продавца<select value={integrationSettings.wb_warehouse_id || ""} onChange={e=>setIntegrationSettings({...integrationSettings,wb_warehouse_id:e.target.value})}><option value="">Выберите склад WB</option>{wbWarehouses.map(w=><option key={w.id ?? w.ID} value={w.id ?? w.ID}>{w.name || w.address || "Склад"} · #{w.id ?? w.ID}</option>)}</select></label><label className="check-label"><input type="checkbox" checked={!!integrationSettings.auto_sync} onChange={e=>setIntegrationSettings({...integrationSettings,auto_sync:e.target.checked})}/> Автоматически отправлять изменения цены и распределённого остатка после сохранения товара, инвентаризации и продажи</label><button className="primary" onClick={saveMarketplaceSettings} disabled={busy}>Сохранить настройки WB</button></div>}
           <div className="modal-footer">{integration.connection?.saved_on_site&&<button className="danger" onClick={disconnectIntegration} disabled={busy}>Отключить</button>}{integration.connection?.saved_on_site&&<button className="secondary" onClick={testIntegration} disabled={busy}>{busy?"Проверка…":"Проверить подключение"}</button>}<button className="secondary" onClick={()=>setIntegration(null)}>Отмена</button><button className="primary" onClick={saveIntegration} disabled={busy}>{busy?"Сохранение…":"Сохранить подключение"}</button></div>
         </section>
       </div>}
@@ -1940,7 +1986,7 @@ function DataPage({ page, ctx }) {
           <ErrorBox error={state.error} />
         ) : (
           <>
-            {entity === "products" ? (catalogView === "cards" ? <div className="qor-item-grid">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={() => ctx.open("products", product)} onDelete={() => remove(product)} onCount={() => countStock(product)} onPrice={() => quickPrice(product)}/>)}</div> : <div className="table-scroll"><table><thead><tr><th></th><th>Фото / товар</th><th>SKU</th><th>Цена</th><th>Физический остаток</th><th>Продано</th><th>Возврат</th><th>Действия</th></tr></thead><tbody>{catalogRows.map(p=><tr key={p.id}><td data-label="Выбрать"><input aria-label={`Выбрать ${p.name}`} type="checkbox" checked={selectedProducts.includes(p.id)} onChange={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,p.id])] : v.filter(id=>id!==p.id))}/></td><td data-label="Товар">{p.name}</td><td data-label="SKU">{p.sku}</td><td data-label="Цена">{money(p.price || 0)}</td><td data-label="Физический остаток">{p.inventory?.physical ?? "—"}</td><td data-label="Продано">{p.inventory?.sold ?? 0}</td><td data-label="Возврат">{p.inventory?.returned ?? 0}</td><td data-label="Действия"><button className="secondary" onClick={()=>ctx.open("products",p)}>Изменить</button> <button className="secondary" onClick={()=>quickPrice(p)}>Цена</button> <button className="secondary" onClick={()=>countStock(p)}>Остаток</button></td></tr>)}</tbody></table></div>) : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
+            {entity === "products" ? (catalogView === "cards" ? <div className="qor-item-grid">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} accounts={ctx.refs.accounts || []} onSync={id=>syncProductWB(product,id)} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={() => ctx.open("products", product)} onDelete={() => remove(product)} onCount={() => countStock(product)} onPrice={() => quickPrice(product)}/>)}</div> : <div className="table-scroll"><table><thead><tr><th></th><th>Фото / товар</th><th>SKU</th><th>Цена</th><th>Физический остаток</th><th>Продано</th><th>Возврат</th><th>Действия</th></tr></thead><tbody>{catalogRows.map(p=><tr key={p.id}><td data-label="Выбрать"><input aria-label={`Выбрать ${p.name}`} type="checkbox" checked={selectedProducts.includes(p.id)} onChange={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,p.id])] : v.filter(id=>id!==p.id))}/></td><td data-label="Товар">{p.name}</td><td data-label="SKU">{p.sku}</td><td data-label="Цена">{money(p.price || 0)}</td><td data-label="Физический остаток">{p.inventory?.physical ?? "—"}</td><td data-label="Продано">{p.inventory?.sold ?? 0}</td><td data-label="Возврат">{p.inventory?.returned ?? 0}</td><td data-label="Действия"><button className="secondary" onClick={()=>ctx.open("products",p)}>Изменить</button> <button className="secondary" onClick={()=>quickPrice(p)}>Цена</button> <button className="secondary" onClick={()=>countStock(p)}>Остаток</button>{[...new Set((p.marketplace_mappings || []).filter(m=>m.channel === "Wildberries").map(m=>m.account_id))].map(id=><button className="secondary" key={id} onClick={()=>syncProductWB(p,id)}>Синхр. WB</button>)}</td></tr>)}</tbody></table></div>) : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
               rows={state.data.items}
               cols={columns[entity] || ["id", "created_at"]}
               refs={ctx.refs}
@@ -2174,14 +2220,18 @@ function EditModal({ kind, item, ctx, close }) {
       initial[f.key] = JSON.stringify(initial[f.key], null, 2);
   }
   const [values, setValues] = useState(initial),
+    [outboundAllocations, setOutboundAllocations] = useState(item?.marketplace_stock_allocations || {}),
     [lines, setLines] = useState([
       { product_id: "", quantity: 1, unit_cost: "", currency: "KZT", fx_rate: "1" },
     ]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
+    [aiFacts, setAiFacts] = useState(""),
+    [aiBusy, setAiBusy] = useState(false),
+    [aiQuestions, setAiQuestions] = useState([]),
     [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""});
   const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
-  const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? ""));
+  const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {});
   const requestClose = useCallback(() => {
     if (dirty && !globalThis.confirm("Есть несохранённые изменения. Закрыть без сохранения?")) return;
     close();
@@ -2226,6 +2276,21 @@ function EditModal({ kind, item, ctx, close }) {
       setError("");
     } catch (e) { setError(e.message); }
   };
+  const generateProductDraft = async () => {
+    setAiBusy(true); setError(""); setAiQuestions([]);
+    try {
+      const draft = await api("/products/ai-draft", {method:"POST", body:{facts:aiFacts}});
+      if (draft.name) set("name", draft.name);
+      if (draft.description) set("description", draft.description);
+      if (draft.specifications && Object.keys(draft.specifications).length) {
+        let current = {};
+        try { current = JSON.parse(values.specifications || "{}"); } catch { current = {}; }
+        set("specifications", JSON.stringify({...current, ...draft.specifications}, null, 2));
+      }
+      setAiQuestions(draft.questions || []);
+    } catch(e) { setError(e.message); }
+    finally { setAiBusy(false); }
+  };
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -2242,6 +2307,7 @@ function EditModal({ kind, item, ctx, close }) {
         else if (f.type === "json") payload[f.key] = JSON.parse(v || "{}");
         else payload[f.key] = v;
       }
+      if (kind === "products") payload.marketplace_stock_allocations = outboundAllocations;
       if (kind === "products" && editing) payload.version = item.version;
       if (kind === "adjustments") payload.reference = submissionRef;
       if (kind === "purchases")
@@ -2447,6 +2513,13 @@ function EditModal({ kind, item, ctx, close }) {
             <X />
           </button>
         </div>
+        {kind === "products" && !editing && <section className="product-ai-draft wide" aria-label="Создание товара с помощью AI">
+          <div><span className="eyebrow">AI PRODUCT STUDIO</span><h3>Заполнить черновик с AI</h3><p className="muted">Вставьте подтверждённые сведения с упаковки или от поставщика. AI предложит название, описание и характеристики; цену, себестоимость и остаток заполните сами.</p></div>
+          <label>Сведения о товаре<textarea rows={3} value={aiFacts} onChange={e=>setAiFacts(e.target.value)} placeholder="Например: модель, бренд, цвет, материал и размеры с упаковки"/></label>
+          <button type="button" className="secondary" onClick={generateProductDraft} disabled={aiBusy || aiFacts.trim().length < 8}>{aiBusy ? "Готовлю черновик…" : "Составить черновик с AI"}</button>
+          {aiQuestions.length > 0 && <div className="product-ai-questions"><b>Проверьте и уточните перед сохранением</b><ul>{aiQuestions.map((q,i)=><li key={i}>{q}</li>)}</ul></div>}
+          <small>AI только заполняет поля формы. Товар сохраняется после нажатия «Сохранить».</small>
+        </section>}
         <div className="form-grid">
           {fields.map((f) => (
             <label
@@ -2465,6 +2538,7 @@ function EditModal({ kind, item, ctx, close }) {
           ))}
         </div>
         {kind === "products" && <div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div>}
+        {kind === "products" && <section className="marketplace-sync-settings"><h3>Распределение остатка по магазинам</h3><p className="muted">Распределите физический остаток между площадками, чтобы не открыть двойные продажи. Общая сумма выделений не может превышать доступный склад. Себестоимость остаётся в QOR.</p>{(ctx.refs.accounts || []).filter(a=>a.active !== false && ["Kaspi","Wildberries"].includes(a.channel) && (!values.company_id || String(a.company_id) === String(values.company_id))).map(account=><div key={account.id} className="marketplace-allocation"><b>{account.channel} · {account.name}</b>{account.channel === "Kaspi" ? <label>Количество для Kaspi<input type="number" min="0" step="1" value={outboundAllocations[String(account.id)]?.quantity ?? outboundAllocations[String(account.id)] ?? ""} onChange={e=>setOutboundAllocations(old=>({...old,[String(account.id)]:{quantity:e.target.value === "" ? "" : Number(e.target.value)}}))} placeholder="0"/></label> : <>{[...new Set((item?.marketplace_mappings || []).filter(m=>m.account_id === account.id && m.external_key.startsWith("size:")).map(m=>m.external_key.slice(5)))].map(chrt=><label key={chrt}>WB размер · chrtId {chrt}<input type="number" min="0" step="1" value={outboundAllocations[String(account.id)]?.sizes?.[chrt] ?? ""} onChange={e=>setOutboundAllocations(old=>({...old,[String(account.id)]:{...(old[String(account.id)] || {}),sizes:{...(old[String(account.id)]?.sizes || {}),[chrt]:e.target.value === "" ? "" : Number(e.target.value)}}}))} placeholder="0"/></label>)}{!(item?.marketplace_mappings || []).some(m=>m.account_id === account.id && m.external_key.startsWith("size:"))&&<small>Сначала синхронизируйте и сопоставьте карточку и размер WB.</small>}</>}<small>Сопоставленные ID: {(item?.marketplace_mappings || []).filter(m=>m.account_id === account.id).map(m=>m.external_key).join(", ") || "нет"}</small></div>)}</section>}
         {kind === "accounts" && !editing && ["Kaspi","Wildberries","Ozon"].includes(values.channel) && (
           <div className="panel padded wide integration-create-box">
             <div className="info-banner"><ShieldCheck size={18}/> API-данные сохраняются на сервере в зашифрованном виде. После создания QOR сразу проверит соединение и запустит синхронизацию.</div>

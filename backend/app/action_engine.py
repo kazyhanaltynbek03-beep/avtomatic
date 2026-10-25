@@ -122,7 +122,16 @@ def execute(db,user,row):
                 "product_name":p["product_name"],"product_sku":p["product_sku"],"store":p["account_name"],
                 "effective_from":p["effective_from"],"external_keys":p["external_keys"]}
         elif row.action_type in MASTER_ACTIONS:
-            model,_,_=MASTER_ACTIONS[row.action_type]; result=model(**parsed.model_dump()); db.add(result); db.flush()
+            model,_,_=MASTER_ACTIONS[row.action_type]
+            data=parsed.model_dump(exclude={"version","description","barcode","purchase_cost","custom_fields","marketplace_stock_allocations"})
+            if model is Product:
+                specs=dict(data.get("specifications") or {})
+                specs.update({"description":parsed.description,"barcode":parsed.barcode,
+                    "purchase_cost":parsed.purchase_cost,"custom_fields":parsed.custom_fields})
+                if parsed.marketplace_stock_allocations is not None:
+                    specs["marketplace_stock_allocations"]=parsed.marketplace_stock_allocations
+                data["specifications"]=specs
+            result=model(**data); db.add(result); db.flush()
         else:
             p=parsed if isinstance(parsed,dict) else parsed.model_dump()
             if row.action_type=="create_product_card":
