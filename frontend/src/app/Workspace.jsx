@@ -1,0 +1,3193 @@
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import {
+  Search,
+  Plus,
+  Menu,
+  X,
+  LogOut,
+  Bell,
+  Sparkles,
+  Download,
+  Upload,
+  CheckCircle2,
+  Trash2,
+  Pencil,
+  RotateCcw,
+  FileText,
+  RefreshCw,
+  Send,
+  Package,
+  Wallet,
+  TrendingUp,
+  Layers,
+  ShieldCheck,
+  Paperclip,
+  Copy,
+  MessageSquare,
+  Image as ImageIcon,
+  Receipt,
+} from "lucide-react";
+import { api, setCsrf, downloadApiFile } from "../services/api";
+import { money, decimal, today } from "../utils/formatters";
+import { can } from "../utils/permissions";
+import { ErrorBox, Empty, Spinner } from "../components/Feedback";
+import { useLoad } from "../hooks/useLoad";
+import { groups, forms, columns, labels, monetary } from "../config";
+import "../style.css";
+const flat = groups.flatMap((g) => g[1]);
+const channels = ["Kaspi", "Wildberries", "Ozon", "Offline", "B2B"];
+const KaspiPreorder = lazy(() => import("../features/KaspiPreorder"));
+const AI_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+async function waitForAIJob(id, onUpdate = () => {}) {
+  const deadline = Date.now() + AI_JOB_TIMEOUT_MS;
+  let current = null;
+  while (Date.now() < deadline) {
+    current = await api("/jobs/" + id);
+    onUpdate(current);
+    if (!["queued", "running"].includes(current.status)) return current;
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+  }
+  throw new Error("AI-задача #" + id + " всё ещё выполняется. Откройте страницу снова и проверьте статус позже.");
+}
+function Login({ onAuth }) {
+  const [email, setEmail] = useState(""),
+    [password, setPassword] = useState(""),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const a = await api("/auth/login", {
+        method: "POST",
+        body: { email, password },
+      });
+      setCsrf(a.csrf);
+      onAuth(a);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="login">
+      <div className="login-story">
+        <div className="brand">
+          <span className="brand-mark">q</span>qor
+          <span className="brand-dot">.</span>
+        </div>
+        <span className="eyebrow">BUSINESS WORKSPACE</span>
+        <h1>
+          Бизнес целиком.
+          <br />
+          Решения по цифрам.
+        </h1>
+        <p>
+          Продажи, склад, финансы и AI —<br />в одном рабочем пространстве.
+        </p>
+        <div className="login-lines">
+          <span>01 / Единый учёт</span>
+          <span>02 / Прозрачная прибыль</span>
+          <span>03 / Данные под контролем</span>
+        </div>
+      </div>
+      <form className="login-form" onSubmit={submit}>
+        <span className="pill">QOR BUSINESS</span>
+        <h2>Добро пожаловать</h2>
+        <p className="muted">Войдите в рабочее пространство компании</p>
+        <label>
+          Email
+          <input
+            type="email"
+            autoComplete="username"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            placeholder="owner@company.kz"
+          />
+        </label>
+        <label>
+          Пароль
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </label>
+        <ErrorBox error={error} />
+        <button className="primary" disabled={busy}>
+          {busy ? "Входим…" : "Войти в систему"}
+        </button>
+        <small>
+          <ShieldCheck size={15} /> Защищённая сессия · Доступ по ролям
+        </small>
+      </form>
+    </div>
+  );
+}
+export default function App() {
+  const [auth, setAuth] = useState(undefined),
+    [page, setPage] = useState(location.hash.slice(1) || "dashboard"),
+    [mobile, setMobile] = useState(false),
+    [refresh, setRefresh] = useState(0),
+    [notice, setNotice] = useState(""),
+    [refs, setRefs] = useState({}),
+    [company, setCompany] = useState(""),
+    [range, setRange] = useState("Месяц"),
+    [start, setStart] = useState(today().slice(0, 8) + "01"),
+    [end, setEnd] = useState(today()),
+    [modal, setModal] = useState(null),
+    [settings, setSettings] = useState({});
+  const noticeTimer = useRef(null);
+  useEffect(() => () => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+  }, []);
+  useEffect(() => {
+    api("/auth/me")
+      .then((a) => {
+        setCsrf(a.csrf);
+        setAuth(a);
+      })
+      .catch(() => setAuth(null));
+  }, []);
+  const notify = (m) => {
+    setNotice(m);
+    setRefresh((v) => v + 1);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => {
+      setNotice("");
+      noticeTimer.current = null;
+    }, 5000);
+  };
+  useEffect(() => {
+    if (!auth) return;
+    let live = true;
+    Promise.all(
+      [
+        "companies",
+        "products",
+        "accounts",
+      ].map(async (k) => {
+        try {
+          const items = (await api("/data/" + k + "?limit=500")).items;
+          return [k, k === "accounts" ? items.filter((x) => x.active !== false) : items];
+        } catch {
+          return [k, []];
+        }
+      }),
+    ).then((r) => {
+      if (live) setRefs(Object.fromEntries(r));
+    });
+    api("/settings")
+      .then(setSettings)
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [auth, refresh]);
+  const navigate = (id) => {
+    setPage(id);
+    location.hash = id;
+    setMobile(false);
+  };
+  useEffect(() => {
+    const fn = () => setPage(location.hash.slice(1) || "dashboard");
+    window.addEventListener("hashchange", fn);
+    return () => window.removeEventListener("hashchange", fn);
+  }, []);
+  useEffect(() => {
+    if (!auth) return;
+    const item = flat.find((x) => x[0] === page);
+    if (!item || !can(auth, item[3]))
+      navigate(flat.find((x) => can(auth, x[3]))?.[0] || "settings");
+  }, [auth, page]);
+  const chooseRange = (v) => {
+    setRange(v);
+    const now = new Date(today() + "T12:00:00Z");
+    let a = new Date(now),
+      b = new Date(now);
+    if (v === "Вчера") {
+      a.setUTCDate(a.getUTCDate() - 1);
+      b = new Date(a);
+    }
+    if (v === "Неделя") a.setUTCDate(a.getUTCDate() - 6);
+    if (v === "Месяц") a.setUTCDate(1);
+    if (v === "Квартал") {
+      a.setUTCMonth(Math.floor(a.getUTCMonth() / 3) * 3, 1);
+    }
+    if (v === "Год") {
+      a.setUTCMonth(0, 1);
+    }
+    if (v !== "Период") {
+      setStart(a.toISOString().slice(0, 10));
+      setEnd(b.toISOString().slice(0, 10));
+    }
+  };
+  if (auth === undefined) return <Spinner />;
+  if (!auth) return <Login onAuth={setAuth} />;
+  const current = flat.find((x) => x[0] === page) || flat[0];
+  const ctx = {
+    auth,
+    refs,
+    company,
+    start,
+    end,
+    refresh,
+    notify,
+    navigate,
+    open: (kind, item) => setModal({ kind, item }),
+  };
+  const logout = async () => {
+    await api("/auth/logout", { method: "POST" });
+    setAuth(null);
+    setCsrf("");
+  };
+  return (
+    <div className="app">
+      <div
+        className={"scrim " + (mobile ? "show" : "")}
+        onClick={() => setMobile(false)}
+      />
+      <aside className={mobile ? "open" : ""} aria-label="Главное меню">
+        <button className="sidebar-close" onClick={() => setMobile(false)} aria-label="Закрыть меню"><X size={20} /></button>
+        <a
+          href="#dashboard"
+          className="brand"
+          onClick={() => navigate("dashboard")}
+        >
+          <span className="brand-mark">q</span>qor
+          <span className="brand-dot">.</span>
+          <span className="workspace-tag">BUSINESS</span>
+        </a>
+        <div className="workspace">
+          <div className="workspace-avatar">GK</div>
+          <div>
+            <strong>{settings.business_name || "QOR Business"}</strong>
+            <small>Рабочее пространство</small>
+          </div>
+        </div>
+        <nav>
+          {groups.map(([title, items]) => {
+            const filtered = items.filter((x) => can(auth, x[3]));
+            return (
+              filtered.length > 0 && (
+                <section key={title}>
+                  <h4>{title}</h4>
+                  {filtered.map(([id, name, I]) => (
+                    <button
+                      key={id}
+                      className={page === id ? "nav-item active" : "nav-item"}
+                      aria-current={page === id ? "page" : undefined}
+                      onClick={() => navigate(id)}
+                    >
+                      <I size={18} />
+                      <span>{name}</span>
+                      {id === "assistant" && <i>AI</i>}
+                    </button>
+                  ))}
+                </section>
+              )
+            );
+          })}
+        </nav>
+        <div className="profile">
+          <div className="avatar">{auth.user.name[0]}</div>
+          <div>
+            <strong>{auth.user.name}</strong>
+            <small>{auth.user.role}</small>
+          </div>
+          <button className="icon-button" onClick={logout} title="Выйти">
+            <LogOut size={18} />
+          </button>
+        </div>
+      </aside>
+      <div className="main-shell">
+        <header>
+          <button
+            className="icon-button mobile-menu"
+            onClick={() => setMobile(true)}
+            aria-label="Открыть меню"
+          >
+            <Menu />
+          </button>
+          <div className="breadcrumb">
+            Рабочее пространство <span>/</span> <strong>{current[1]}</strong>
+          </div>
+          <div className="header-right">
+            {settings.demo && <span className="demo-badge">ДЕМО-ДАННЫЕ</span>}
+            <span className="currency">KZT · ₸</span>
+            {can(auth, "analytics") && (
+              <button
+                className="icon-button"
+                onClick={() => navigate("alerts")}
+                aria-label="Уведомления"
+              >
+                <Bell size={19} />
+              </button>
+            )}
+            <div className="avatar small">{auth.user.name[0]}</div>
+          </div>
+        </header>
+        <main>
+          <div className="page-heading">
+            <div>
+              <div className="eyebrow">
+                {["assistant", "niches", "content", "designer"].includes(page)
+                  ? "INTELLIGENCE"
+                  : "BUSINESS OVERVIEW"}
+              </div>
+              <h1>{current[1]}</h1>
+              <p>
+                {page === "dashboard"
+                  ? "Главные показатели и то, что требует вашего внимания."
+                  : page === "stock"
+                    ? "Один физический склад. Остатки разделены по владельцам."
+                    : page === "accounts"
+                      ? "Каналы продаж и отдельные аккаунты ваших компаний."
+                      : "Данные рабочего пространства"}
+              </p>
+            </div>
+            {[
+              "dashboard",
+              "sales",
+              "purchases",
+              "products",
+              "expenses",
+              "cash",
+              "companies",
+              "accounts",
+              "customers",
+              "users",
+              "niches",
+            ].includes(page) &&
+              can(auth, page === "dashboard" ? "sales" : current[3], true) &&
+              (!["companies", "users"].includes(page) ||
+                auth.user.role === "Owner") && (
+                <button
+                  className="primary"
+                  onClick={() =>
+                    setModal({ kind: page === "dashboard" ? "sales" : page })
+                  }
+                >
+                  <Plus size={18} />
+                  {page === "dashboard" ? "Новая продажа" : "Добавить"}
+                </button>
+              )}
+          </div>
+          <div className="toolbar">
+            <div className="filter-company">
+              <BuildingSelect
+                refs={refs}
+                company={company}
+                setCompany={setCompany}
+              />
+            </div>
+            {[
+              "dashboard",
+              "analytics",
+              "profit",
+              "forecast",
+              "alerts",
+              "accounting",
+              ...channels.slice(0, 3),
+            ].includes(page) && (
+              <div className="periods">
+                {[
+                  "Сегодня",
+                  "Вчера",
+                  "Неделя",
+                  "Месяц",
+                  "Квартал",
+                  "Год",
+                  "Период",
+                ].map((v) => (
+                  <button
+                    className={v === range ? "selected" : ""}
+                    key={v}
+                    onClick={() => chooseRange(v)}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              className="icon-button refresh"
+              title="Обновить"
+              onClick={() => setRefresh((x) => x + 1)}
+            >
+              <RefreshCw size={17} />
+            </button>
+          </div>
+          {range === "Период" &&
+            [
+              "dashboard",
+              "analytics",
+              "profit",
+              "forecast",
+              "alerts",
+              "accounting",
+              ...channels.slice(0, 3),
+            ].includes(page) && (
+              <div className="dates">
+                <label>
+                  С
+                  <input
+                    type="date"
+                    value={start}
+                    onChange={(e) => setStart(e.target.value)}
+                  />
+                </label>
+                <label>
+                  По
+                  <input
+                    type="date"
+                    value={end}
+                    onChange={(e) => setEnd(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+          {[
+            "dashboard",
+            "analytics",
+            "profit",
+            "forecast",
+            "alerts",
+            "accounting",
+          ].includes(page) ? (
+            <ReportPage page={page} ctx={ctx} />
+          ) : page === "stock" ? (
+            <Stock ctx={ctx} />
+          ) : ["assistant", "content", "designer"].includes(page) ? (
+            <AIPage
+              key={page}
+              page={page}
+              ctx={ctx}
+              enabled={settings.ai_enabled}
+            />
+          ) : page === "calculator" ? (
+            <Calculator />
+          ) : page === "imports" ? (
+            <Imports ctx={ctx} />
+          ) : page === "kaspi-preorder" ? (
+            <Suspense fallback={<Spinner />}><KaspiPreorder ctx={ctx} /></Suspense>
+          ) : page === "roles" ? (
+            <Roles />
+          ) : page === "settings" ? (
+            <Settings
+              settings={settings}
+              ctx={ctx}
+              onLogout={() => setAuth(null)}
+            />
+          ) : (
+            <DataPage key={page} page={page} ctx={ctx} />
+          )}
+          <footer>
+            <span>QOR Business</span>
+            <span>Asia/Almaty · Учёт в KZT</span>
+          </footer>
+        </main>
+      </div>
+      <nav className="mobile-dock" aria-label="Основная мобильная навигация">
+        {[
+          ["dashboard", "Обзор", TrendingUp],
+          ["sales", "Продажи", Receipt],
+          ["assistant", "QOR AI", Sparkles],
+          ["stock", "Склад", Package],
+        ].filter(([id]) => {
+          const item = flat.find((x) => x[0] === id);
+          return item && can(auth, item[3]);
+        }).map(([id, label, DockIcon]) => (
+          <button key={id} className={page === id ? "active" : ""} onClick={() => navigate(id)}>
+            <DockIcon size={20} />
+            <span>{label}</span>
+          </button>
+        ))}
+        <button onClick={() => setMobile(true)} className={mobile ? "active" : ""}>
+          <Menu size={20} />
+          <span>Меню</span>
+        </button>
+      </nav>
+      {notice && (
+        <div className="toast" role="status">
+          <CheckCircle2 size={19} />
+          {notice}
+        </div>
+      )}
+      {modal && (
+        <EditModal
+          kind={modal.kind}
+          item={modal.item}
+          ctx={ctx}
+          close={() => setModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+function BuildingSelect({ refs, company, setCompany }) {
+  return (
+    <select
+      aria-label="Компания"
+      value={company}
+      onChange={(e) => setCompany(e.target.value)}
+    >
+      <option value="">Все доступные компании</option>
+      {refs.companies?.map((x) => (
+        <option key={x.id} value={x.id}>
+          {x.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+function Table({ rows, cols, refs = {}, actions, raw = false }) {
+  const fmt = (row, k) => {
+    const v = k === "score" ? row.analysis?.score : row[k];
+    if (raw) return v == null ? "—" : String(v);
+    if (v == null) return "—";
+    if (monetary.has(k)) return money(v);
+    if (k === "active")
+      return (
+        <span className={"badge " + (v ? "green" : "gray")}>
+          {v ? "Активен" : "Отключён"}
+        </span>
+      );
+    if (k === "mode")
+      return (
+        <span className={"badge " + (v === "api" ? "amber" : "gray")}>
+          {v === "csv"
+            ? "CSV / Excel"
+            : v === "demo"
+              ? "Demo adapter"
+              : "API"}
+        </span>
+      );
+    if (k === "score") return <span className="score">{v} / 100</span>;
+    if (k === "overdue") return v ? "Да" : "Нет";
+    const rel = {
+      company_id: "companies",
+      product_id: "products",
+      account_id: "accounts",
+      sale_id: "sales",
+      customer_id: "customers",
+      user_id: "users",
+    }[k];
+    if (rel)
+      return (
+        refs[rel]?.find((x) => x.id === v)?.name ||
+        refs[rel]?.find((x) => x.id === v)?.reference ||
+        "#" + v
+      );
+    if (k === "company_ids")
+      return v.length
+        ? v
+            .map(
+              (id) =>
+                refs.companies?.find((c) => c.id === id)?.name || "#" + id,
+            )
+            .join(", ")
+        : "—";
+    if (k === "created_at" || k === "last_sync")
+      return new Date(v).toLocaleString("ru-RU", { timeZone: "Asia/Almaty" });
+    if (k === "size") return Math.ceil(v / 1024) + " КБ";
+    if (typeof v === "object") return JSON.stringify(v);
+    return String(v);
+  };
+  if (!rows.length) return <Empty />;
+  return (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            {cols.map((k) => (
+              <th key={k}>{labels[k] || k}</th>
+            ))}
+            {actions && <th>Действия</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={row.id || i}>
+              {cols.map((k, j) => (
+                <td key={k} data-label={labels[k] || k} className={j === 0 ? "strong" : ""}>
+                  {fmt(row, k)}
+                </td>
+              ))}
+              {actions && (
+                <td data-label="Действия">
+                  <div className="row-actions">{actions(row)}</div>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function CostPendingNotice({ report, ctx }) {
+  if (report.profit_complete !== false) return null;
+  const pending = Number(report.pending_cogs_sales || 0);
+  const channels = (report.channel_summary || []).filter(
+    (channel) => Number(channel.pending_cogs || 0) > 0 &&
+      ["Kaspi", "Wildberries", "Ozon"].includes(channel.channel),
+  );
+  return (
+    <div className="panel cost-pending-banner" role="status">
+      <div>
+        <strong>{pending > 0 ? `Себестоимость не заполнена для ${pending} продаж` : "Есть подтверждённые операции, ожидающие обработки"}</strong>
+        <p>{pending > 0 ? "Выручка и комиссия уже учтены. Валовая и чистая прибыль появятся после внесения закупочной себестоимости по продажам." : "Прибыль, маржа и ROI появятся после обработки ожидающих операций."}</p>
+      </div>
+      <div className="cost-pending-actions">
+        {can(ctx.auth, "finance") ? channels.map((channel) => (
+          <button key={channel.channel} className="secondary" type="button" onClick={() => ctx.navigate(channel.channel)}>
+            Заполнить {channel.channel} · {channel.pending_cogs}
+          </button>
+        )) : pending > 0 ? <small>Изменение себестоимости доступно финансовой роли.</small> : null}
+      </div>
+    </div>
+  );
+}
+function ReportPage({ page, ctx }) {
+  const [detailMetric, setDetailMetric] = useState(null);
+  const usesDashboard = page === "dashboard" || page === "analytics";
+  const reportPath = "/report?start=" + ctx.start + "&end=" + ctx.end +
+    (ctx.company ? "&company_id=" + ctx.company : "");
+  const summaryPath = "/dashboard/summary?start=" + ctx.start + "&end=" + ctx.end +
+    (ctx.company ? "&company_id=" + ctx.company : "");
+  const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
+    (ctx.company ? "&company_id=" + ctx.company : "") : null;
+  const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
+    usesDashboard || page === "forecast" ? null : reportPath,
+    ctx.refresh,
+  );
+  const { data: dash, error: dashError, loading: dashLoading } = useLoad(
+    usesDashboard ? summaryPath : null,
+    ctx.refresh,
+  );
+  const { data: systemAlerts, error: systemAlertsError } = useLoad(alertsPath, ctx.refresh);
+  const r = usesDashboard ? dash?.report : loadedReport;
+  if ((usesDashboard && dashLoading) || (!usesDashboard && page !== "forecast" && reportLoading)) return <Spinner />;
+  if (usesDashboard && dashError) return <ErrorBox error={dashError} />;
+  if (!usesDashboard && page !== "forecast" && reportError) return <ErrorBox error={reportError} />;
+  if (page === "alerts")
+    return (
+      <>
+        <div className="panel">
+          <div className="panel-heading">
+            <h2>Автоматические проверки ERP</h2>
+            <span className="badge amber">{systemAlerts?.count ?? "…"}</span>
+          </div>
+          {systemAlertsError ? <ErrorBox error={systemAlertsError} /> :
+            systemAlerts?.items?.length ? <div className="alert-list">{systemAlerts.items.map((item, index) =>
+              <div className={`alert-item ${item.severity || "info"}`} key={`${item.type}-${item.account_id || "all"}-${index}`}>
+                <strong>{item.title}</strong>
+                {item.action && <p>{item.action}</p>}
+              </div>)}
+            </div> : <Empty title="Критических проверок нет" />}
+        </div>
+        <div className="panel">
+          <div className="panel-heading">
+            <h2>Остатки требуют внимания</h2>
+            <span className="badge amber">{r.stock_alerts.length} SKU</span>
+          </div>
+          <Table rows={r.stock_alerts} cols={columns.stock} />
+        </div>
+        <div className="panel">
+          <div className="panel-heading">
+            <h2>Просроченные оплаты</h2>
+          </div>
+          <Table
+            rows={r.receivables.filter((x) => x.overdue)}
+            cols={["reference", "channel", "due", "due_date"]}
+            refs={ctx.refs}
+          />
+        </div>
+      </>
+    );
+  if (page === "forecast") return <Forecast ctx={ctx} />;
+  if (page === "profit" || page === "accounting")
+    return (
+      <>
+        <CostPendingNotice report={r} ctx={ctx} />
+        <div className="report-grid">
+          <div className="panel">
+            <div className="panel-heading">
+              <h2>Отчёт о прибыли и убытках</h2>{r.profit_complete === false && <span className="badge amber">Ожидается себестоимость / обработка операций</span>}
+              <div className="heading-actions">
+                <span>{ctx.start} — {ctx.end}</span>
+                <a className="button secondary" href={`/api/reports/executive.xlsx?start=${ctx.start}&end=${ctx.end}${ctx.company ? `&company_id=${ctx.company}` : ""}`}>Скачать XLSX</a>
+              </div>
+            </div>
+            {[
+              ["Выручка за вычетом возвратов", r.revenue, "revenue"],
+              ["Себестоимость проданного", r.cogs == null ? null : -r.cogs, "cogs"],
+              ["Валовая прибыль", r.gross_profit, "gross_profit"],
+              [r.commission_estimated > 0 ? "Комиссии (Kaspi включает оценку)" : "Комиссии", -r.commission, "commission"],
+              ["Логистика", -r.logistics, "logistics"],
+              ["Реклама", -r.advertising, "advertising"],
+              ["Операционные расходы", -r.expenses, "expenses"],
+              ["Чистая прибыль", r.net_profit, "net_profit"],
+            ].map(([k, v, metric], i) => (
+              <button
+                type="button"
+                className={
+                  "statement-line statement-drill " + ([2, 7].includes(i) ? "total" : "")
+                }
+                key={k}
+                onClick={() => setDetailMetric({ metric, title: k })}
+                title="Показать, из каких операций получилась сумма"
+              >
+                <span>{k}<small>{metric === "commission" && r.commission_estimated > 0 ? `Расчётная комиссия Kaspi: ${money(-r.commission_estimated)} · открыть детализацию` : "Показать операции"}</small></span>
+                <strong>{money(v)}</strong>
+              </button>
+            ))}
+            <p className="panel-note">
+              Налоги входят в прибыль только после регистрации расхода «Налоги».
+              Автоматический налоговый расчёт и регламентированная отчётность не
+              подключены.
+            </p>
+            {r.commission_estimate_suppressed && (
+              <p className="panel-note amber">
+                Оценка комиссии Kaspi пропущена: за этот период внесена фактическая комиссия. Проверьте, что она покрывает весь период.
+              </p>
+            )}
+          </div>
+          <div className="panel">
+            <div className="panel-heading">
+              <h2>Активы и расчёты на {ctx.end}</h2>
+            </div>
+            {[
+              ["Деньги", r.cash, "cash"],
+              ["Стоимость остатков", r.stock_value, "stock_value"],
+              ["B2B задолженность", r.b2b_debt, "b2b_debt"],
+              ["К возврату покупателям", r.refunds_payable, "refunds_payable"],
+              ["Денежный поток за период", r.cash_flow, "cash_flow"],
+            ].map(([k, v, metric]) => (
+              <button type="button" className="statement-line statement-drill" key={k} onClick={() => setDetailMetric({ metric, title: k })}>
+                <span>{k}<small>Показать расшифровку</small></span>
+                <strong>{money(v)}</strong>
+              </button>
+            ))}
+            <p className="panel-note">
+              Стоимость склада — актив, а не расход периода. Оплата закупки
+              отражается в Cash Flow отдельно от прибыли.
+            </p>
+            {page === "accounting" && (
+              <div className="export-links">
+                <a className="secondary" href="/api/export/sales?format=xlsx">
+                  Продажи XLSX
+                </a>
+                <a className="secondary" href="/api/export/cash?format=xlsx">
+                  Деньги XLSX
+                </a>
+                <a
+                  className="secondary"
+                  href="/api/export/expenses?format=xlsx"
+                >
+                  Расходы XLSX
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="panel cashflow-panel">
+          <div className="panel-heading">
+            <div><h2>Cash Flow за период</h2><span>Движение реальных денег, отдельно от прибыли</span></div>
+          </div>
+          <div className="secondary-kpis compact-kpis">
+            <div><span>На начало</span><strong>{money(r.cash_opening || 0)}</strong></div>
+            <div><span>Поступления</span><strong>{money(r.cash_inflow || 0)}</strong></div>
+            <div><span>Выплаты</span><strong>{money(r.cash_outflow || 0)}</strong></div>
+            <div><span>Чистый поток</span><strong>{money(r.cash_flow || 0)}</strong></div>
+            <div><span>На конец</span><strong>{money(r.cash_closing ?? r.cash)}</strong></div>
+          </div>
+          <Table rows={r.cash_by_category || []} cols={["category", "inflow", "outflow", "net"]} />
+        </div>
+        <div className="panel">
+          <div className="panel-heading">
+            <h2>Дебиторская задолженность</h2>
+          </div>
+          <Table
+            rows={r.receivables}
+            cols={[
+              "reference",
+              "channel",
+              "customer_id",
+              "due",
+              "due_date",
+              "overdue",
+            ]}
+            refs={ctx.refs}
+          />
+        </div>
+            {detailMetric && <ReportDetails ctx={ctx} detail={detailMetric} onClose={() => setDetailMetric(null)} />}
+      </>
+    );
+  const headline = [
+    ["Оборот сегодня", dash.today.revenue, "На " + dash.as_of],
+    ["Прибыль сегодня", dash.today.net_profit, "Чистая прибыль"],
+    ["Оборот месяца", dash.month.revenue, "С начала месяца"],
+    ["Валовая прибыль месяца", dash.month.gross_profit, "С начала месяца"],
+    ["Чистая прибыль месяца", dash.month.net_profit, "С начала месяца"],
+  ];
+  const kpis = [
+    ["Оборот", r.revenue, "За вычетом возвратов", Wallet],
+    ["Валовая прибыль", r.gross_profit, "Выручка − себестоимость", Layers],
+    ["Чистая прибыль", r.net_profit, "После учтённых расходов", TrendingUp],
+    [
+      "Маржинальность",
+      r.margin == null ? "—" : decimal(r.margin) + "%",
+      "Чистая прибыль / выручка",
+      ChartIcon,
+    ],
+  ];
+  return (
+    <>
+      <CostPendingNotice report={r} ctx={ctx} />
+      <div className="dashboard-headline">
+        {headline.map(([title, value, note]) => (
+          <div className="headline-card" key={title}><span>{title}</span><strong>{money(value)}</strong><small>{note}</small></div>
+        ))}
+      </div>
+      <div className="kpis">
+        {kpis.map(([title, value, note, I], i) => (
+          <div className={"kpi " + (i === 2 ? "featured" : "")} key={title}>
+            <div>
+              <span>{title}</span>
+              <I size={18} />
+            </div>
+            <strong>{typeof value === "number" ? money(value) : value}</strong>
+            <small>{note}</small>
+          </div>
+        ))}
+      </div>
+      <div className="charts-grid">
+        <div className="panel chart-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Динамика бизнеса</h2>
+              <span>Выручка и чистая прибыль</span>
+            </div>
+            <div className="legend">
+              <span>● Выручка</span>
+              <span>● Прибыль</span>
+            </div>
+          </div>
+          {r.daily.length ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <AreaChart
+                data={r.daily}
+                margin={{ top: 15, right: 12, left: 0, bottom: 0 }}
+              >
+                <defs>
+                  <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#218a70" stopOpacity={0.18} />
+                    <stop offset="100%" stopColor="#218a70" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid
+                  strokeDasharray="3 5"
+                  vertical={false}
+                  stroke="#e8eeeb"
+                />
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(s) => s.slice(8) + "." + s.slice(5, 7)}
+                  axisLine={false}
+                  tickLine={false}
+                  minTickGap={24}
+                />
+                <YAxis
+                  tickFormatter={(n) => decimal(n / 100000) + "к"}
+                  axisLine={false}
+                  tickLine={false}
+                  width={54}
+                />
+                <Tooltip
+                  formatter={money}
+                  labelFormatter={(s) => "Дата: " + s}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="revenue"
+                  name="Выручка"
+                  stroke="#218a70"
+                  strokeWidth={2.5}
+                  fill="url(#rev)"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="profit"
+                  name="Прибыль"
+                  stroke="#96ada4"
+                  strokeWidth={2}
+                  fill="transparent"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <Empty text="За выбранный период нет операций" />
+          )}
+        </div>
+        <div className="panel channel-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Продажи по аккаунтам</h2>
+              <span>Выручка по проведённым операциям за период</span>
+            </div>
+            <span className="pill">{r.channels.length} с операциями</span>
+          </div>
+          {r.channels.length ? (
+            r.channels
+              .sort((a, b) => b.revenue - a.revenue)
+              .slice(0, 7)
+              .map((c, i) => (
+                <div className="channel" key={c.name}>
+                  <div>
+                    <span>
+                      <b className={"channel-symbol channel-" + i}>
+                        {c.name[0]}
+                      </b>
+                      {c.name}
+                    </span>
+                    <strong>{money(c.revenue)}</strong>
+                  </div>
+                  <small className="channel-returns">Возвраты: {money((r.channels.find((x) => x.name === c.name)?.returns) || 0)}</small>
+                  <div className="track">
+                    <span
+                      style={{
+                        width:
+                          Math.max(
+                            0,
+                            Math.min(
+                              100,
+                              (c.revenue / Math.max(r.revenue, 1)) * 100,
+                            ),
+                          ) + "%",
+                        background: [
+                          "#dd604d",
+                          "#9b62a9",
+                          "#5783cd",
+                          "#7aa28e",
+                          "#d4a459",
+                        ][i % 5],
+                      }}
+                    />
+                  </div>
+                </div>
+              ))
+          ) : (
+            <Empty />
+          )}
+        </div>
+      </div>
+      <div className="secondary-kpis">
+        {[
+          ["Продано единиц", r.units, false],
+          ["Возвраты", r.returns, true],
+          ["Реклама", r.advertising, true],
+          ["Расходы", r.expenses, true],
+          ["Стоимость склада", r.stock_value, true],
+          ["Деньги", r.cash, true],
+          ["B2B задолженность", r.b2b_debt, true],
+          ["Cash Flow", r.cash_flow, true],
+          ["Kaspi оборот", dash.selected.channels.Kaspi || 0, true],
+          ["WB оборот", dash.selected.channels.WB || 0, true],
+          ["Ozon оборот", dash.selected.channels.Ozon || 0, true],
+          ["Offline оборот", dash.selected.channels.Offline || 0, true],
+          ["B2B оборот", dash.selected.channels.B2B || 0, true],
+        ].map(([k, v, m]) => (
+          <div key={k}>
+            <span>{k}</span>
+            <strong>{m ? money(v) : decimal(v)}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="bottom-grid profitability-grid">
+        <div className="panel">
+          <div className="panel-heading"><div><h2>Прибыль по каналам</h2><span>Kaspi · WB · Ozon · Offline · B2B</span></div></div>
+          <Table rows={r.channel_summary || []} cols={["channel", "quantity", "revenue", "cogs", "costs", "profit"]} />
+        </div>
+        <div className="panel">
+          <div className="panel-heading"><div><h2>B2B</h2><span>Финансовый учёт без CRM</span></div></div>
+          <div className="secondary-kpis compact-kpis">
+            <div><span>Оборот</span><strong>{money(r.b2b?.revenue || 0)}</strong></div>
+            <div><span>Валовая прибыль</span><strong>{money(r.b2b?.gross_profit)}</strong></div>
+            <div><span>Чистая прибыль</span><strong>{money(r.b2b?.net_profit)}</strong></div>
+            <div><span>Средний чек</span><strong>{money(r.b2b?.average_check || 0)}</strong></div>
+            <div><span>Дебиторка</span><strong>{money(r.b2b?.receivables || 0)}</strong></div>
+          </div>
+        </div>
+      </div>
+      <div className="panel category-profit-panel">
+        <div className="panel-heading"><div><h2>Прибыль по категориям</h2><span>Contribution profit = после прямых комиссий, логистики и рекламы</span></div></div>
+        <Table rows={r.categories || []} cols={["category", "quantity", "revenue", "cogs", "gross_profit", "contribution_profit"]} />
+      </div>
+      <div className="bottom-grid">
+        <div className="panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Товары, которые приносят прибыль</h2>
+              <span>По валовой прибыли за период</span>
+            </div>
+            <button
+              className="text-button"
+              onClick={() => ctx.navigate("products")}
+            >
+              Все товары
+            </button>
+          </div>
+          <Table
+            rows={[...r.products]
+              .sort((a, b) => b.gross_profit - a.gross_profit)
+              .slice(0, 5)}
+            cols={["name", "quantity", "revenue", "gross_profit"]}
+          />
+        </div>
+        <div className="insight-panel">
+          <span className="pill">
+            <Sparkles size={14} /> BUSINESS SIGNALS
+          </span>
+          <h2>
+            На что обратить
+            <br />
+            внимание сегодня
+          </h2>
+          <div className="insight">
+            <span className="insight-num">{r.stock_alerts.length}</span>
+            <p>товаров на минимальном остатке</p>
+          </div>
+          <div className="insight">
+            <span className="insight-num">{r.slow_products.length}</span>
+            <p>товаров без продаж за период</p>
+          </div>
+          <button
+            onClick={() =>
+              ctx.navigate(can(ctx.auth, "ai") ? "assistant" : "alerts")
+            }
+            className="secondary"
+          >
+            {can(ctx.auth, "ai") ? "Обсудить с AI" : "Открыть уведомления"}
+          </button>
+        </div>
+      </div>
+      {page === "analytics" && (
+        <>
+          <div className="panel">
+            <div className="panel-heading">
+              <h2>Медленно продающиеся товары</h2>
+            </div>
+            <Table rows={r.slow_products} cols={columns.stock} />
+          </div>
+          <div className="panel">
+            <div className="panel-heading">
+              <h2>Прибыль по аккаунтам</h2>
+              <span>Без нераспределённых общих расходов</span>
+            </div>
+            <Table
+              rows={r.channels.map((c) => ({ ...c, gross_profit: c.profit }))}
+              cols={["name", "revenue", "cogs", "gross_profit"]}
+            />
+          </div>
+        </>
+      )}
+      <p className="method">
+        {r.method}. {r.scope_note}.
+      </p>
+    </>
+  );
+}
+function ReportDetails({ ctx, detail, onClose }) {
+  const path = "/report/details?start=" + ctx.start + "&end=" + ctx.end + "&metric=" + detail.metric + (ctx.company ? "&company_id=" + ctx.company : "");
+  const { data, error, loading } = useLoad(path, ctx.refresh);
+  return (
+    <div className="modal-backdrop report-detail-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <section className="modal report-detail-modal" role="dialog" aria-modal="true" aria-label={detail.title}>
+        <div className="modal-heading">
+          <div><h2>{detail.title}</h2><p>Расшифровка до первичных операций · {ctx.start} — {ctx.end}</p></div>
+          <button className="icon-button" onClick={onClose} aria-label="Закрыть"><X size={20}/></button>
+        </div>
+        {loading ? <Spinner/> : error ? <ErrorBox error={error}/> : <>
+          <div className="reconcile-strip">
+            <div><span>В отчёте</span><strong>{money(data.expected)}</strong></div>
+            <div><span>Расшифровано</span><strong>{money(data.explained)}</strong></div>
+            <div className={data.difference === 0 ? "reconcile-ok" : "reconcile-bad"}><span>Расхождение</span><strong>{money(data.difference)}</strong></div>
+          </div>
+          {data.difference !== 0 && <div className="error-box">Сверка не сошлась. Такой отчёт нельзя считать подтверждённым.</div>}
+          <div className="report-detail-table"><Table rows={data.rows} cols={["date","type","reference","description","amount"]} refs={ctx.refs}/></div>
+          <p className="panel-note">Источник — проведённые записи ERP. AI в расчёте этой суммы не участвует.</p>
+        </>}
+      </section>
+    </div>
+  );
+}
+
+const ChartIcon = TrendingUp;
+function Forecast({ ctx }) {
+  const { data, error, loading } = useLoad(
+    "/forecast?start=" +
+      ctx.start +
+      "&end=" +
+      ctx.end +
+      (ctx.company ? "&company_id=" + ctx.company : ""),
+    ctx.refresh,
+  );
+  return (
+    <div className="panel">
+      <div className="panel-heading">
+        <h2>Прогноз на 30 дней</h2>
+        <span className="badge gray">Статистический расчёт</span>
+      </div>
+      {loading ? (
+        <Spinner />
+      ) : error ? (
+        <ErrorBox error={error} />
+      ) : data.status === "insufficient_data" ? (
+        <Empty text={data.message} />
+      ) : (
+        <>
+          <div className="secondary-kpis">
+            <div>
+              <span>Ожидаемая выручка</span>
+              <strong>{money(data.revenue)}</strong>
+            </div>
+            <div>
+              <span>Ожидаемая чистая прибыль</span>
+              <strong>{money(data.net_profit)}</strong>
+            </div>
+          </div>
+          <p className="panel-note">{data.method}</p>
+          <Table
+            rows={data.reorder.map((x) => ({
+              name: x.name,
+              "Дней запаса": x.days_left,
+              "Рекомендуемый закуп": x.suggested_quantity,
+            }))}
+            cols={["name", "Дней запаса", "Рекомендуемый закуп"]}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+function Stock({ ctx }) {
+  const { data, error, loading } = useLoad(
+    "/stock" + (ctx.company ? "?company_id=" + ctx.company : ""),
+    ctx.refresh,
+  );
+  return (
+    <div className="panel">
+      <div className="panel-heading">
+        <h2>Остатки товаров</h2>
+        {can(ctx.auth, "inventory", true) && (
+          <button className="secondary" onClick={() => ctx.open("adjustments")}>
+            <Plus size={16} />
+            Корректировка
+          </button>
+        )}
+      </div>
+      <p className="panel-note">
+        Выберите тип движения. Списание и брак уменьшают склад и признают расход;
+        обычная инвентаризационная корректировка не маскируется под операционный расход. Причина обязательна.
+      </p>
+      {loading ? (
+        <Spinner />
+      ) : error ? (
+        <ErrorBox error={error} />
+      ) : (
+        <div className="qor-item-grid">{data.map((row) => {
+          const product = ctx.refs.products?.find((p) => p.id === row.product_id);
+          return <article className="qor-item-card" key={row.product_id}><ProductImage product={product}/><div className="qor-item-body"><span className="marketplace-product-meta">SKU · {row.sku || "—"}</span><h3>{row.name || "Товар без названия"}</h3><div className="qor-item-facts"><b>Остаток · {row.quantity ?? 0} шт.</b><span>Продано · {row.sold ?? 0} шт.</span></div>{row.value != null && <div className="qor-item-price">Стоимость · {money(row.value)}</div>}</div></article>;
+        })}</div>
+      )}
+    </div>
+  );
+}
+function MarketplaceProductCard({ p, channel, onSaveCost, canEditCost, defaultEffectiveDate }) {
+  const candidates = Array.from(new Set([p.image_url, ...(p.images || [])].filter(Boolean)));
+  const [imageIndex, setImageIndex] = useState(0);
+  const [imageFailed, setImageFailed] = useState(candidates.length === 0);
+  const [expanded, setExpanded] = useState(false);
+  const [unitCost, setUnitCost] = useState(p.unit_cost ?? "");
+  const [effectiveFrom, setEffectiveFrom] = useState(p.cost_effective_from || defaultEffectiveDate);
+  useEffect(() => setUnitCost(p.unit_cost ?? ""), [p.unit_cost]);
+  const has = (value) => value !== null && value !== undefined;
+  const expense = (value) => has(value) ? money(value) : "—";
+  const marketplaceLabel = channel === "Wildberries" ? "WB" : channel;
+  const onImageError = () => {
+    if (imageIndex + 1 < candidates.length) setImageIndex((i) => i + 1);
+    else setImageFailed(true);
+  };
+  return <article className="marketplace-product-card">
+    <div className="marketplace-product-image">
+      {!imageFailed && candidates[imageIndex] ? <img src={candidates[imageIndex]} alt="" loading="lazy" referrerPolicy="no-referrer" onError={onImageError}/> : <div className="marketplace-product-image-empty"><ImageIcon size={30}/><span>Фото недоступно</span></div>}
+      <span className="marketplace-product-source">{marketplaceLabel}</span>
+    </div>
+    <div className="marketplace-product-body">
+      <div className="marketplace-product-title" title={p.name || p.sku}>{p.name || p.sku || "Товар без названия"}</div>
+      <div className="marketplace-product-meta">SKU: {p.sku || "—"}{p.brand ? ` · ${p.brand}` : ""}</div>
+      <div className="marketplace-product-main"><strong>{has(p.price) ? money(p.price) : "Цена —"}</strong><span>Остаток <b>{has(p.stock_quantity) ? `${p.stock_quantity} шт.` : "—"}</b></span></div>
+      <div className="marketplace-product-stats">
+        <div><span>За период</span><b>{p.sold_units ?? 0} шт.</b><small>{money(p.revenue || 0)}</small></div>
+        <div><span>За всё время</span><b>{p.lifetime_sold_units ?? 0} шт.</b><small>{money(p.lifetime_revenue || 0)}</small></div>
+      </div>
+      <div className="marketplace-product-costs">
+        <div><span>Комиссия</span><b>{expense(p.commission)}</b></div>
+        <div><span>Логистика</span><b>{expense(p.logistics)}</b></div>
+        <div><span>Реклама</span><b>{expense(p.advertising)}</b></div>
+        <div><span>Себестоимость / шт.</span><b>{has(p.unit_cost) ? money(p.unit_cost) : "Не задана"}</b></div>
+      </div>
+      <button type="button" className="marketplace-product-more" onClick={()=>setExpanded(v=>!v)}>{expanded ? "Скрыть" : p.unit_cost ? "Подробнее" : "Добавить себестоимость"}</button>
+      {expanded && <div className="marketplace-product-details">
+        <div><span>Категория</span><b>{p.category || "—"}</b></div>
+        <div><span>Себестоимость</span><b>{expense(p.cogs)}</b></div>
+        <div><span>Прибыль</span><b>{p.profit == null ? "Ожидает себестоимость" : money(p.profit)}</b></div>
+        {canEditCost && typeof p.id === "number" && <div className="marketplace-cost-editor">
+          <label>Себестоимость за 1 шт., ₸<input type="number" min="0.01" step="0.01" value={unitCost} onChange={e=>setUnitCost(e.target.value)} placeholder="Введите себестоимость"/></label>
+          <label>Действует с<input type="date" value={effectiveFrom} onChange={e=>setEffectiveFrom(e.target.value)}/></label>
+          <button type="button" disabled={!unitCost || !effectiveFrom} onClick={()=>onSaveCost(p,unitCost,effectiveFrom)}>Сохранить и пересчитать</button>
+        </div>}
+        {canEditCost && typeof p.id !== "number" && <small className="muted">Сначала свяжите карточку с товаром ERP, чтобы учитывать себестоимость и прибыль.</small>}
+      </div>}
+    </div>
+  </article>;
+}
+
+function ProductImage({ product, label = "Фото не добавлено" }) {
+  const images = Array.from(new Set((product?.media || []).filter((x) => typeof x === "string" && /^https?:\/\//i.test(x))));
+  const [index, setIndex] = useState(0);
+  const [failed, setFailed] = useState(images.length === 0);
+  const imageKey = images.join("|");
+  useEffect(() => { setIndex(0); setFailed(imageKey.length === 0); }, [imageKey]);
+  return <div className="qor-item-image">
+    {!failed && images[index] ? <img src={images[index]} alt={product?.name || ""} loading="lazy" referrerPolicy="no-referrer" onError={() => index + 1 < images.length ? setIndex((n) => n + 1) : setFailed(true)}/> : <div className="qor-item-image-empty"><ImageIcon size={30}/><span>{label}</span></div>}
+  </div>;
+}
+
+function ProductCatalogCard({ product, onEdit, onDelete }) {
+  return <article className="qor-item-card">
+    <ProductImage product={product}/>
+    <div className="qor-item-body">
+      <span className="marketplace-product-meta">SKU · {product.sku || "—"}</span>
+      <h3>{product.name || "Товар без названия"}</h3>
+      <div className="qor-item-price">{Number(product.price || 0) > 0 ? money(product.price) : <span className="muted">Цена не указана</span>}</div>
+      <div className="qor-item-facts"><span>{product.category || "Без категории"}</span><b>Мин. остаток {product.min_stock ?? 0}</b></div>
+      <div className="row-actions"><button className="secondary" onClick={onEdit}>Изменить</button><button className="icon-button danger" title="Архивировать товар" onClick={onDelete}><Trash2 size={16}/></button></div>
+    </div>
+  </article>;
+}
+
+function SaleProductCard({ sale, product, account, onReturn }) {
+  return <article className="qor-sale-card">
+    <ProductImage product={product}/>
+    <div className="qor-item-body">
+      <div className="qor-sale-heading"><div><span className="marketplace-product-meta">{sale.date || "Дата не указана"} · {account?.name || account?.channel || "Продажа"}</span><h3>{product?.name || "Товар без фото в каталоге"}</h3></div><strong>{money(sale.revenue || 0)}</strong></div>
+      <div className="qor-item-facts"><span>SKU · {product?.sku || "—"}</span><b>{sale.quantity ?? 0} шт.</b><span>Заказ · {sale.reference || "—"}</span></div>
+      <div className="row-actions"><a className="secondary" href={`/api/sales/${sale.id}/invoice`}><FileText size={15}/> Счёт</a><button className="secondary" onClick={onReturn}><RotateCcw size={15}/> Возврат</button></div>
+    </div>
+  </article>;
+}
+
+function WBCostManager({ accounts, company, notify }) {
+  const [accountId, setAccountId] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const [query, setQuery] = useState("");
+  const [missingOnly, setMissingOnly] = useState(false);
+  const [selected, setSelected] = useState([]);
+  const [bulkCost, setBulkCost] = useState("");
+  const [effective, setEffective] = useState(new Date().toISOString().slice(0,10));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const params = new URLSearchParams({account_id: accountId});
+  if (company) params.set("company_id", company);
+  const data = useLoad(accountId ? `/wildberries/costs?${params}` : null, refresh);
+  const lastMonday = new Date(); lastMonday.setDate(lastMonday.getDate()-((lastMonday.getDay()+6)%7)-7);
+  const start = new Date(lastMonday.getTime()-lastMonday.getTimezoneOffset()*60000).toISOString().slice(0,10);
+  const end = new Date(new Date(`${start}T00:00:00Z`).getTime()+6*86400000).toISOString().slice(0,10);
+  const reportParams = new URLSearchParams({account_id:accountId,period:"weekly",start,end});
+  const finance = useLoad(accountId?`/wildberries/finance?${reportParams}`:null,refresh);
+  useEffect(()=>{ if (!accountId && accounts.length) setAccountId(String(accounts[0].id)); },[accounts,accountId]);
+  const run = async fn => { setBusy(true); setError(""); try { await fn(); setRefresh(x=>x+1); notify?.("Себестоимость сохранена. Финансовый отчёт пересчитан без запроса к WB."); } catch(e) { setError(e.message); } finally { setBusy(false); } };
+  const rows = (data.data?.items || []).filter(p => (!missingOnly || p.unit_cost == null) && (!query || `${p.name} ${p.nm_id} ${p.seller_article} ${p.barcode}`.toLowerCase().includes(query.toLowerCase())));
+  const save = (p, value) => run(()=>api("/wildberries/costs",{method:"PUT",body:{account_id:Number(accountId),external_key:p.external_key,nm_id:p.nm_id,seller_article:p.seller_article,barcode:p.barcode,product_name:p.name,unit_cost:value,effective_from:effective,currency:"KZT"}}));
+  const importFile = async file => { if (!file) return; const form=new FormData();form.append("account_id",accountId);form.append("file",file);await run(async()=>{const result=await api("/wildberries/costs/import",{method:"POST",body:form});if(result.errors?.length)throw new Error(`Ошибки строк: ${result.errors.map(x=>`${x.row}: ${x.error}`).join("; ")}`);}); };
+  return <section className="panel wb-weekly-report"><div className="section-heading"><div><h3>Себестоимость товаров WB</h3><p className="muted">Цены сохраняются отдельно для выбранного кабинета и даты действия. Изменение цены не загружает данные WB и не меняет прошлые периоды.</p></div></div>
+    <div className="row-actions wb-weekly-controls">{accounts.length>1&&<label>Аккаунт WB<select value={accountId} onChange={e=>setAccountId(e.target.value)}>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>}<label>Дата начала действия<input type="date" value={effective} onChange={e=>setEffective(e.target.value)}/></label><label>Поиск<input type="search" placeholder="Название или артикул" value={query} onChange={e=>setQuery(e.target.value)}/></label><label><input type="checkbox" checked={missingOnly} onChange={e=>setMissingOnly(e.target.checked)}/> Только без себестоимости</label><a className="button" href={accountId?`/api/wildberries/costs/template.xlsx?account_id=${accountId}`:"#"}>Шаблон Excel</a><label className="button">Загрузить Excel<input type="file" accept=".xlsx" hidden onChange={e=>importFile(e.target.files?.[0])}/></label></div>
+    <div className="row-actions"><label>Одинаковая себестоимость, ₸<input type="number" min="0.01" step="0.01" value={bulkCost} onChange={e=>setBulkCost(e.target.value)}/></label><button disabled={busy||!selected.length||!bulkCost} onClick={()=>run(()=>api("/wildberries/costs/bulk",{method:"POST",body:{account_id:Number(accountId),external_keys:selected,unit_cost:bulkCost,effective_from:effective}}).then(()=>setSelected([])))}>Назначить выбранным ({selected.length})</button><span className="muted">Заполнено: {(data.data?.items||[]).filter(x=>x.unit_cost!=null).length} из {(data.data?.items||[]).length}</span></div>
+    {error&&<ErrorBox error={error}/>} {data.error&&<ErrorBox error={data.error}/>} {finance.error&&<ErrorBox error={finance.error}/>} {data.loading?<Spinner/>:<div className="table-wrap"><table className="data-table"><thead><tr><th><input type="checkbox" aria-label="Выбрать видимые" checked={rows.length>0&&rows.every(x=>selected.includes(x.external_key))} onChange={e=>setSelected(e.target.checked?Array.from(new Set([...selected,...rows.map(x=>x.external_key)])):selected.filter(k=>!rows.some(x=>x.external_key===k)))}/></th><th>Фото</th><th>Товар</th><th>Артикул WB</th><th>Артикул продавца</th><th>Себестоимость, ₸</th><th>Продажи, шт.</th><th>Выручка</th><th>Расходы WB</th><th>Прибыль</th><th>Маржа, %</th><th>Действует с</th><th>Действие</th></tr></thead><tbody>{rows.map(p=>{const f=(finance.data?.products||[]).find(x=>(p.nm_id&&String(x.nm_id)===String(p.nm_id))||x.article===p.seller_article);return <CostRow key={p.external_key} product={{...p,report:f}} selected={selected.includes(p.external_key)} onSelect={v=>setSelected(s=>v?[...new Set([...s,p.external_key])]:s.filter(k=>k!==p.external_key))} onSave={save} busy={busy}/>})}{!rows.length&&<tr><td colSpan="13" className="muted">Каталог WB пока не сопоставлен с товарами ERP.</td></tr>}</tbody></table></div>}
+  </section>;
+}
+
+function CostRow({product:p,selected,onSelect,onSave,busy}) { const [value,setValue]=useState(p.unit_cost??""); useEffect(()=>setValue(p.unit_cost??""),[p.unit_cost]); const f=p.report; const expense=f?Number(f.commission||0)+Number(f.commission_vat||0)+Number(f.acquiring||0)+Number(f.direct_logistics||0)+Number(f.reverse_logistics||0)+Number(f.penalty||0)+Number(f.storage||0)+Number(f.other||0):null; return <tr><td><input type="checkbox" checked={selected} onChange={e=>onSelect(e.target.checked)}/></td><td>{p.image_url?<img src={p.image_url} alt="" width="42" height="42"/>:"—"}</td><td>{p.name||"—"}</td><td>{p.nm_id||"—"}</td><td>{p.seller_article||"—"}</td><td><input type="number" min="0.01" step="0.01" value={value} onChange={e=>setValue(e.target.value)} placeholder="Не заполнена"/></td><td>{f?.sales_qty??"—"}</td><td>{f?money(Number(f.realization||0)):"—"}</td><td>{expense==null?"—":money(expense)}</td><td>{f?.profit==null?"Не рассчитана":money(Number(f.profit))}</td><td>{f?.margin_pct==null?"—":`${Number(f.margin_pct).toFixed(2)}%`}</td><td>{p.effective_from||"—"}</td><td><button disabled={busy||!value} onClick={()=>onSave(p,value)}>Сохранить</button></td></tr>; }
+
+function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
+  const inputDate = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const mondayOfLastWeek = () => {
+    const d = new Date();
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7);
+    return inputDate(d);
+  };
+  const lastCompletedWeek = mondayOfLastWeek();
+  const initialAnchor = () => {
+    const d = new Date();
+    if (initialPeriod === "daily") d.setDate(d.getDate() - 1);
+    else if (initialPeriod === "monthly") { d.setDate(1); d.setMonth(d.getMonth() - 1); }
+    else return mondayOfLastWeek();
+    return inputDate(d);
+  };
+  const [week, setWeek] = useState(initialAnchor);
+  const [period, setPeriod] = useState(initialPeriod);
+  const [accountId, setAccountId] = useState("");
+  const [search, setSearch] = useState("");
+  const [kind, setKind] = useState("all");
+  const [opPage, setOpPage] = useState(0);
+  const [reportRefresh, setReportRefresh] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [syncStartedAt, setSyncStartedAt] = useState(0);
+  const [syncError, setSyncError] = useState("");
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
+  const [excelError, setExcelError] = useState("");
+  useEffect(() => {
+    if (period === "weekly" && week > lastCompletedWeek) setWeek(lastCompletedWeek);
+  }, [period, week, lastCompletedWeek]);
+  useEffect(() => {
+    if (!accountId && accounts.length) setAccountId(String(accounts[0].id));
+  }, [accounts, accountId]);
+  const periodRange = () => {
+    if (period === "daily") return {start:week,end:week};
+    if (period === "monthly") {
+      const [year,month] = week.slice(0,7).split("-").map(Number);
+      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      const now = new Date();
+      const monthStart = `${year}-${String(month).padStart(2,"0")}-01`;
+      if (year === now.getFullYear() && month === now.getMonth()+1 && now.getDate() > 1) {
+        const yesterday = new Date(now); yesterday.setDate(yesterday.getDate()-1);
+        return {start:monthStart,end:inputDate(yesterday)};
+      }
+      return {start:monthStart,end:`${year}-${String(month).padStart(2,"0")}-${String(lastDay).padStart(2,"0")}`};
+    }
+    const reportWeek = period === "weekly" && week > lastCompletedWeek ? lastCompletedWeek : week;
+    return {start:reportWeek,end:new Date(new Date(`${reportWeek}T00:00:00Z`).getTime()+6*86400000).toISOString().slice(0,10)};
+  };
+  const range = periodRange();
+  useEffect(() => setOpPage(0), [week, accountId, period]);
+  useEffect(() => { setSyncing(false); setSyncStartedAt(0); }, [week, accountId, period]);
+  const params = new URLSearchParams({ period, start:range.start, end:range.end });
+  if (accountId) params.set("account_id", accountId);
+  if (company) params.set("company_id", company);
+  const report = useLoad(`/wildberries/finance?${params}`, reportRefresh);
+  const data = report.data || {};
+  useEffect(() => {
+    if (!syncing || !syncStartedAt) return;
+    const updatedAt = Date.parse(data.updated_at || "");
+    const attemptAt = Date.parse(data.attempt_at || "");
+    const completed = ["готов", "ожидается", "частично"].includes(data.status) && updatedAt >= syncStartedAt - 1000;
+    const failed = data.status === "ошибка" && attemptAt >= syncStartedAt - 1000;
+    if (completed || failed) {
+      setSyncing(false);
+      setSyncStartedAt(0);
+    }
+  }, [syncing, syncStartedAt, data.status, data.updated_at, data.attempt_at]);
+  useEffect(() => {
+    if (!syncing && data.status !== "загружается") return undefined;
+    const timer = window.setInterval(() => setReportRefresh((v) => v + 1), 5000);
+    return () => window.clearInterval(timer);
+  }, [syncing, data.status]);
+  const startReportSync = async () => {
+    if (!accountId) return;
+    setSyncError("");
+    setSyncing(true);
+    setSyncStartedAt(Date.now());
+    try {
+      const query = new URLSearchParams({ period, start:range.start, end:range.end, account_id: accountId });
+      await api(`/wildberries/finance/sync?${query}`, { method: "POST" });
+      setReportRefresh((v) => v + 1);
+    } catch (error) {
+      setSyncing(false);
+      setSyncStartedAt(0);
+      setSyncError(error.message);
+    }
+  };
+  const downloadExcel = async () => {
+    setExcelError("");
+    setDownloadingExcel(true);
+    try {
+      await downloadApiFile(`/wildberries/finance.xlsx?${params.toString()}`, `WB-${period}-${range.start}-${range.end}.xlsx`);
+    } catch (error) {
+      setExcelError(error.message || "Не удалось скачать Excel");
+    } finally {
+      setDownloadingExcel(false);
+    }
+  };
+  const statusText = data.status === "готов" ? "Готов" : data.status === "загружается" ? "Загружается" : data.status === "частично" ? "Частично" : data.status === "ошибка" ? "Ошибка" : "Ожидается отчёт";
+  const currency = data.currency || "RUB";
+  const amount = (v, cur = currency) => v == null ? "Не рассчитана" : `${Number(v).toLocaleString("ru-RU", {minimumFractionDigits:2, maximumFractionDigits:2})} ${cur}`;
+  const products = (data.products || []).filter((p) => {
+    const term = search.trim().toLowerCase();
+    const matches = !term || `${p.article} ${p.name} ${p.sku} ${p.nm_id}`.toLowerCase().includes(term);
+    const returns = Number(p.returns_qty || 0) > 0;
+    return matches && (kind === "all" || (kind === "returns" ? returns : Number(p.sales_qty || 0) > 0));
+  });
+  const operations = data.operations || [];
+  const pageCount = Math.ceil(operations.length / 200);
+  const fields = [["retail","Розничная цена со скидкой"],["realization","WB реализовал товар"],["payout","К перечислению"],["commission","Вознаграждение с продаж"],["wb_reward","Вознаграждение WB без НДС (справочно)"],["commission_vat","НДС с вознаграждения WB"],["acquiring","Эквайринг"],["direct_logistics","Прямая логистика"],["reverse_logistics","Доп. логистика (входит в общую)"],["penalty","Штрафы"],["storage","Хранение"],["other","Прочие"]];
+  const totals = data.totals || {};
+  // Клиентская сверка: начисление минус прямая логистика, штрафы и хранение.
+  // Rebill уже включён в общий логистический конверт и не вычитается второй раз.
+  const payoutReady = Number(data.row_count || 0) > 0 && ["payout", "logistics_total", "penalty", "storage"].every((key) => totals[key] != null && Number.isFinite(Number(totals[key])));
+  const estimatedClientPayout = payoutReady
+    ? (Math.round(Number(totals.payout) * 100) - Math.round(Number(totals.logistics_total) * 100) - Math.round(Number(totals.penalty) * 100) - Math.round(Number(totals.storage) * 100)) / 100
+    : null;
+  const cogsComplete = data.cogs_complete === true;
+  const periodLabel = period === "weekly" ? "Недельный" : period === "monthly" ? "Месячный" : "Дневной";
+  return <section className="panel wb-weekly-report" aria-label={`${periodLabel} финансовый отчёт Wildberries`}>
+    <div className="section-heading"><div><h3>{periodLabel} финансовый отчёт</h3><p className="muted">Источник — Finance API WB. Основа расчёта — сумма к перечислению; месячный итог агрегируется из дневных строк WB. Это начисление WB, не подтверждение банковского зачисления.</p></div><span className={`pill wb-weekly-status ${data.status === "готов" ? "ready" : ""}`}>{statusText}</span></div>
+    <div className="row-actions wb-weekly-controls">
+      {accounts.length > 1 && <label>Аккаунт WB<select value={accountId} onChange={(e)=>setAccountId(e.target.value)}>{accounts.map((a)=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>}
+      <label>{period === "daily" ? "День отчёта" : period === "monthly" ? "Месяц отчёта" : "Неделя с понедельника"}<input type={period === "monthly" ? "month" : "date"} max={period === "weekly" ? lastCompletedWeek : undefined} value={period === "monthly" ? week.slice(0,7) : week} onChange={(e)=>{if(period === "monthly"){setWeek(`${e.target.value}-01`);return;}const d=new Date(`${e.target.value}T12:00:00`);if(period === "weekly") d.setDate(d.getDate()-((d.getDay()+6)%7));const monday=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);setWeek(period === "weekly" && monday > lastCompletedWeek ? lastCompletedWeek : monday);}}/></label>
+      <label>Тип отчёта<select value={period} onChange={(e)=>{const next=e.target.value;setPeriod(next);if(next==="weekly")setWeek(mondayOfLastWeek());else if(next==="daily"){const d=new Date();d.setDate(d.getDate()-1);setWeek(inputDate(d));}else{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);setWeek(inputDate(d));}}}><option value="daily">Финансы за день</option><option value="weekly">Финансы за неделю</option><option value="monthly">Итог за месяц</option></select></label>
+      <label>Поиск товара<input type="search" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Артикул или название"/></label>
+      <label>Операции<select value={kind} onChange={(e)=>setKind(e.target.value)}><option value="all">Все</option><option value="sales">Продажи</option><option value="returns">Есть возвраты</option></select></label>
+      <button type="button" disabled={!accountId || syncing} onClick={startReportSync}>{syncing ? "Загружаем отчёт…" : "Загрузить из WB"}</button>
+      <button type="button" className="button primary" disabled={downloadingExcel || !accountId} onClick={downloadExcel}>{downloadingExcel ? "Скачиваем Excel…" : "Скачать Excel"}</button>
+    </div>
+    {syncError && syncError !== report.error && <ErrorBox error={syncError}/>}
+    {excelError && <ErrorBox error={excelError}/>} 
+    {report.loading ? <Spinner/> : report.error ? <ErrorBox error={report.error}/> : <>
+      <p className="muted" role="status">Аккаунт WB #{data.account_id ?? accountId} · Период {data.start || data.week_start} — {data.end || data.week_end}. Обновлено: {data.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. Строк WB: {data.row_count || 0}.</p>
+      {data.status === "ошибка" && data.error && <ErrorBox error={data.error}/>}
+      <div className="kpis marketplace-kpis wb-weekly-kpis">
+        {[["WB реализовал товар",totals.realization],["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],["Розничная цена со скидкой",totals.retail],["К перечислению",totals.payout],["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],["Маржа, %",cogsComplete?totals.margin_pct:null]].map(([label,value])=><div className="kpi" key={label}><span>{label}</span><strong>{label === "Маржа, %" ? (value == null ? "Не рассчитана" : `${Number(value).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong></div>)}
+      </div>
+      {estimatedClientPayout != null && <p className="muted">Итого к выплате — расчётный показатель: к перечислению WB − прямая логистика − штрафы − хранение. Дополнительная логистика (rebill) показывается отдельно. Это не подтверждение банковской выплаты.</p>}
+      {!cogsComplete && <p className="muted">Себестоимость заполнена/подтверждена для {data.cogs_costed_products || 0} из {data.cogs_products_total || 0} товаров. Расчёт прибыли неполный: возвраты без подтверждённой FIFO-связи требуют проверки.</p>}
+      {data.unallocated_operations > 0 && <p className="muted">{data.unallocated_operations} операций WB без артикула сохранены отдельно. Их расходы входят в общий отчёт, но не распределяются между товарами.</p>}
+      <div className="table-wrap"><table className="data-table"><thead><tr><th>Артикул WB / SKU</th><th>Наименование</th><th>Валюта</th><th>Продажи</th><th>Возвраты</th>{fields.map(([,label])=><th key={label}>{label}</th>)}<th>Себестоимость</th><th>Прибыль</th></tr></thead><tbody>
+        {products.map((p)=><tr key={`${p.article}-${p.sku}-${p.currency}`}><td>{p.article}{p.sku ? <small className="muted">{p.sku}</small> : null}</td><td>{p.name || "—"}</td><td>{p.currency}</td><td>{p.sales_qty}</td><td>{p.returns_qty}</td>{fields.map(([key])=><td key={key}>{amount(p[key],p.currency)}</td>)}<td>{amount(p.cogs,p.currency)}</td><td>{amount(p.profit,p.currency)}</td></tr>)}
+        {products.length === 0 && <tr><td colSpan={7+fields.length} className="muted">{data.status === "готов" ? "За выбранный период нет строк товара; проверьте итоги и финансовые операции ниже." : "Ожидается публикация финансового отчёта WB."}</td></tr>}
+        {data.row_count > 0 && <tr className="total-row"><th colSpan={3}>ИТОГО по всем строкам WB</th><th>{data.sales_qty ?? products.reduce((n,p)=>n+Number(p.sales_qty||0),0)}</th><th>{data.returns_qty ?? products.reduce((n,p)=>n+Number(p.returns_qty||0),0)}</th>{fields.map(([key])=><th key={key}>{amount(totals[key])}</th>)}<th>{amount(cogsComplete?totals.cogs:null)}</th><th>{amount(cogsComplete?totals.profit:null)}</th></tr>}
+      </tbody></table></div>
+      <h4>Финансовые операции WB</h4>
+      <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Тип операции</th><th>Артикул</th><th>Сумма WB (исходная)</th><th>Влияние на начисление</th><th>ID источника</th></tr></thead><tbody>{operations.slice(opPage*200,(opPage+1)*200).map((o)=><tr key={o.external_id}><td>{o.date}</td><td>{o.is_return ? "Возврат" : o.operation||"—"}</td><td>{o.article}</td><td>{amount(o.raw_amount,o.currency)}</td><td>{amount(o.amount,o.currency)}</td><td>{o.external_id}</td></tr>)}</tbody></table></div>
+      {pageCount>1 && <div className="row-actions"><button type="button" disabled={opPage===0} onClick={()=>setOpPage((v)=>v-1)}>Назад</button><span className="muted">Страница {opPage+1} из {pageCount} · всего операций: {operations.length}</span><button type="button" disabled={opPage+1>=pageCount} onClick={()=>setOpPage((v)=>v+1)}>Далее</button></div>}
+    </>}
+  </section>;
+}
+
+function MarketplaceInbox({ channel, ctx }) {
+  const [wbTab,setWbTab] = useState("weekly");
+  const [showTechnical,setShowTechnical] = useState(false);
+  const [offset,setOffset] = useState(0), [status,setStatus] = useState(""),
+    [selected,setSelected] = useState(null), [product,setProduct] = useState(""),
+    [key,setKey] = useState(""), [error,setError] = useState(""), [busy,setBusy] = useState(false),
+    [currency,setCurrency] = useState("RUB"), [rate,setRate] = useState(""), [rateDate,setRateDate] = useState(today()),
+    [costAccountId,setCostAccountId] = useState(""), [costRefresh,setCostRefresh] = useState(0);
+  const params = new URLSearchParams({limit:"30", offset:String(offset), channel});
+  if (ctx.company) params.set("company_id", ctx.company);
+  if (status) params.set("status",status);
+  const state = useLoad("/marketplace-records?" + params, ctx.refresh);
+  const summaryParams = new URLSearchParams({channel, start:ctx.start, end:ctx.end});
+  if (ctx.company) summaryParams.set("company_id", ctx.company);
+  const summary = useLoad("/marketplace-summary?" + summaryParams, ctx.refresh);
+  const accounts = (ctx.refs.accounts || []).filter(a=>a.active !== false && a.channel===channel && (!ctx.company || String(a.company_id)===String(ctx.company)));
+  useEffect(()=>{ if (!costAccountId && accounts.length) setCostAccountId(String(accounts[0].id)); },[accounts,costAccountId]);
+  const productParams = new URLSearchParams({channel, limit:"60", start:ctx.start, end:ctx.end});
+  if (ctx.company) productParams.set("company_id", ctx.company);
+  if (costAccountId) productParams.set("account_id", costAccountId);
+  const marketplaceProducts = useLoad("/marketplace-products?" + productParams, `${ctx.refresh}:${costRefresh}`);
+
+  useEffect(()=>setOffset(0), [ctx.company,channel,status]);
+  const run = async (fn) => { setBusy(true);setError("");try{await fn();}catch(e){setError(e.message);}finally{setBusy(false);} };
+  const saveCost = (p,value,effectiveFrom) => run(async()=>{
+    await api("/marketplace-products/cost",{method:"PUT",body:{account_id:Number(costAccountId),product_id:Number(p.id),unit_cost:value,effective_from:effectiveFrom}});
+    setCostRefresh(v=>v+1); ctx.notify("Себестоимость сохранена. Отчёт пересчитан.");
+  });
+  const bind = () => run(async()=>{
+    const r = await api(`/marketplace-records/${selected.id}/mapping`,{method:"POST",body:{product_id:Number(product),external_keys:[key]}});
+    ctx.notify(`Проведено ${r.projected}; ожидает обработки ${r.pending_erp}`);setSelected(null);
+  });
+  const m = summary.data || {};
+  const incomplete = m.financial_complete === false;
+  const fxPending = Number(m.api_unconverted || 0);
+  const marketplaceKpis = [
+    [channel === "Wildberries" ? "Оборот продаж WB" : channel === "Kaspi" ? "Выручка API за вычетом возвратов" : "Продажи API", m.api_revenue ?? m.revenue, fxPending ? `${fxPending} операций ожидают курс` : (channel === "Wildberries" ? "Отдельный отчёт продаж за выбранный период" : channel === "Kaspi" ? "Выручка по дате выдачи минус возвраты по дате возврата" : "Подтверждённая выручка непосредственно из API")],
+    ...(channel === "Kaspi" ? [["Возвраты API", m.api_returns || 0, `${m.api_return_units || 0} шт. за выбранный период`]] : []),
+    ["Продано", m.api_units == null ? "—" : `${m.api_units} шт`, "Количество продаж за выбранный период за вычетом возвращённых единиц"],
+    ...(channel === "Wildberries" ? [["К перечислению по отчёту", (m.settlement_rows > 0 ? m.settlement_accrued : "Нет данных отчёта"), m.settlement_unconverted ? `${m.settlement_unconverted} строк ожидают курс` : (m.settlement_rows > 0 ? "Начислено по финансовому отчёту; не банковская выплата" : "Загрузите недельный отчёт WB; ноль не означает отсутствие начислений")]] : []),
+    ["Проведено в ERP", m.revenue, m.pending_sales ? `${m.pending_sales} продаж проведены, но ожидают себестоимость FIFO` : "Финансовые продажи, уже проведённые в ERP"],
+    ["Себестоимость FIFO", incomplete ? "—" : m.cogs, incomplete ? "Будет рассчитана после наличия себестоимости/партий" : "Только проведённые продажи"],
+    ["Комиссия", m.commission, channel === "Kaspi" && Number(m.commission_estimated || 0) > 0 ? `Включает расчёт ${Math.round(Number(m.commission_rate || 0.12) * 100)}% там, где фактическая комиссия не загружена` : "Расход маркетплейса"],
+    ["Логистика продавца", m.logistics, "Стоимость доставки за счёт продавца; доставка покупателя не вычитается"],
+    ...(channel === "Kaspi" ? [["Доставка возврата", m.return_logistics, "Отдельный расход возврата, если он пришёл из API или импорта"], ["К получению (расчёт)", m.kaspi_estimated_proceeds, "Выданные продажи − комиссия Kaspi − доставка продавца − доставка возврата; не банковская выплата"]] : []),
+    ["Реклама", m.advertising, "Расход маркетплейса"],
+    ["Чистая прибыль", incomplete ? "—" : m.net_profit, incomplete ? (fxPending ? "Прибыль ожидает курс/проведение и FIFO — ложное значение не показываем" : "Не показываем ложную прибыль: есть продажи без FIFO") : (m.margin == null ? "Маржа —" : `Маржа ${decimal(m.margin)}%`)],
+  ];
+  return <div className="panel">
+    <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
+    {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"],["costs","Себестоимость"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
+    {channel === "Wildberries" && wbTab === "costs" && <WBCostManager accounts={accounts} company={ctx.company} notify={ctx.notify}/>}
+    {(channel !== "Wildberries" || wbTab === "daily") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
+    {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={accounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
+    {(channel !== "Wildberries" || wbTab === "products") && <><div className="section-heading"><div><h3>Товары маркетплейса</h3><p className="muted">Карточки показывают продажи за период и себестоимость. Нажмите «Подробнее», чтобы изменить её и пересчитать прибыль в отчётах.</p></div><span className="pill">{marketplaceProducts.data?.total || 0} товаров</span></div>
+    {accounts.length>1 && <div className="row-actions"><label>Магазин для карточек товаров и себестоимости<select value={costAccountId} onChange={e=>setCostAccountId(e.target.value)}>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><span className="muted">Продажи в отчётах объединяются по всем подключённым магазинам.</span></div>}
+    {marketplaceProducts.error ? <ErrorBox error={marketplaceProducts.error}/> : marketplaceProducts.loading ? <Spinner/> : <div className="marketplace-product-grid">
+      {(marketplaceProducts.data?.items || []).slice(0,60).map(p=><MarketplaceProductCard key={p.id} p={p} channel={channel} onSaveCost={saveCost} canEditCost={ctx.auth.user.role === "Owner" || can(ctx.auth,"finance",true)} defaultEffectiveDate={ctx.start}/>)}
+    </div>}
+    </>}
+    {channel === "Wildberries" && <button type="button" className="wb-tech-toggle" onClick={()=>setShowTechnical(v=>!v)}>{showTechnical ? "Скрыть технические данные" : "Технические данные API (для администратора)"}</button>}
+    {(channel !== "Wildberries" || showTechnical) && <><div className="section-heading marketplace-technical"><div><h3>Технические данные API</h3><p className="muted">Исходные записи нужны для сверки и диагностики. Они сами по себе не считаются продажами или расходами.</p></div></div>
+    <div className="row-actions">{can(ctx.auth,"accounts",true) && <button disabled={busy} onClick={()=>run(async()=>{const result=await api("/admin/reconcile-marketplaces",{method:"POST"});ctx.notify(`Проверено аккаунтов: ${result.results.length}. Данные ERP обновлены.`);})}>Восстановить учёт из сохранённых API-записей</button>}<select aria-label="Статус обработки" value={status} onChange={e=>setStatus(e.target.value)}><option value="">Все записи</option><option value="pending">Ожидают обработки</option><option value="projected">Проведены</option><option value="received_stock">Остатки для сверки</option></select>
+      {accounts.map(a=><button key={a.id} disabled={busy} onClick={()=>run(async()=>{const r=await api(`/accounts/${a.id}/reprocess`,{method:"POST"});ctx.notify(`${a.name}: проведено ${r.projected}; ожидает ${r.pending_erp}`);})}>Обработать повторно: {a.name}</button>)}
+    </div>
+    {channel!=="Kaspi" && <div className="row-actions"><label>Дата курса<input type="date" value={rateDate} onChange={e=>setRateDate(e.target.value)}/></label><label>Валюта источника<select value={currency} onChange={e=>setCurrency(e.target.value)}><option>RUB</option><option>KZT</option></select></label><label>Курс в ₸ за 1 единицу<input type="number" min="0.0001" step="0.0001" value={rate} onChange={e=>setRate(e.target.value)}/></label>{accounts.map(a=><button key={a.id} disabled={busy || !rate || Number(rate)<=0} onClick={()=>run(()=>api(`/accounts/${a.id}/settlement`,{method:"PUT",body:{currency,effective_date:rateDate,fx_rate:Math.round(Number(rate)*10000)}}))}>Сохранить курс: {a.name}</button>)}</div>}
+    <ErrorBox error={error || state.error}/>
+    {state.loading ? <Spinner/> : <Table raw rows={state.data?.items || []} cols={["reference","product_name","sku","quantity","amount","currency","marketplace_status","status","stage_status","projection_reason"]} actions={row=>row.external_keys?.length && !["mapped_product","projected"].includes(row.status) && can(ctx.auth,"accounts",true) ? <button disabled={busy} onClick={()=>{setSelected(row);setKey(row.external_keys[0]);setProduct("");}}>Привязать товар</button> : null}/>}
+    {selected && <div className="panel"><h3>Привязка товара</h3><label>Идентификатор источника<select value={key} onChange={e=>setKey(e.target.value)}>{selected.external_keys.map(k=><option key={k}>{k}</option>)}</select></label><label>Товар ERP<select value={product} onChange={e=>setProduct(e.target.value)}><option value="">Выберите товар</option>{(ctx.refs.products || []).map(p=><option value={p.id} key={p.id}>{p.sku} · {p.name}</option>)}</select></label><button className="primary" disabled={busy || !product} onClick={bind}>Сохранить привязку</button><button onClick={()=>setSelected(null)}>Закрыть</button></div>}
+    <div className="row-actions"><button disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>Предыдущие</button><span>{offset+1}–{Math.min(offset+30,state.data?.total || 0)}</span><button disabled={offset+30 >= (state.data?.total || 0)} onClick={()=>setOffset(offset+30)}>Следующие</button></div>
+    </>}
+  </div>;
+}
+
+function DataPage({ page, ctx }) {
+  const entity = channels.includes(page) ? "sales" : page;
+  const [search, setSearch] = useState(""),
+    [offset, setOffset] = useState(0),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [integration, setIntegration] = useState(null),
+    [integrationForm, setIntegrationForm] = useState({token:"",client_id:"",api_key:""}),
+    [kaspiAction, setKaspiAction] = useState({order_id:"",code:"",status:"ACCEPTED_BY_MERCHANT",cancellation_reason:"BUYER_CANCELLATION_BY_MERCHANT",cancellation_comment:"",number_of_space:"1",security_code:""});
+  const params = new URLSearchParams({
+    limit: "30",
+    offset: String(offset),
+    search,
+  });
+  if (ctx.company) params.set("company_id", ctx.company);
+  if (channels.includes(page)) params.set("channel", page);
+  const state = useLoad("/data/" + entity + "?" + params, ctx.refresh);
+  useEffect(() => setOffset(0), [search, ctx.company]);
+  const cap = flat.find((x) => x[0] === page)?.[3];
+  const writable =
+    can(ctx.auth, cap, true) &&
+    (!["companies", "users"].includes(entity) ||
+      ctx.auth.user.role === "Owner");
+  if (page === "wb-costs") {
+    const accounts = (ctx.refs.accounts || []).filter(a=>a.active !== false && a.channel === "Wildberries" && (!ctx.company || String(a.company_id)===String(ctx.company)));
+    return <WBCostManager accounts={accounts} company={ctx.company} notify={ctx.notify}/>;
+  }
+  const remove = async (row) => {
+    if (
+      !confirm(
+        entity === "accounts" ? `Отключить магазин «${row.name || row.id}»? Он исчезнет из текущих отчётов, история операций сохранится. Его можно подключить снова здесь.` : "Удалить запись «" + (row.name || row.id) + "»? Связанные с учётом записи удалить нельзя.",
+      )
+    )
+      return;
+    try {
+      await api("/data/" + entity + "/" + row.id, { method: "DELETE" });
+      ctx.notify(entity === "accounts" ? "Магазин отключён; история сохранена" : "Запись удалена");
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  const openIntegration = async (row) => {
+    setError("");
+    try {
+      const st = await api(`/accounts/${row.id}/connection-status`);
+      setIntegration({...row, connection: st});
+      setIntegrationForm({token:"",client_id:"",api_key:""});
+    } catch(e) { setError(e.message); }
+  };
+  const saveIntegration = async () => {
+    setBusy(true); setError("");
+    try {
+      const body = integration.channel === "Ozon" ? {client_id:integrationForm.client_id,api_key:integrationForm.api_key} : {token:integrationForm.token};
+      await api(`/accounts/${integration.id}/credentials`, {method:"PUT", body, timeoutMs:15000});
+      // Credential test is intentionally lightweight. Full history is loaded
+      // only after the modal closes in the background.
+      await api(`/accounts/${integration.id}/test-connection`,{method:"POST",timeoutMs:20000});
+      setIntegrationForm({token:"",client_id:"",api_key:""});
+      try {
+        await api(`/accounts/${integration.id}/sync-now?background=true`, {method:"POST",timeoutMs:10000});
+      } catch (syncError) {
+        if (!String(syncError.message || "").includes("уже выполняется")) throw syncError;
+      }
+      setIntegration(null);
+      ctx.bump?.();
+      ctx.notify(`${integration.channel}: подключение проверено. Синхронизация запущена в фоне.`);
+    } catch(e){setError(e.message)} finally {setBusy(false)}
+  };
+  const testIntegration = async () => {
+    setBusy(true); setError("");
+    try {
+      const r=await api(`/accounts/${integration.id}/test-connection`,{method:"POST",timeoutMs:20000});
+      ctx.notify(`${integration.channel}: подключение подтверждено. Проверено записей: ${r.records_checked ?? 0}`);
+    } catch(e){setError(e.message)} finally{setBusy(false)}
+  };
+  const runKaspiAction = async () => {
+    if (!kaspiAction.order_id.trim()) { setError("Укажите ID заказа Kaspi"); return; }
+    if (!confirm(`Изменить реальный заказ Kaspi ${kaspiAction.code || kaspiAction.order_id} → ${kaspiAction.status}?`)) return;
+    setBusy(true); setError("");
+    try {
+      const body={...kaspiAction,number_of_space:Number(kaspiAction.number_of_space||1)};
+      const r=await api(`/accounts/${integration.id}/kaspi/orders/${encodeURIComponent(kaspiAction.order_id)}/status`,{method:"POST",body});
+      ctx.notify(`Kaspi: статус заказа изменён на ${kaspiAction.status}`);
+      return r;
+    } catch(e){setError(e.message)} finally{setBusy(false)}
+  };
+  const disconnectIntegration = async () => {
+    if(!confirm(`Отключить ${integration.channel}?`)) return;
+    setBusy(true);
+    try { await api(`/accounts/${integration.id}/credentials`,{method:"DELETE"}); ctx.notify("Интеграция отключена"); setIntegration(null); }
+    catch(e){setError(e.message)} finally{setBusy(false)}
+  };
+  const sync = async (row) => {
+    setBusy(true);
+    setError("");
+    try {
+      let r = await api(`/accounts/${row.id}/sync-now?background=true`, { method: "POST" });
+      if (r.status === 'running') {
+        ctx.notify(`${row.channel}: синхронизация выполняется…`);
+        for (let attempt=0;attempt<90;attempt++) {
+          await new Promise(resolve=>setTimeout(resolve,2000));
+          const status = await api(`/accounts/${row.id}/sync-status`, {timeoutMs:10000});
+          if (status.status==='failed') throw new Error(status.error || 'Ошибка синхронизации');
+          if (status.status!=='running') {
+            ctx.notify(`${row.channel}: всего API-записей ${status.total_records}; всего проведено ${status.erp_projection.total_projected}; ожидает ${status.erp_projection.pending_erp}${status.error ? '; ' + status.error : ''}`);
+            return;
+          }
+        }
+        throw new Error('Синхронизация продолжается. Статус сохранён в интеграции; проверьте позже.');
+      }
+      ctx.notify(`${row.channel}: API ${r.records?.length ?? 0}; новых ${r.staged_inserted ?? 0}; обновлено ${r.staged_updated ?? 0}; проведено в ERP ${r.erp_projection?.projected ?? 0}; ожидает сверки ${r.erp_projection?.pending_erp ?? 0}${r.warnings?.length ? "; неполная выгрузка: " + r.warnings.join("; ") : ""}`);
+      ctx.notify("Данные обновлены");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const upload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const cid = ctx.company || ctx.refs.companies?.[0]?.id;
+    if (!cid) {
+      setError("Сначала добавьте компанию");
+      return;
+    }
+    const f = new FormData();
+    f.append("file", file);
+    f.append("company_id", cid);
+    setBusy(true);
+    try {
+      await api("/documents/upload", { method: "POST", body: f });
+      ctx.notify("Документ загружен");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+      e.target.value = "";
+    }
+  };
+  return (
+    <>
+      <ErrorBox error={error} />
+      {integration && <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&setIntegration(null)}>
+        <section className="modal" role="dialog" aria-modal="true">
+          <div className="modal-heading"><div><h2>{integration.channel} API</h2><p>Безопасное подключение прямо из QOR</p></div><button className="icon-button" onClick={()=>setIntegration(null)}><X size={18}/></button></div>
+          <div className="info-banner"><ShieldCheck size={18}/> Ключ сохраняется на сервере в зашифрованном виде и никогда не возвращается в браузер.</div>
+          {integration.connection?.saved_on_site && <p><b>Подключение сохранено</b> · {integration.connection.credential_hint}</p>}
+          {integration.channel === "Kaspi" && integration.connection?.saved_on_site && <div className="panel"><h3>Управление реальным заказом Kaspi</h3><p className="muted">Операция отправляется прямо в Kaspi. Перед отправкой QOR попросит подтверждение.</p><label>ID заказа Kaspi<input value={kaspiAction.order_id} onChange={e=>setKaspiAction({...kaspiAction,order_id:e.target.value})} placeholder="ID из синхронизации"/></label><label>Номер заказа<input value={kaspiAction.code} onChange={e=>setKaspiAction({...kaspiAction,code:e.target.value})} placeholder="Код заказа"/></label><label>Действие<select value={kaspiAction.status} onChange={e=>setKaspiAction({...kaspiAction,status:e.target.value})}><option value="ACCEPTED_BY_MERCHANT">Принять заказ</option><option value="ASSEMBLE">Скомплектовать / передать</option><option value="ARRIVED">Прибыл (предзаказ)</option><option value="CANCELLED">Отменить</option><option value="COMPLETED">Выдать покупателю</option></select></label>{kaspiAction.status==="ASSEMBLE"&&<label>Количество мест<input type="number" min="1" value={kaspiAction.number_of_space} onChange={e=>setKaspiAction({...kaspiAction,number_of_space:e.target.value})}/></label>}{kaspiAction.status==="CANCELLED"&&<><label>Причина<select value={kaspiAction.cancellation_reason} onChange={e=>setKaspiAction({...kaspiAction,cancellation_reason:e.target.value})}><option value="BUYER_CANCELLATION_BY_MERCHANT">Покупатель отменил</option><option value="BUYER_NOT_REACHABLE">Не удалось связаться</option><option value="MERCHANT_OUT_OF_STOCK">Нет в наличии</option></select></label><label>Комментарий<input value={kaspiAction.cancellation_comment} onChange={e=>setKaspiAction({...kaspiAction,cancellation_comment:e.target.value})}/></label></>}{kaspiAction.status==="COMPLETED"&&<label>Код покупателя<input value={kaspiAction.security_code} onChange={e=>setKaspiAction({...kaspiAction,security_code:e.target.value})} placeholder="Оставьте пустым для отправки кода"/></label>}<button className="primary" onClick={runKaspiAction} disabled={busy}>{busy?"Отправка…":"Выполнить в Kaspi"}</button></div>}
+          {integration.channel === "Ozon" ? <><label>Client ID<input value={integrationForm.client_id} onChange={e=>setIntegrationForm({...integrationForm,client_id:e.target.value})} autoComplete="off"/></label><label>API Key<input type="password" value={integrationForm.api_key} onChange={e=>setIntegrationForm({...integrationForm,api_key:e.target.value})} autoComplete="new-password"/></label></> : <label>API Token<input type="password" value={integrationForm.token} onChange={e=>setIntegrationForm({...integrationForm,token:e.target.value})} placeholder={`Вставьте токен ${integration.channel}`} autoComplete="new-password"/></label>}
+          <div className="modal-footer">{integration.connection?.saved_on_site&&<button className="danger" onClick={disconnectIntegration} disabled={busy}>Отключить</button>}{integration.connection?.saved_on_site&&<button className="secondary" onClick={testIntegration} disabled={busy}>{busy?"Проверка…":"Проверить подключение"}</button>}<button className="secondary" onClick={()=>setIntegration(null)}>Отмена</button><button className="primary" onClick={saveIntegration} disabled={busy}>{busy?"Сохранение…":"Сохранить подключение"}</button></div>
+        </section>
+      </div>}
+      {entity === "accounts" && (
+        <div className="info-banner">
+          <PlugLabel />
+          Управляйте подключениями Kaspi, Wildberries и Ozon прямо здесь. Добавьте интеграцию, откройте кнопку защиты, сохраните API-данные, проверьте подключение и запустите синхронизацию отдельной кнопкой. Статус, последняя синхронизация и ошибки видны в таблице. Ключи хранятся на сервере в зашифрованном виде.
+        </div>
+      )}
+      {entity === "niches" && (
+        <div className="info-banner">
+          Оценка строится только по введённым наблюдениям. Укажите источник и
+          дату. Без необходимых показателей система покажет «Недостаточно
+          данных». Сезонность и отзывы сохраняются в исходных данных.
+        </div>
+      )}
+      {channels.includes(page) && <MarketplaceInbox channel={page} ctx={ctx} />}
+      <div className="panel">
+        {channels.includes(page) && <div className="section-heading"><div><h3>Подтверждённые продажи</h3><p className="muted">Только операции, проведённые финансовым ядром QOR. Заказ сам по себе не превращается в выручку.</p></div></div>}
+        <div className="table-toolbar">
+          <div className="search">
+            <Search size={17} />
+            <input
+              placeholder="Поиск по записям…"
+              aria-label="Поиск"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="row-actions">
+            <a
+              className="secondary"
+              href={"/api/export/" + entity + "?format=xlsx"}
+            >
+              <Download size={16} />
+              Excel
+            </a>
+            {channels.includes(page) && writable && (
+              <button
+                className="primary"
+                onClick={() =>
+                  ctx.open("sales", {
+                    account_id: ctx.refs.accounts?.find(
+                      (a) =>
+                        a.channel === page &&
+                        (!ctx.company || a.company_id == ctx.company),
+                    )?.id,
+                  })
+                }
+              >
+                <Plus size={16} />
+                Продажа
+              </button>
+            )}
+            {entity === "documents" && writable && (
+              <label className="primary file-button">
+                <Upload size={16} />
+                {busy ? "Загружаем…" : "Загрузить"}
+                <input
+                  disabled={busy}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.xlsx"
+                  onChange={upload}
+                />
+              </label>
+            )}
+          </div>
+        </div>
+        {entity === "documents" && (
+          <p className="panel-note">
+            Максимум 5 МБ. Компания:{" "}
+            {ctx.refs.companies?.find((c) => c.id == ctx.company)?.name ||
+              ctx.refs.companies?.[0]?.name ||
+              "не выбрана"}
+            .
+          </p>
+        )}
+        {state.loading ? (
+          <Spinner />
+        ) : state.error ? (
+          <ErrorBox error={state.error} />
+        ) : (
+          <>
+            {entity === "products" ? <div className="qor-item-grid">{state.data.items.map((product) => <ProductCatalogCard key={product.id} product={product} onEdit={() => ctx.open("products", product)} onDelete={() => remove(product)}/>)}</div> : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
+              rows={state.data.items}
+              cols={columns[entity] || ["id", "created_at"]}
+              refs={ctx.refs}
+              actions={(row) => (
+                <>
+                  {forms[entity] &&
+                    writable &&
+                    (entity !== "users" || ctx.auth.user.role === "Owner") && (
+                      <>
+                        <button
+                          className="icon-button"
+                          title="Редактировать"
+                          onClick={() => ctx.open(entity, row)}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        {entity !== "users" && (
+                          <button
+                            className="icon-button danger"
+                            title="Удалить"
+                            onClick={() => remove(row)}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  {entity === "sales" && (
+                    <>
+                      <a
+                        className="icon-button"
+                        title="Скачать счёт"
+                        href={"/api/sales/" + row.id + "/invoice"}
+                      >
+                        <FileText size={17} />
+                      </a>
+                      {writable && (
+                        <button
+                          className="icon-button"
+                          title="Возврат товара"
+                          onClick={() =>
+                            ctx.open("returns", { sale_id: row.id })
+                          }
+                        >
+                          <RotateCcw size={17} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {entity === "accounts" && writable && (<>
+                    {["Kaspi","Wildberries","Ozon"].includes(row.channel) && <button className="icon-button" disabled={busy} onClick={()=>openIntegration(row)} title={row.active === false ? "Подключить магазин снова" : "Настроить API"}><ShieldCheck size={16}/></button>}
+                    <button className="icon-button" disabled={busy || row.active === false} onClick={() => sync(row)} title={row.active === false ? "Сначала подключите магазин" : "Синхронизировать"}><RefreshCw size={16} /></button>
+                  </>)}
+                  {entity === "documents" && (
+                    <a
+                      className="icon-button"
+                      title="Скачать"
+                      href={"/api/documents/" + row.id + "/download"}
+                    >
+                      <Download size={17} />
+                    </a>
+                  )}
+                  {entity === "generated_documents" && (
+                    <a className="icon-button" title="Скачать PDF" href={"/api/generated-documents/" + row.id + "/pdf"}>
+                      <Download size={17} />
+                    </a>
+                  )}
+                  {entity === "niches" && (
+                    <span className="muted">
+                      {row.analysis?.message || row.method}
+                    </span>
+                  )}
+                </>
+              )}
+            />}
+            <div className="pagination">
+              <span>
+                {state.data.total ? offset + 1 : 0}–
+                {Math.min(offset + 30, state.data.total)} из {state.data.total}
+              </span>
+              <div>
+                <button
+                  className="secondary"
+                  disabled={!offset}
+                  onClick={() => setOffset(Math.max(0, offset - 30))}
+                >
+                  Назад
+                </button>
+                <button
+                  className="secondary"
+                  disabled={offset + 30 >= state.data.total}
+                  onClick={() => setOffset(offset + 30)}
+                >
+                  Далее
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+      {[
+        "sales",
+        "purchases",
+        "expenses",
+        "cash",
+        "movements",
+        "batches",
+      ].includes(entity) && (
+        <p className="method">
+          Проведённые записи неизменяемы. Возврат товара и корректировка склада
+          создают отдельные операции с сохранением истории.
+        </p>
+      )}
+    </>
+  );
+}
+function PlugLabel() {
+  return <span className="badge gray">CONNECTORS</span>;
+}
+function ReferencePicker({ field, value, options, company, onChange }) {
+  const [search, setSearch] = useState(""),
+    [remote, setRemote] = useState(null),
+    [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    if (!search) {
+      setRemote(null);
+      return;
+    }
+    const timer = setTimeout(
+      () =>
+        api(
+          "/data/" +
+            field.ref +
+            "?limit=50&search=" +
+            encodeURIComponent(search) +
+            (company && field.ref !== "companies"
+              ? "&company_id=" + company
+              : ""),
+        )
+          .then((r) => {
+            if (live) {
+              setRemote(r.items);
+              setError("");
+            }
+          })
+          .catch((e) => {
+            if (live) setError(e.message);
+          }),
+      250,
+    );
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [search, company, field.ref]);
+  const list = remote || options;
+  const current = options.find((x) => x.id == value);
+  const combined =
+    current && !list.some((x) => x.id == value) ? [current, ...list] : list;
+  return (
+    <div className="reference-picker">
+      <input
+        aria-label={"Поиск: " + field.label}
+        placeholder="Поиск в справочнике…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <select
+        aria-label={field.label}
+        required={field.required}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">Выберите…</option>
+        {combined.map((x) => (
+          <option value={x.id} key={x.id}>
+            {x.name || x.reference} · #{x.id}
+          </option>
+        ))}
+      </select>
+      {error && <small>{error}</small>}
+    </div>
+  );
+}
+function EditModal({ kind, item, ctx, close }) {
+  const fields = forms[kind];
+  const editing =
+    item?.id &&
+    [
+      "companies",
+      "products",
+      "accounts",
+      "customers",
+      "users",
+      "niches",
+    ].includes(kind);
+  const initial = Object.fromEntries(
+    fields.map((f) => [
+      f.key,
+      item?.[f.key] ??
+        (f.type === "checkbox"
+          ? true
+          : f.type === "date"
+            ? today()
+            : f.type === "select"
+              ? f.options[0]
+              : f.type === "multiref"
+                ? []
+                : f.type === "json"
+                  ? "{}"
+                  : f.type === "niche"
+                    ? {}
+                    : f.key === "company_id"
+                      ? ctx.company || ctx.refs.companies?.[0]?.id || ""
+                      : f.key === "quantity"
+                        ? 1
+                        : f.key === "min_stock"
+                          ? 5
+                          : ""),
+    ]),
+  );
+  for (const f of fields) {
+    if (f.type === "money" && item?.[f.key] != null)
+      initial[f.key] = item[f.key] / 100;
+    if (f.type === "json" && typeof initial[f.key] === "object")
+      initial[f.key] = JSON.stringify(initial[f.key], null, 2);
+  }
+  const [values, setValues] = useState(initial),
+    [lines, setLines] = useState([
+      { product_id: "", quantity: 1, unit_cost: "", currency: "KZT", fx_rate: "1" },
+    ]),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""});
+  useEffect(() => {
+    const fn = (e) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("keydown", fn);
+    return () => document.removeEventListener("keydown", fn);
+  }, [close]);
+  const set = (k, v) => setValues((x) => ({ ...x, [k]: v }));
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const payload = {};
+      for (const f of fields) {
+        const v = values[f.key];
+        if (f.type === "money")
+          payload[f.key] = Math.round(Number(v || 0) * 100);
+        else if (f.type === "number") payload[f.key] = Number(v || 0);
+        else if (f.type === "ref") payload[f.key] = v ? Number(v) : null;
+        else if (f.type === "date") payload[f.key] = v || null;
+        else if (f.type === "json") payload[f.key] = JSON.parse(v || "{}");
+        else payload[f.key] = v;
+      }
+      if (kind === "purchases")
+        payload.lines = lines.map((l) => ({
+          product_id: Number(l.product_id),
+          quantity: Number(l.quantity),
+          unit_cost: Math.round(Number(l.unit_cost) * 100),
+          currency: String(l.currency || "KZT").toUpperCase(),
+          fx_rate: Math.round(Number(l.fx_rate || 1) * 10000),
+        }));
+      const posted = [
+        "purchases",
+        "sales",
+        "returns",
+        "expenses",
+        "cash",
+        "adjustments",
+      ].includes(kind);
+      const saved = await api(
+        posted
+          ? "/post/" + kind
+          : "/data/" + kind + (editing ? "/" + item.id : ""),
+        { method: editing ? "PUT" : "POST", body: payload },
+      );
+      if (kind === "accounts" && !editing && ["Kaspi","Wildberries","Ozon"].includes(payload.channel)) {
+        const credentials = payload.channel === "Ozon"
+          ? {client_id: accountCredentials.client_id.trim(), api_key: accountCredentials.api_key.trim()}
+          : {token: accountCredentials.token.trim()};
+        const missing = payload.channel === "Ozon"
+          ? (!credentials.client_id || !credentials.api_key)
+          : !credentials.token;
+        if (missing) throw new Error("Введите API-данные интеграции");
+        await api(`/accounts/${saved.id}/credentials`, {method:"PUT", body:credentials});
+        await api(`/accounts/${saved.id}/sync-now`, {method:"POST"});
+        ctx.notify(`${payload.channel}: интеграция создана, API сохранён, проверка и синхронизация запущены`);
+      } else {
+        ctx.notify(editing ? "Изменения сохранены" : "Операция выполнена");
+      }
+      close();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const input = (f) => {
+    let options = f.ref ? ctx.refs[f.ref] || [] : [];
+    if (
+      ["accounts", "customers", "sales", "purchases", "expenses"].includes(
+        f.ref,
+      ) &&
+      values.company_id
+    )
+      options = options.filter((x) => x.company_id == values.company_id);
+    const v = values[f.key];
+    if (f.type === "checkbox")
+      return (
+        <input
+          type="checkbox"
+          checked={!!v}
+          onChange={(e) => set(f.key, e.target.checked)}
+        />
+      );
+    if (f.type === "select")
+      return (
+        <select value={v} onChange={(e) => set(f.key, e.target.value)}>
+          {f.options.map((x) => (
+            <option key={x}>{x}</option>
+          ))}
+        </select>
+      );
+    if (f.type === "ref")
+      return (
+        <ReferencePicker
+          field={f}
+          value={v}
+          options={options}
+          company={values.company_id}
+          onChange={(value) => set(f.key, value)}
+        />
+      );
+    if (f.type === "multiref")
+      return (
+        <div className="multi-choices">
+          {options.map((x) => (
+            <label key={x.id}>
+              <input
+                type="checkbox"
+                checked={v.includes(x.id)}
+                onChange={(e) =>
+                  set(
+                    f.key,
+                    e.target.checked
+                      ? [...v, x.id]
+                      : v.filter((id) => id !== x.id),
+                  )
+                }
+              />
+              {x.name}
+            </label>
+          ))}
+        </div>
+      );
+    if (f.type === "json")
+      return (
+        <textarea
+          rows={4}
+          value={v}
+          onChange={(e) => set(f.key, e.target.value)}
+        />
+      );
+    if (f.type === "niche")
+      return (
+        <div className="niche-fields">
+          {[
+            ["monthly_demand", "Спрос, ед./мес."],
+            ["competitors", "Число конкурентов"],
+            ["margin_percent", "Маржа, %"],
+            ["advertising_percent", "Реклама, % от выручки"],
+            ["seasonality_risk", "Риск сезонности, 0–100"],
+            ["logistics_percent", "Логистика, % от выручки"],
+            ["return_percent", "Возвраты, %"],
+            ["rating", "Рейтинг 0–5 (опционально)"],
+            ["price", "Цена, ₸"],
+            ["purchase_cost", "Закупочная цена, ₸"],
+            ["logistics", "Логистика, ₸"],
+            ["seasonality", "Сезонность (наблюдения)"],
+            ["reviews", "Отзывы (наблюдения)"],
+          ].map(([k, l]) => (
+            <label key={k}>
+              {l}
+              <input
+                type={
+                  ["seasonality", "reviews"].includes(k) ? "text" : "number"
+                }
+                step="any"
+                min="0"
+                value={v[k] ?? ""}
+                onChange={(e) =>
+                  set(f.key, {
+                    ...v,
+                    [k]: e.target.value === "" ? null : e.target.value,
+                  })
+                }
+              />
+            </label>
+          ))}
+        </div>
+      );
+    return (
+      <input
+        autoComplete={f.type === "password" ? "new-password" : "off"}
+        type={f.type === "money" || f.type === "number" ? "number" : f.type}
+        step={
+          f.type === "money" ? "0.01" : f.type === "number" ? "1" : undefined
+        }
+        min={
+          f.signed
+            ? undefined
+            : (f.min ?? (["money", "number"].includes(f.type) ? 0 : undefined))
+        }
+        value={v ?? ""}
+        required={f.required}
+        onChange={(e) => set(f.key, e.target.value)}
+      />
+    );
+  };
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
+      <form
+        className="modal"
+        onSubmit={submit}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Форма документа"
+      >
+        <div className="modal-heading">
+          <div>
+            <span className="eyebrow">
+              {editing ? "РЕДАКТИРОВАНИЕ" : "НОВАЯ ЗАПИСЬ"}
+            </span>
+            <h2>
+              {flat.find((x) => x[0] === kind)?.[1] ||
+                {
+                  returns: "Возврат товара",
+                  adjustments: "Корректировка склада",
+                }[kind]}
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={close}
+            aria-label="Закрыть"
+          >
+            <X />
+          </button>
+        </div>
+        <div className="form-grid">
+          {fields.map((f) => (
+            <label
+              key={f.key}
+              className={
+                ["json", "multiref", "niche"].includes(f.type)
+                  ? "wide"
+                  : f.type === "checkbox"
+                    ? "check-label"
+                    : ""
+              }
+            >
+              {f.label}
+              {input(f)}
+            </label>
+          ))}
+        </div>
+        {kind === "accounts" && !editing && ["Kaspi","Wildberries","Ozon"].includes(values.channel) && (
+          <div className="panel padded wide integration-create-box">
+            <div className="info-banner"><ShieldCheck size={18}/> API-данные сохраняются на сервере в зашифрованном виде. После создания QOR сразу проверит соединение и запустит синхронизацию.</div>
+            {values.channel === "Ozon" ? <>
+              <label>Ozon Client ID<input required value={accountCredentials.client_id} onChange={e=>setAccountCredentials({...accountCredentials,client_id:e.target.value})} autoComplete="off" placeholder="Введите Client ID"/></label>
+              <label>Ozon API Key<input required type="password" value={accountCredentials.api_key} onChange={e=>setAccountCredentials({...accountCredentials,api_key:e.target.value})} autoComplete="new-password" placeholder="Введите API Key"/></label>
+            </> : <label>{values.channel} API Token<input required type="password" value={accountCredentials.token} onChange={e=>setAccountCredentials({...accountCredentials,token:e.target.value})} autoComplete="new-password" placeholder={`Вставьте API Token ${values.channel}`}/></label>}
+          </div>
+        )}
+        {kind === "purchases" && (
+          <div className="purchase-lines">
+            <h3>Состав закупки</h3>
+            {lines.map((l, i) => (
+              <div className="purchase-line" key={i}>
+                <label>
+                  Товар
+                  <select
+                    required
+                    value={l.product_id}
+                    onChange={(e) =>
+                      setLines(
+                        lines.map((x, j) =>
+                          j === i ? { ...x, product_id: e.target.value } : x,
+                        ),
+                      )
+                    }
+                  >
+                    <option value="">Выберите товар</option>
+                    {ctx.refs.products?.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Количество
+                  <input
+                    required
+                    type="number"
+                    min="1"
+                    value={l.quantity}
+                    onChange={(e) =>
+                      setLines(
+                        lines.map((x, j) =>
+                          j === i ? { ...x, quantity: e.target.value } : x,
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  Цена закупки
+                  <input
+                    required
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={l.unit_cost}
+                    onChange={(e) =>
+                      setLines(
+                        lines.map((x, j) =>
+                          j === i ? { ...x, unit_cost: e.target.value } : x,
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  Валюта
+                  <select value={l.currency} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, currency: e.target.value } : x))}>
+                    <option value="KZT">KZT</option>
+                    <option value="CNY">CNY</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </label>
+                <label>
+                  Курс к ₸
+                  <input required type="number" min="0.0001" step="0.0001" value={l.fx_rate} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, fx_rate: e.target.value } : x))} />
+                </label>
+                <button
+                  type="button"
+                  className="icon-button danger"
+                  disabled={lines.length === 1}
+                  onClick={() => setLines(lines.filter((_, j) => j !== i))}
+                  title="Убрать строку"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                setLines([
+                  ...lines,
+                  { product_id: "", quantity: 1, unit_cost: "", currency: "KZT", fx_rate: "1" },
+                ])
+              }
+            >
+              <Plus size={16} />
+              Добавить товар
+            </button>
+            <p className="muted">
+              Дополнительные затраты распределяются пропорционально стоимости
+              товаров. Цена каждой строки пересчитывается в тенге по указанному курсу.
+            </p>
+          </div>
+        )}
+        <ErrorBox error={error} />
+        <div className="modal-footer">
+          <button type="button" className="secondary" onClick={close}>
+            Отмена
+          </button>
+          <button className="primary" disabled={busy}>
+            {busy ? "Сохраняем…" : editing ? "Сохранить" : "Провести"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+function AIWorkspace({ ctx, enabled }) {
+  const [agents,setAgents]=useState([]),[threads,setThreads]=useState([]),[thread,setThread]=useState(null),[messages,setMessages]=useState([]);
+  const [text,setText]=useState(""),[files,setFiles]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(""),[actions,setActions]=useState([]),[plans,setPlans]=useState([]),[jobState,setJobState]=useState(null);
+  const agent=thread?.agent||"rick";
+  const reloadThreads=()=>api("/ai/threads").then(d=>setThreads(d.items||[]));
+  const reloadActions=()=>api("/ai/actions?status=pending").then(d=>setActions(d.items||[]));
+  const reloadPlans=()=>api("/ai/plans?status=pending").then(d=>setPlans(d.items||[]));
+  useEffect(()=>{api("/ai/agents").then(d=>setAgents(d.items||[])).catch(()=>{});reloadThreads().catch(()=>{});reloadActions().catch(()=>{});reloadPlans().catch(()=>{});},[ctx.refresh]);
+  useEffect(()=>{if(!thread)return;api(`/ai/threads/${thread.id}/messages`).then(d=>setMessages(d.items||[])).catch(e=>setError(e.message));},[thread]);
+  const newChat=async(a="rick")=>{const t=await api("/ai/threads",{method:"POST",body:{agent:a,company_id:ctx.company?Number(ctx.company):null}});setThread(t);setMessages([]);reloadThreads()};
+  const chooseAgent=async(a)=>{if(!thread)return newChat(a);const t=await api(`/ai/threads/${thread.id}`,{method:"PATCH",body:{agent:a}});setThread(t);reloadThreads()};
+  const uploadFiles=async(list)=>{if(!ctx.company){setError("Сначала выберите компанию");return}setBusy(true);try{const out=[];for(const file of Array.from(list).slice(0,8)){const fd=new FormData();fd.append("company_id",ctx.company);fd.append("file",file);out.push(await api("/documents/upload",{method:"POST",body:fd}))}setFiles(f=>[...f,...out].slice(0,8))}catch(e){setError(e.message)}finally{setBusy(false)}};
+  const send=async(e)=>{e.preventDefault();if((!text.trim()&&!files.length)||busy)return;if(!enabled){setError("AI API не подключён. Настройте OPENAI_API_KEY на сервере.");return}setError("");setBusy(true);try{let t=thread;if(!t)t=await api("/ai/threads",{method:"POST",body:{agent:"rick",company_id:ctx.company?Number(ctx.company):null}});
+    const attachments=files.map(f=>({document_id:f.id,name:f.name,mime:f.mime}));const userMsg=await api(`/ai/threads/${t.id}/messages`,{method:"POST",body:{role:"user",content:text||"Проанализируй вложения",attachments}});
+    setThread(t);setMessages(m=>[...m,userMsg]);const history=[...messages.slice(-12),userMsg].map(m=>({role:m.role,content:m.content}));
+    let j=await api("/jobs",{method:"POST",body:{kind:"assistant",payload:{question:text||"Проанализируй приложенные материалы",agent:t.agent,company_id:ctx.company?Number(ctx.company):null,start:ctx.start,end:ctx.end,thread_id:t.id,history,document_ids:attachments.map(x=>x.document_id)}}});
+    setJobState(j);setText("");setFiles([]);
+    if(["queued","running"].includes(j.status)) j=await waitForAIJob(j.id,setJobState);
+    if(j.status!=="done") throw new Error(j.error||"AI-задание завершилось с ошибкой");
+    const answer=j.result?.answer||j.result?.text||j.result?.notice||"Готово";
+    const assistantMsg=await api(`/ai/threads/${t.id}/messages`,{method:"POST",body:{role:"assistant",content:answer,meta:{job_id:j.id,agent:j.result?.agent||agent,tools_used:j.result?.tools_used||[]}}});
+    setMessages(m=>[...m,assistantMsg]);setJobState(null);reloadThreads();reloadActions();reloadPlans();}catch(e){setError(e.message)}finally{setBusy(false)}};
+  const copy=(v)=>navigator.clipboard?.writeText(v);
+  const act=async(id,verb)=>{setError("");try{await api(`/ai/actions/${id}/${verb}`,{method:"POST"});await reloadActions();ctx.bump?.()}catch(e){setError(e.message)}};
+  const planAct=async(id,verb)=>{setError("");try{await api(`/ai/plans/${id}/${verb}`,{method:"POST"});await Promise.all([reloadPlans(),reloadActions()]);ctx.bump?.()}catch(e){setError(e.message)}};
+  return <div className="chat-shell">
+    <aside className="chat-sidebar panel"><button className="primary chat-new" onClick={()=>newChat(agent)}><Plus size={17}/>Новый чат</button><div className="chat-history"><span className="eyebrow">ИСТОРИЯ</span>{threads.map(t=><button key={t.id} className={`chat-thread ${thread?.id===t.id?"active":""}`} onClick={()=>setThread(t)}><MessageSquare size={15}/><span><b>{t.title}</b><small>{agents.find(a=>a.id===t.agent)?.name||t.agent}</small></span></button>)}</div></aside>
+    <section className="chat-main panel"><header className="chat-head"><div><span className="eyebrow">QOR AI WORKSPACE</span><h2>{agents.find(a=>a.id===agent)?.name||"Рик"} · {agents.find(a=>a.id===agent)?.title||"AI-руководитель"}</h2></div><select value={agent} onChange={e=>chooseAgent(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name} — {a.title}</option>)}</select></header>
+      {!enabled&&<div className="info-banner">Для живых ответов подключите OPENAI_API_KEY на сервере.</div>}
+      {jobState&&["queued","running"].includes(jobState.status)&&<div className="info-banner">Задание #{jobState.id} выполняется в фоне. Страница остаётся доступной.</div>}<div className="chat-messages">{!messages.length&&<div className="chat-empty"><div className="ai-orb"><Sparkles size={28}/></div><h2>Чем помочь бизнесу?</h2><p>Пишите как в обычном мессенджере. Можно прикрепить фото, PDF, Excel/CSV и продолжать разговор в этом же чате.</p><div className="prompt-chips">{["Сколько чистой прибыли за месяц?","Какие товары нужно дозаказать?","Почему продажи WB снизились?","Подготовь карточку нового товара"].map(x=><button className="secondary" key={x} onClick={()=>setText(x)}>{x}</button>)}</div></div>}
+        {messages.map(m=><div key={m.id} className={`chat-row ${m.role}`}><div className="chat-bubble"><div className="chat-role">{m.role==="user"?"Вы":agents.find(a=>a.id===(m.meta?.agent||agent))?.name||"QOR AI"}</div><div className="chat-text">{m.content}</div>{m.attachments?.length>0&&<div className="chat-attachments">{m.attachments.map((a,i)=><a key={i} href={`/api/documents/${a.document_id}/download`} target="_blank" rel="noreferrer"><ImageIcon size={15}/>{a.name}</a>)}</div>}{m.role==="assistant"&&<div className="chat-actions"><button onClick={()=>copy(m.content)}><Copy size={14}/>Копировать</button><button onClick={()=>setText("Переделай предыдущий ответ. ")}><RotateCcw size={14}/>Переделать</button></div>}</div></div>)}
+        {plans.filter(p=>!thread||!p.thread_id||p.thread_id===thread.id).map(p=><div key={`plan-${p.id}`} className="chat-row assistant"><div className="chat-bubble ai-approval ai-plan"><div className="chat-role">ПЛАН РИКА · НУЖНО ПОДТВЕРЖДЕНИЕ</div><b>{p.title}</b><div className="chat-text">{p.goal}</div><div className="plan-steps">{(p.steps||[]).map((x,i)=><div key={i}><span>{i+1}</span><div><b>{x.title||x.action_type}</b><small>{x.action_type}</small></div></div>)}</div><div className="chat-actions"><button className="primary" onClick={()=>planAct(p.id,"confirm")}>Подтвердить весь план</button><button onClick={()=>planAct(p.id,"cancel")}>Отмена</button></div><small>Каждый шаг повторно проверяет права и записывается в Audit Log. При ошибке выполнение останавливается.</small></div></div>)}
+        {actions.filter(a=>!thread||!a.thread_id||a.thread_id===thread.id).map(a=><div key={`action-${a.id}`} className="chat-row assistant"><div className="chat-bubble ai-approval"><div className="chat-role">Требуется подтверждение</div><b>{a.preview?.title||a.action_type}</b><div className="chat-text">{a.preview?.warning}</div><pre>{JSON.stringify(a.preview?.payload||{},null,2)}</pre><div className="chat-actions"><button className="primary" onClick={()=>act(a.id,"confirm")}>Подтвердить</button><button onClick={()=>act(a.id,"cancel")}>Отмена</button></div></div></div>)}
+        {busy&&<div className="chat-row assistant"><div className="chat-bubble typing"><Spinner/><span>{agents.find(a=>a.id===agent)?.name||"AI"} работает…</span></div></div>}</div>
+      <ErrorBox error={error}/><form className="chat-composer" onSubmit={send}>{files.length>0&&<div className="composer-files">{files.map(f=><span key={f.id}>{f.name}<button type="button" onClick={()=>setFiles(x=>x.filter(y=>y.id!==f.id))}>×</button></span>)}</div>}<div className="composer-row"><label className="attach-btn" title="Фото или файл"><Paperclip size={20}/><input type="file" multiple accept="image/*,.pdf,.csv,.xlsx" onChange={e=>uploadFiles(e.target.files)}/></label><textarea rows="1" value={text} onChange={e=>setText(e.target.value)} placeholder="Сообщение QOR AI…" onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send(e)}}}/><button className="send-btn" disabled={!enabled||busy||(!text.trim()&&!files.length)}><Send size={19}/></button></div><small>AI использует только разрешённые данные ERP. Финансовые цифры рассчитывает backend.</small></form>
+    </section>
+    <aside className="chat-agents panel"><span className="eyebrow">AI-КОМАНДА</span>{agents.map(a=><button key={a.id} className={`agent-mini ${agent===a.id?"active":""}`} onClick={()=>chooseAgent(a.id)}><span>{a.name.slice(0,1)}</span><div><b>{a.name}</b><small>{a.title}</small></div></button>)}</aside>
+  </div>
+}
+
+function AIPage({ page, ctx, enabled }) {
+  const [text, setText] = useState(""),
+    [doc, setDoc] = useState(""),
+    [job, setJob] = useState(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [docs, setDocs] = useState([]),
+    [agents, setAgents] = useState([]),
+    [agent, setAgent] = useState("rick"),
+    [designMode, setDesignMode] = useState("main_photo"),
+    [variants, setVariants] = useState(1),
+    [products, setProducts] = useState([]),
+    [productId, setProductId] = useState(""),
+    [studioCard, setStudioCard] = useState(null);
+  useEffect(() => {
+    if (page === "assistant") api("/ai/agents").then((d) => setAgents(d.items || [])).catch(() => {});
+    api("/data/documents?limit=100").then((d) => setDocs(d.items)).catch(() => {});
+    if (["content","designer"].includes(page)) api("/data/products?limit=200").then((d)=>setProducts(d.items||[])).catch(()=>{});
+  }, [page, ctx.refresh]);
+  // Hooks must be called in the same order when the user switches between
+  // Assistant, Content and Designer. This return is intentionally after all
+  // hooks, fixing the former production-only conditional-Hooks crash.
+  if (page === "assistant") return <AIWorkspace ctx={ctx} enabled={enabled}/>;
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      let j = await api("/jobs", {
+        method: "POST",
+        body: {
+          kind: page,
+          payload: {
+            question: text,
+            agent: page === "assistant" ? agent : undefined,
+            facts: text,
+            prompt: text,
+            document_id: doc ? Number(doc) : null,
+            product_id: productId ? Number(productId) : null,
+            company_id: ctx.company
+              ? Number(ctx.company)
+              : page === "assistant"
+                ? null
+                : ctx.refs.companies?.[0]?.id,
+            start: ctx.start,
+            end: ctx.end,
+            mode: page === "designer" ? designMode : undefined,
+            variants: page === "designer" ? Number(variants) : undefined,
+          },
+        },
+      });
+      setJob(j);
+      if (["queued", "running"].includes(j.status)) j = await waitForAIJob(j.id, setJob);
+      setJob(j);
+      if (j.status === "failed") throw new Error(j.error || "AI-задача завершилась с ошибкой");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ai-layout">
+      <div className="panel ai-main">
+        <div className="ai-title">
+          <div className="ai-orb">
+            <Sparkles size={25} />
+          </div>
+          <div>
+            <h2>
+              {page === "assistant"
+                ? (agents.find((a) => a.id === agent)?.name || "Рик") + " · " + (agents.find((a) => a.id === agent)?.title || "AI-руководитель")
+                : page === "content"
+                  ? "Карточка из фактов о товаре"
+                  : "Новая визуальная идея"}
+            </h2>
+            <p>
+              {page === "assistant"
+                ? (agent === "rick" ? "Главная точка общения: Рик помогает владельцу увидеть картину бизнеса и выбрать действие." : "Специализированный AI работает только в своей зоне и использует проверенные данные ERP.")
+                : page === "content"
+                  ? "Укажите характеристики поставщика и выберите загруженное фото."
+                  : "Опишите композицию, фон и настроение изображения."}
+            </p>
+          </div>
+        </div>
+        {!enabled && (
+          <div className="info-banner">
+            AI API пока не подключён. Укажите OPENAI_API_KEY на сервере.
+            Финансовая аналитика и калькулятор работают без ключа.
+          </div>
+        )}
+        {page === "assistant" && (
+          <div className="ai-team">
+            <div className="ai-team-head"><span className="eyebrow">AI-КОМАНДА</span><strong>Выберите специалиста или пишите Рику</strong></div>
+            <div className="agent-strip">
+              {agents.map((a) => (
+                <button type="button" key={a.id} className={`agent-card ${agent === a.id ? "active" : ""}`} onClick={() => setAgent(a.id)}>
+                  <span className="agent-avatar">{a.name.slice(0,1)}</span>
+                  <span><b>{a.name}</b><small>{a.title}</small><em>{a.scope}</em></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {page === "assistant" && (
+          <div className="prompt-chips">
+            {[
+              "Сколько мы заработали в этом месяце?",
+              "Какой канал самый прибыльный?",
+              "Какие товары скоро закончатся?",
+              "Какие товары плохо продаются?",
+            ].map((p) => (
+              <button className="secondary" key={p} onClick={() => setText(p)}>
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
+        <form onSubmit={submit}>
+          <label>
+            {page === "assistant"
+              ? "Ваш вопрос"
+              : page === "content"
+                ? "Характеристики поставщика"
+                : "Задание для дизайнера"}
+            <textarea
+              rows={page === "assistant" ? 4 : 7}
+              required
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={
+                page === "content"
+                  ? "Укажите только известные свойства: название, размер, цвет, материал…"
+                  : "Напишите здесь…"
+              }
+            />
+          </label>
+          {["content", "designer"].includes(page) && (<label>Товар из ERP<select value={productId} onChange={(e)=>setProductId(e.target.value)}><option value="">Выберите товар</option>{products.map(p=><option key={p.id} value={p.id}>{p.sku} · {p.name}</option>)}</select></label>)}
+          {["content", "designer"].includes(page) && (
+            <label>
+              {page === "designer" ? "Исходная фотография товара (обязательно)" : "Фотография товара"}
+              <select value={doc} onChange={(e) => setDoc(e.target.value)}>
+                <option value="">Без фотографии</option>
+                {docs
+                  .filter((d) => d.mime.startsWith("image/"))
+                  .map((d) => (
+                    <option value={d.id} key={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
+          {page === "designer" && (
+            <div className="form-grid two">
+              <label>Режим<select value={designMode} onChange={(e)=>setDesignMode(e.target.value)}>
+                <option value="main_photo">Marketplace main photo</option><option value="background">Замена/очистка фона</option>
+                <option value="enhance">Улучшение качества</option><option value="infographic">Инфографика</option>
+                <option value="banner">Баннер</option><option value="lifestyle">Lifestyle</option><option value="creative">Рекламный креатив</option>
+              </select></label>
+              <label>Вариантов<select value={variants} onChange={(e)=>setVariants(e.target.value)}><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+            </div>
+          )}
+          <button
+            className="primary"
+            disabled={
+              !enabled || busy || (page === "designer" && !doc) || (job && ["queued", "running"].includes(job.status))
+            }
+          >
+            <Sparkles size={17} />
+            {page === "assistant" ? "Получить анализ" : "Создать"}
+          </button>
+        </form>
+        <ErrorBox error={error} />
+        {job && (
+          <div className="ai-result">
+            <span className="badge gray">
+              Задание #{job.id} · {job.status}
+            </span>
+            {["queued", "running"].includes(job.status) && <Spinner />}
+            <ErrorBox error={job.error} />
+            {job.status === "failed" && job.attempts < 3 && (
+              <button
+                className="secondary"
+                onClick={() =>
+                  api("/jobs/" + job.id + "/retry", { method: "POST" })
+                    .then(setJob)
+                    .catch((e) => setError(e.message))
+                }
+              >
+                Повторить
+              </button>
+            )}
+            {job.status === "done" && (
+              <>
+                <div className="ai-answer">
+                  {job.result.answer || job.result.text || job.result.notice}
+                </div>
+                {job.result.document_ids?.length > 1 && <div className="studio-variants"><h3>AI-варианты</h3><div className="variant-grid">{job.result.document_ids.map((id,i)=><button type="button" key={id} className="variant-card" onClick={()=>setDoc(String(id))}><img src={`/api/documents/${id}/download`}/><b>Вариант {i+1}</b><small>{String(doc)===String(id)?"Выбран":"Выбрать"}</small></button>)}</div></div>}
+                {job.result.document_id && (
+                  <a
+                    className="secondary"
+                    href={
+                      "/api/documents/" + job.result.document_id + "/download"
+                    }
+                  >
+                    <Download size={16} />
+                    Скачать изображение
+                  </a>
+                )}
+                {page === "designer" && job.result.document_id && productId && <div className="studio-actions"><button type="button" className="primary" onClick={async()=>{try{const card=await api("/product-studio/cards",{method:"POST",body:{product_id:Number(productId),company_id:ctx.company?Number(ctx.company):undefined,marketplace:"kaspi",image_document_ids:[Number(doc||job.result.document_id)],title:products.find(p=>String(p.id)===String(productId))?.name||"",description:text,characteristics:{}}});setStudioCard(card)}catch(e){setError(e.message)}}}>Проверить карточку Kaspi</button>{studioCard&&<div className={`validation-box ${studioCard.validation?.passed?"ok":"bad"}`}><b>{studioCard.validation?.passed?"QOR Validator: пройден":"Нужно исправить"}</b>{studioCard.validation?.errors?.map(x=><small key={x}>{x}</small>)}{studioCard.validation?.passed&&<button type="button" className="secondary" onClick={()=>api(`/product-studio/cards/${studioCard.id}/publish`,{method:"POST",body:{review_days:7,auto_optimize:true,auto_publish:false,rollback:true,max_generations:3}}).then(setStudioCard).catch(e=>setError(e.message))}>Запустить · контроль через 7 дней</button>}</div>}</div>}
+                {job.result.data && (
+                  <>
+                    <h3>Проверенные показатели</h3>
+                    <div className="secondary-kpis">
+                      {[
+                        ["Выручка", job.result.data.revenue],
+                        ["Чистая прибыль", job.result.data.net_profit],
+                        ["Деньги", job.result.data.cash],
+                      ].map(([k, v]) => (
+                        <div key={k}>
+                          <span>{k}</span>
+                          <strong>{money(v)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="muted">
+                      Источник: {job.result.source}. Период:{" "}
+                      {job.result.period?.join(" — ")}
+                    </p>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="panel ai-side">
+        <span className="eyebrow">КОНТРОЛЬ ДАННЫХ</span>
+        <h3>
+          {page === "assistant"
+            ? "Цифры из системы"
+            : "Только подтверждённые факты"}
+        </h3>
+        <p>
+          {page === "assistant"
+            ? "Выручку, себестоимость, прибыль и остатки рассчитывает финансовое ядро. AI получает готовый отчёт в пределах ваших прав."
+            : "Неизвестные характеристики требуют уточнения. Проверьте текст и изображение перед публикацией на маркетплейсе."}
+        </p>
+        <div className="rule">
+          <ShieldCheck size={18} />
+          <span>AI не изменяет финансовые записи</span>
+        </div>
+        <div className="rule">
+          <FileText size={18} />
+          <span>
+            Данные отправляются в настроенный AI API только по запросу
+          </span>
+        </div>
+        {page === "content" && (
+          <button
+            className="secondary"
+            onClick={() => ctx.navigate("documents")}
+          >
+            Загрузить фото товара
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+function Calculator() {
+  const [v, setV] = useState({
+      quantity: 5000, purchase_price: 20, fx_rate: 70, price: 3990,
+      delivery: 350000, customs: 120000, broker: 50000, certification: 40000,
+      packaging: 100000, other_import: 30000, commission_percent: 12,
+      marketplace_logistics_unit: 180, advertising_percent: 5, advertising: 0,
+      return_percent: 5, target_margin_percent: 20,
+    }), [result, setResult] = useState(null), [error, setError] = useState("");
+  const fields = {
+    quantity:"Количество, шт", purchase_price:"Закупочная цена, валюта", fx_rate:"Курс к ₸",
+    price:"Плановая цена продажи, ₸", delivery:"Китай → Казахстан, ₸", customs:"Таможня, ₸",
+    broker:"Брокер, ₸", certification:"Сертификат, ₸", packaging:"Упаковка, ₸",
+    other_import:"Прочие импортные расходы, ₸", commission_percent:"Комиссия marketplace, %",
+    marketplace_logistics_unit:"Логистика marketplace / шт, ₸", advertising_percent:"Реклама, % от выручки",
+    advertising:"Фиксированная реклама, ₸", return_percent:"Возвраты, %", target_margin_percent:"Целевая чистая маржа, %",
+  };
+  const submit=async(e)=>{e.preventDefault();try{setResult(await api("/calculator",{method:"POST",body:v}));setError("")}catch(e){setError(e.message)}};
+  const rows = result ? [
+    ["full_cost_total","Полный Full Cost партии"],["full_cost_unit","Full Cost / шт"],["capital_required","Необходимый капитал"],
+    ["revenue","Ожидаемая выручка"],["cogs","COGS"],["gross_profit","Валовая прибыль"],["commission","Комиссия"],
+    ["marketplace_logistics","Логистика marketplace"],["advertising","Реклама"],["net_profit","Чистая прибыль"],
+    ["minimum_price","Минимальная цена"],["recommended_price","Рекомендованная цена"],
+  ] : [];
+  return <div className="report-grid">
+    <form className="panel padded" onSubmit={submit}><h2>AI Product Calculator</h2><p className="muted">Финансовое ядро считает детерминированно — AI не придумывает цифры.</p>
+      <div className="form-grid">{Object.entries(fields).map(([k,l])=><label key={k}>{l}<input required type="number" min={k==="quantity"?1:0} step="any" value={v[k]} onChange={e=>setV({...v,[k]:e.target.value})}/></label>)}</div>
+      <ErrorBox error={error}/><button className="primary">Рассчитать экономику</button></form>
+    <div className="panel padded"><h2>Результат сценария</h2>{result?<><div className="calc-profit"><span>{result.decision}</span><strong>{decimal(result.net_profit)} ₸</strong></div>
+      {rows.map(([k,l])=><div className="statement-line" key={k}><span>{l}</span><strong>{decimal(result[k])} ₸</strong></div>)}
+      <div className="statement-line"><span>Маржа</span><strong>{decimal(result.margin_percent)}%</strong></div><div className="statement-line"><span>ROI</span><strong>{decimal(result.roi_percent)}%</strong></div>
+      <div className="statement-line"><span>Break-even</span><strong>{result.break_even_units ?? "—"} шт</strong></div><p className="muted">{result.turnover_notice}</p><p className="muted">{result.method}</p></>:<Empty text="Введите параметры и нажмите «Рассчитать экономику»"/>}</div>
+  </div>;
+}
+const IMPORT_ALIASES = {
+  reference:["reference","номер","номер заказа","заказ","order id","order_id","id заказа","документ"],
+  external_id:["external_id","номер заказа","код заказа","id заказа","order id","order_id","номер документа"],
+  event_type:["event_type","тип операции","операция"],
+
+  date:["date","дата","дата продажи","дата заказа","күн","сату күні"],
+  company_id:["company_id","компания id","id компании"], account_id:["account_id","аккаунт id","канал id"],
+  product_id:["product_id","товар id","id товара"], customer_id:["customer_id","клиент id","id клиента"],
+  sku:["sku","артикул","артикул продавца","vendor code","код товара"], name:["name","товар","наименование","название товара","өнім"],
+  category:["category","категория","санат"], quantity:["quantity","количество","кол-во","qty","штук","саны"],
+  unit_price:["unit_price","цена продажи","цена","стоимость","price","сумма за единицу","сумма продажи","сумма заказа","сумма"],
+ price:["price","цена","розничная цена"],
+  unit_cost:["unit_cost","себестоимость","закупочная цена","цена закупки","cost"], commission:["commission","комиссия","комиссия маркетплейса","комиссия kaspi","комиссия банка"],
+
+  logistics:["logistics","логистика","доставка","логистика kaspi","доставка kaspi","стоимость доставки для продавца","доставка за счет продавца","доставка за счёт продавца","расходы на доставку"],
+ advertising:["advertising","реклама","рекламные расходы"], paid:["paid","оплачено","оплата"],
+  amount:["amount","сумма","расход","сумма расхода"], description:["description","описание","назначение"], category_expense:["категория расхода"],
+  supplier:["supplier","поставщик"], extra_cost:["extra_cost","доп расходы","дополнительные расходы"], currency:["currency","валюта"], fx_rate:["fx_rate","курс"],
+  min_stock:["min_stock","минимальный остаток"], reason:["reason","причина"], project:["project","проект"], payment_method:["payment_method","способ оплаты"]
+};
+function normHeader(v){return String(v||"").trim().toLowerCase().replace(/[._-]+/g," ").replace(/\s+/g," ")}
+function autoImportMapping(fields, headers){
+  const normalized=headers.map(h=>[h,normHeader(h)]); const out={};
+  for(const f of fields){ const aliases=[f,...(IMPORT_ALIASES[f]||[])].map(normHeader); const hits=normalized.filter(([,h])=>aliases.includes(h)); if(hits.length===1) out[f]=hits[0][0]; }
+  return out;
+}
+function prepareKaspiReportRows(rows, headers, accountId) {
+  const norm = (v) => normHeader(v).replace(/ё/g,"е");
+  const find = (aliases) => {
+    for (const alias of aliases) {
+      const hit = headers.find((h) => norm(h) === alias);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const orderCol = find(["номер заказа","код заказа","id заказа","order id","order_id","заказ"]);
+  const statusCol = find(["статус заказа","статус","состояние заказа","order status"]);
+  const operationCol = find(["тип операции","операция","вид операции","тип транзакции","operation","transaction type"]);
+  const skuCol = find(["артикул продавца","артикул","sku","vendor code","код товара"]);
+  const lineCol = find(["id позиции","код позиции","номер позиции","order entry id","entry id","line id"]);
+  const dateCol = find(["дата продажи","дата выдачи","дата завершения заказа","дата завершения","дата операции","sale date","completion date","дата заказа","дата","order date"]);
+  const qtyCol = find(["количество","кол во","qty","quantity","саны"]);
+  const totalSaleCol = find(["сумма продажи","сумма товара","стоимость товара","сумма по позиции","итого по товару","line total","total price","totalprice","сумма заказа","сумма"]);
+  const unitSaleCol = find(["цена за единицу","цена товара","цена продажи","unit price","unit_price","price"]);
+  const saleCol = totalSaleCol || unitSaleCol;
+  const commissionCol = find(["комиссия kaspi","комиссия банка","комиссия маркетплейса","комиссия"]);
+  const orderCommissionCol = find(["комиссия за заказ","order commission"]);
+  const sellerDeliveryCol = find(["стоимость доставки для продавца","доставка за счет продавца","доставка за счёт продавца","логистика kaspi","логистика","расходы на доставку"]);
+  const buyerDeliveryCol = find(["стоимость доставки для покупателя","доставка за счет покупателя","доставка за счёт покупателя","стоимость доставки"]);
+  const discountCol = find(["скидка","скидка на товар","discount"]);
+  const refundCol = find(["сумма возврата","возврат средств","сумма возврата покупателю","refund","refund amount"]);
+  if (!orderCol || !skuCol || !dateCol || !saleCol) return null;
+  const numeric = (v) => Number(String(v ?? "").replace(/[\s\u00a0\u202f]/g,"").replace(",", ".")) || 0;
+  const out = [];
+  const seenOrderCharges = new Set();
+  for (const row of rows) {
+    const id = String(row[orderCol] || "").trim();
+    if (!id) continue;
+    const status = norm((statusCol && row[statusCol]) || (operationCol && row[operationCol]) || "");
+    const sku = String(row[skuCol] || "").trim();
+    const lineId = lineCol && row[lineCol] ? id + ":" + String(row[lineCol]).trim() : (sku ? id + ":" + sku : id);
+    const quantity = Math.max(1, Math.abs(numeric(qtyCol ? row[qtyCol] : 1) || 1));
+    const amount = Math.abs(numeric(row[saleCol]));
+    const unitPrice = totalSaleCol
+      ? Math.ceil(amount * 100 / quantity) / 100
+      : amount;
+    const discount = totalSaleCol
+      ? Math.max(0, Math.round((unitPrice * quantity - amount) * 100) / 100)
+      : Math.abs(numeric(discountCol ? row[discountCol] : 0));
+    const base = {
+      ...row,
+      __qor_order_id: id,
+      __qor_date: row[dateCol] || "",
+      __qor_sku: row[skuCol] || "",
+      __qor_quantity: quantity,
+      __qor_unit_price: unitPrice,
+      __qor_discount: discount,
+      __qor_refund: refundCol ? Math.abs(numeric(row[refundCol])) : amount,
+      __qor_sale_reference: "Kaspi:" + accountId + ":" + lineId,
+    };
+    const cancelled = /(отмен|cancel|cancell)/.test(status);
+    const returned = /(возврат|вернул|return|refund)/.test(status);
+    const completed = /(выдан|заверш|получен|completed|delivered|продаж|sale)/.test(status);
+    const isSaleReportRow = !statusCol && !operationCol;
+    if (cancelled) {
+      out.push({...base,__qor_event_type:"order",__qor_external_id:lineId});
+    } else if (returned) {
+      out.push({...base,__qor_event_type:"return",__qor_external_id:lineId+":return"});
+    } else if (completed || isSaleReportRow) {
+      out.push({...base,__qor_event_type:"sale",__qor_external_id:lineId});
+    } else {
+      out.push({...base,__qor_event_type:"order",__qor_external_id:lineId});
+    }
+    const commission = commissionCol ? Math.abs(numeric(row[commissionCol])) : 0;
+    const commissionIdentity = orderCommissionCol === commissionCol ? id : lineId;
+    const commissionKey = commissionIdentity + ":commission:" + commission;
+    if (commission > 0 && !seenOrderCharges.has(commissionKey)) {
+      seenOrderCharges.add(commissionKey);
+      out.push({...base,__qor_event_type:"commission",__qor_external_id:commissionIdentity+":commission",__qor_amount:commission});
+    }
+    const sellerDelivery = sellerDeliveryCol ? Math.abs(numeric(row[sellerDeliveryCol])) : 0;
+    const deliveryKey = id + ":logistics:" + sellerDelivery;
+    if (sellerDelivery > 0 && !seenOrderCharges.has(deliveryKey)) {
+      seenOrderCharges.add(deliveryKey);
+      out.push({...base,__qor_event_type:"logistics",__qor_external_id:id+":logistics",__qor_amount:sellerDelivery});
+    }
+    if (buyerDeliveryCol) base.__qor_buyer_delivery = row[buyerDeliveryCol];
+  }
+  return out;
+}
+function Imports({ ctx }) {
+  const [kind, setKind] = useState("products"),
+    [sourceFile,setSourceFile] = useState(null),
+    [sheet,setSheet] = useState(""), [headerRow,setHeaderRow] = useState(""),
+    [parsed, setParsed] = useState(null),
+    [mapping, setMapping] = useState({}),
+    [fields, setFields] = useState([]),
+    [preview, setPreview] = useState(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const kinds = {
+    opening: "Начальные остатки / историческая себестоимость",
+    products: "Товары",
+    sales: "Продажи",
+    returns: "Возвраты",
+    stock: "Остатки (изменения)",
+    purchases: "Закупки",
+    expenses: "Расходы",
+    b2b: "B2B продажи",
+    reports: "Продажи из отчёта",
+    marketplace_reports: "Отчёт маркетплейса (продажи / возвраты / остатки)",
+    bank: "Банк / деньги",
+  };
+  useEffect(() => {
+    api("/import/fields/" + kind)
+      .then((d) => setFields(d.fields))
+      .catch((e) => setError(e.message));
+    setParsed(null);
+    setSourceFile(null);setSheet("");setHeaderRow("");
+    setPreview(null);
+    setMapping({});
+  }, [kind]);
+  const parse = async (e) => {
+    const file = e?.target?.files?.[0] || sourceFile;
+    if (!file) return;
+    setError("");
+    setBusy(true);
+    setPreview(null);
+    try {
+      const f = new FormData();
+      f.append("file", file);
+      if (!e && sheet) f.append("sheet",sheet);
+      if (!e && headerRow) f.append("header_row",headerRow);
+      const definitions = await api("/import/fields/" + kind);
+      const d = await api("/import/parse", { method: "POST", body: f });
+      setSourceFile(file);setSheet(d.selected_sheet || "");setHeaderRow(String(d.header_row || 1));
+      const defaultAccount = ctx.refs.accounts?.find((x) => x.channel === "Kaspi" && (!ctx.company || x.company_id == ctx.company));
+      const kaspiRows = kind === "marketplace_reports" && defaultAccount
+        ? prepareKaspiReportRows(d.rows, d.headers, defaultAccount.id) : null;
+      if (kaspiRows) {
+        const synthetic = {...d, rows: kaspiRows};
+        setParsed(synthetic);
+        setMapping({
+          event_type:"__qor_event_type", external_id:"__qor_external_id", date:"__qor_date",
+          sku:"__qor_sku", quantity:"__qor_quantity", unit_price:"__qor_unit_price",
+          discount:"__qor_discount", refund:"__qor_refund", sale_reference:"__qor_sale_reference", amount:"__qor_amount",
+        });
+      } else {
+        setParsed(d);
+        setMapping(autoImportMapping(definitions.fields, d.headers));
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+      if (e) e.target.value = "";
+    }
+  };
+  const validate = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      setPreview(
+        await api("/import/preview", {
+          method: "POST",
+          body: { kind, rows: parsed.rows, mapping, defaults: {
+            company_id: ctx.company || ctx.refs.companies?.[0]?.id || null,
+            account_id: kind === "marketplace_reports"
+              ? (ctx.refs.accounts?.find(a => a.channel === "Kaspi" && (!ctx.company || a.company_id == ctx.company))?.id || null)
+              : ((kind === "sales" || kind === "reports")
+                ? (ctx.refs.accounts?.find(a => a.channel === "Offline" && (!ctx.company || a.company_id == ctx.company))?.id || null)
+                : (kind === "b2b" ? (ctx.refs.accounts?.find(a => a.channel === "B2B" && (!ctx.company || a.company_id == ctx.company))?.id || null) : null))
+          } },
+        }),
+      );
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const commit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const d = await api("/import/" + preview.id + "/confirm", {
+        method: "POST",
+      });
+      ctx.notify("Импортировано строк: " + d.count);
+      setParsed(null);
+      setPreview(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className="panel padded">
+        <div className="import-steps">
+          <span className="selected">01 Файл</span>
+          <span className={parsed ? "selected" : ""}>02 Сопоставление</span>
+          <span className={preview ? "selected" : ""}>
+            03 Проверка и импорт
+          </span>
+        </div>
+        <div className="import-top">
+          <label>
+            Что импортируем
+            <select value={kind} onChange={(e) => setKind(e.target.value)}>
+              {Object.entries(kinds).map(([k, l]) => (
+                <option value={k} key={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <a
+            className="secondary"
+            href={"/api/templates/" + kind + "?format=xlsx"}
+          >
+            <Download size={16} />
+            Шаблон XLSX
+          </a>
+          <a
+            className="secondary"
+            href={"/api/export/" + kind + "?format=xlsx"}
+          >
+            <Download size={16} />
+            Экспорт
+          </a>
+        </div>
+        <label className="dropzone">
+          <Upload size={28} />
+          <strong>{busy ? "Обрабатываем…" : "Выбрать CSV или Excel"}</strong>
+          <span>UTF-8 CSV / XLSX · до 5 МБ · до 5000 строк</span>
+          <input
+            type="file"
+            accept=".csv,.xlsx"
+            onChange={parse}
+            disabled={busy}
+          />
+        </label>
+        <p className="muted">
+          {kind === "opening"
+            ? "Для прибыли Wildberries загрузите Excel поставщика: Артикул/SKU, Количество, Себестоимость, Дата, Валюта и Номер. Артикул WB сопоставляется с товаром из API автоматически. Дата себестоимости должна быть не позже продажи — после импорта система пересчитает COGS и прибыль, не создавая повторных продаж."
+            : "QOR автоматически распознаёт распространённые названия колонок на русском/казахском/английском. Для продаж товар можно указать по SKU/артикулу — ID товара подставится автоматически; выбранная компания и Offline/B2B канал также подставляются автоматически. Перед записью всегда показывается проверка. Остатки задаются изменением, финансовые строки требуют уникального номера/reference."}
+        </p>
+        <ErrorBox error={error} />
+        {parsed && (
+          <>
+            <h3>Сопоставление колонок · {parsed.count} строк</h3>
+            <div className="row-actions">{parsed.sheets && <label>Лист<select value={sheet} onChange={e=>setSheet(e.target.value)}>{parsed.sheets.map(name=><option key={name}>{name}</option>)}</select></label>}<label>Строка заголовков<input type="number" min="1" max="20" value={headerRow} onChange={e=>setHeaderRow(e.target.value)}/></label><button disabled={busy} onClick={()=>parse()}>Перечитать файл</button></div>
+            <div className="mapping-grid">
+              {fields.map((f) => (
+                <label key={f}>
+                  {labels[f] || f}
+                  <small>{f}</small>
+                  <select
+                    value={mapping[f] || ""}
+                    onChange={(e) => {
+                      const m = { ...mapping };
+                      if (e.target.value) m[f] = e.target.value;
+                      else delete m[f];
+                      setMapping(m);
+                      setPreview(null);
+                    }}
+                  >
+                    <option value="">Не импортировать</option>
+                    {parsed.headers.map((h) => (
+                      <option key={h}>{h}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <h3>Первые строки файла</h3>
+            <Table raw
+                rows={parsed.rows.slice(0, 5)} cols={parsed.headers} />
+            <button className="primary" disabled={busy} onClick={validate}>
+              Проверить перед импортом
+            </button>
+          </>
+        )}
+        {preview && (
+          <div className="preview">
+            <h3>
+              {preview.errors.length
+                ? "Найдены ошибки: " + preview.errors.length
+                : "Проверка пройдена"}
+            </h3>
+            {preview.errors.length ? (
+              <>
+                <Table rows={preview.errors} cols={["row", "error"]} />
+                <a
+                  className="secondary"
+                  href={"/api/import/" + preview.id + "/errors"}
+                >
+                  Скачать отчёт ошибок
+                </a>
+              </>
+            ) : (
+              <>
+                <p>
+                  Будут проведены все {preview.count} строк одной транзакцией.
+                  При конфликте ни одна строка не будет сохранена.
+                </p>
+                <button className="primary" disabled={busy} onClick={commit}>
+                  Подтвердить импорт {preview.count} строк
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+function Roles() {
+  const { data, error, loading } = useLoad("/roles", 0);
+  return loading ? (
+    <Spinner />
+  ) : error ? (
+    <ErrorBox error={error} />
+  ) : (
+    <div className="role-grid">
+      {Object.entries(data).map(([role, permissions]) => (
+        <div className="panel padded" key={role}>
+          <ShieldCheck size={25} />
+          <h2>{role}</h2>
+          <div className="permission-list">
+            {permissions.map((p) => (
+              <span className="badge gray" key={p}>
+                {p === "*" ? "Полный доступ" : p}
+              </span>
+            ))}
+          </div>
+          <p className="muted">
+            {role === "Owner"
+              ? "Видит все компании и управляет пользователями."
+              : "Доступ только к назначенным компаниям. :read — только чтение."}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+function Settings({ settings, ctx, onLogout }) {
+  const [name, setName] = useState(settings.business_name || ""),
+    [old, setOld] = useState(""),
+    [password, setPassword] = useState(""),
+    [error, setError] = useState("");
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/settings", { method: "PUT", body: { business_name: name } });
+      ctx.notify("Настройки сохранены");
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  const change = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/auth/password", {
+        method: "POST",
+        body: { old, new: password },
+      });
+      onLogout();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  return (
+    <div className="report-grid">
+      <form className="panel padded" onSubmit={save}>
+        <h2>Рабочее пространство</h2>
+        <label>
+          Название
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Валюта
+          <input value="KZT · Казахстанский тенге" readOnly />
+        </label>
+        <label>
+          Часовой пояс
+          <input value="Asia/Almaty" readOnly />
+        </label>
+        <button className="primary">Сохранить</button>
+        <p className="muted">
+          AI: {settings.ai_enabled ? "подключён" : "ожидает OPENAI_API_KEY"}.
+          Ключи хранятся на сервере, не в браузере.
+        </p>
+        <ErrorBox error={error} />
+      </form>
+      <form className="panel padded" onSubmit={change}>
+        <h2>Изменить пароль</h2>
+        <label>
+          Текущий пароль
+          <input
+            type="password"
+            value={old}
+            onChange={(e) => setOld(e.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Новый пароль
+          <input
+            type="password"
+            minLength={12}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </label>
+        <button className="secondary">
+          Обновить пароль и завершить сессии
+        </button>
+      </form>
+    </div>
+  );
+}

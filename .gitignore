@@ -1,0 +1,11 @@
+.env
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+uploads/
+frontend/dist/
+qa-artifacts/

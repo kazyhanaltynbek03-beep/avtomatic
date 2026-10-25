@@ -1,0 +1,25 @@
+CODE VERIFIED
+Python compile: PASS
+Backend regression: 141 passed, 1 dependency deprecation warning (55.02 seconds)
+Financial golden: PASS, net profit 31,000 KZT for manual/XLSX/CSV and three normalized marketplace sale fixtures
+Inventory/FIFO and returns: PASS
+Three-pass event replay/idempotency: PASS
+API auth/company isolation: PASS
+Spreadsheet parser/preview/import: PASS
+npm ci: PASS
+npm run lint: PASS
+npm run build: PASS
+Alembic: one HEAD a07b8c9d1011; empty SQLite upgrade PASS; existing ledger upgrade preservation PASS
+
+MOCK/FIXTURE VERIFIED
+WB pagination and warehouse/size identities; Kaspi <=14-day windows, explicit pageCount, merchant SKU.
+Kaspi completed entries, WB realization/statistics, Ozon delivered postings; atomic posting, FX guard and source revision.
+Expenses and returns in the golden dataset enter the same canonical ERP boundary; not every field is verified through a live API adapter.
+
+LIVE VERIFIED: NONE (no marketplace credentials supplied)
+LIVE VALIDATION REQUIRED: marketplace scopes, real payloads, pending records, payouts, currencies, historical FIFO, PostgreSQL concurrency, Render deployment
+
+Docker build/start: NOT RUN; Docker unavailable
+Playwright E2E: ATTEMPTED, NOT COMPLETED; startup stalled in this execution environment and was interrupted to avoid further delay.
+This release is a tested pipeline correction, not a claim that the entire supplied Definition of Done is met.
+See RELEASE_PIPELINE_VERIFIED.md for exact implemented scope and remaining limitations.
