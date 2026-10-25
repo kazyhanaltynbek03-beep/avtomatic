@@ -38,6 +38,23 @@ app = FastAPI(
 )
 logger = logging.getLogger(__name__)
 SYNC_RUNNING_TIMEOUT_SECONDS = max(60, int(os.getenv("MARKETPLACE_SYNC_TIMEOUT_SECONDS", "1800")))
+
+
+def sync_status_for_display(account, at=None):
+    """Hide abandoned running states after the last persisted sync heartbeat."""
+    status = account.sync_status or "never"
+    error = account.sync_error or ""
+    if status.lower() != "running":
+        return status, error
+    heartbeat = account.last_sync
+    if heartbeat is not None and heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+    reference = at or now()
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    if heartbeat is None or heartbeat < reference - timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS):
+        return "failed", "SYNC_TIMEOUT: синхронизация давно не обновлялась; запустите её повторно"
+    return status, error
 WB_DEFAULT_SYNC_SECTIONS = ("new_orders", "order", "sale")
 WB_ALLOWED_SYNC_SECTIONS = frozenset(("new_orders", "order", "sale", "realization", "stocks", "products"))
 
@@ -1272,10 +1289,12 @@ def listing(
             Sale.account_id.in_(select(Account.id).where(Account.channel == channel))
         )
     count = db.scalar(select(func.count()).select_from(q.subquery()))
-    rows = [
-        dump(x)
-        for x in db.scalars(q.order_by(model.id.desc()).offset(offset).limit(limit))
-    ]
+    rows = []
+    for obj in db.scalars(q.order_by(model.id.desc()).offset(offset).limit(limit)):
+        row = dump(obj)
+        if entity == "accounts":
+            row["sync_status"], row["sync_error"] = sync_status_for_display(obj)
+        rows.append(row)
     if entity == "niches":
         for row in rows:
             row["analysis"] = ai.niche_score(row["data"])
