@@ -5,6 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, date
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from fastapi import (
     FastAPI,
@@ -656,13 +657,15 @@ def _kaspi_commission_estimate(sales, expenses, api_bases, configured_rate=None)
     """
     from decimal import Decimal, InvalidOperation
 
-    raw_rate = configured_rate if configured_rate is not None else os.getenv("KASPI_COMMISSION_RATE", "0.12")
+    raw_rate = configured_rate if configured_rate is not None else os.getenv("KASPI_COMMISSION_RATE")
+    if raw_rate in (None, ""):
+        return 0, None, False
     try:
         rate = Decimal(str(raw_rate))
         if not rate.is_finite() or rate < 0 or rate > 1:
             raise InvalidOperation
     except (InvalidOperation, ValueError, TypeError):
-        rate = Decimal("0.12")
+        return 0, None, False
     basis_points = int(rate * 10000)
     explicit_days = {
         (expense.account_id, expense.date)
@@ -699,8 +702,15 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     if company_id is not None: scope(u, company_id); aq = aq.where(Account.company_id == company_id)
     accounts = list(db.scalars(aq)); ids = [a.id for a in accounts]; by_id = {a.id:a for a in accounts}
     sync_in_progress = any(str(a.sync_status or '').lower() == 'running' for a in accounts)
+    display_sync = [sync_status_for_display(a) for a in accounts]
+    sync_status = ('failed' if any(x[0] == 'failed' for x in display_sync) else
+                   'running' if any(x[0] == 'running' for x in display_sync) else
+                   'partial' if any(x[0] == 'partial' for x in display_sync) else
+                   'done' if any(x[0] == 'done' for x in display_sync) else 'never')
+    sync_errors = [x[1] for x in display_sync if x[1]]
+    last_sync = max((a.last_sync for a in accounts if a.last_sync), default=None)
     if not ids:
-        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':0,'api_revenue':0,'api_units':0,'api_returns':0,'api_return_units':0,'api_unconverted':0,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
+        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':None,'api_revenue':None,'api_units':None,'api_returns':None,'api_return_units':None,'api_unconverted':0,'api_data_available':False,'sync_status':'not_connected','sync_errors':[],'last_sync':None,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
 
     sales = list(db.scalars(select(Sale).where(Sale.account_id.in_(ids), Sale.date >= start, Sale.date <= end)))
     period_returns = list(db.scalars(select(Return).join(Sale, Return.sale_id == Sale.id).where(Sale.account_id.in_(ids), Return.date >= start, Return.date <= end)))
@@ -724,9 +734,17 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
 
     api_gross_revenue=api_revenue=api_units=api_unconverted=api_returns=api_return_units=settlement_accrued=settlement_rows=settlement_unconverted=0
     raw_kaspi_commission_bases = {}
+    api_data_available = False
     raw_q = select(MarketplaceRecord.account_id, MarketplaceRecord.payload).where(MarketplaceRecord.account_id.in_(ids), MarketplaceRecord.source == channel.lower())
     for account_id, payload in db.execute(raw_q):
         p=payload or {}; typ=str(p.get('record_type') or '').lower(); src=channel.lower()
+        if src == 'kaspi' and typ == 'order_entry':
+            status_now = str(p.get('order_status') or '').upper()
+            date_field = (p.get('returned_date') or p.get('return_date')) if status_now == 'RETURNED' else p.get('completed_date')
+            try:
+                api_data_available = api_data_available or start <= marketplace_pipeline._day(date_field, 'Asia/Almaty') <= end
+            except marketplace_pipeline.Pending:
+                pass
         try:
             if src=='wildberries' and typ=='sale' and not str(p.get('saleID') or '').upper().startswith('R') and not p.get('isStorno'):
                 dt=p.get('date'); day=marketplace_pipeline._day(dt)
@@ -750,9 +768,9 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                         except marketplace_pipeline.Pending: api_unconverted += 1
             elif src=='kaspi' and typ=='order_entry':
                 status=str(p.get('order_status') or '').upper()
-                returned=status in {'RETURNED','ARRIVED_BACKWARD'}
+                returned=status == 'RETURNED'
                 if status=='COMPLETED' or returned:
-                    sale_dt=p.get('completed_date') or p.get('order_creation_date')
+                    sale_dt=p.get('completed_date')
                     sale_day=marketplace_pipeline._day(sale_dt, 'Asia/Almaty')
                     qty=int(p.get('quantity') or 0)
                     try:
@@ -765,7 +783,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                                 key=(account_id,sale_day)
                                 raw_kaspi_commission_bases[key]=raw_kaspi_commission_bases.get(key,0)+sale_amount
                         if returned:
-                            return_dt=p.get('returned_date') or p.get('return_date') or p.get('completed_date') or p.get('order_creation_date')
+                            return_dt=p.get('returned_date') or p.get('return_date')
                             return_day=marketplace_pipeline._day(return_dt, 'Asia/Almaty')
                             if start<=return_day<=end:
                                 api_returns += sale_amount
@@ -784,11 +802,61 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     pending_return_inspection_units = sum(x.quantity for x in period_returns if x.inventory_status in {"requested", "approved", "in_transit", "received", "inspection"})
     profit = None if pending or pending_return_inspection_units else revenue-cogs-commission-logistics-return_logistics-advertising-other
     kaspi_estimated_proceeds = api_revenue - commission - logistics - return_logistics if channel == "Kaspi" else None
-    return {'channel':channel,'start':str(start),'end':str(end),'revenue':revenue,'units':units,'api_gross_revenue':api_gross_revenue,'api_revenue':api_revenue,'api_units':api_units,'api_returns':api_returns,'api_return_units':api_return_units,'api_unconverted':api_unconverted,
+    api_unknown = channel == 'Kaspi' and not api_data_available and sync_status not in {'done','partial'}
+    return {'channel':channel,'start':str(start),'end':str(end),'revenue':revenue,'units':units,'api_gross_revenue':None if api_unknown else api_gross_revenue,'api_revenue':None if api_unknown else api_revenue,'api_units':None if api_unknown else api_units,'api_returns':None if api_unknown else api_returns,'api_return_units':None if api_unknown else api_return_units,'api_unconverted':api_unconverted,'api_data_available':api_data_available or sync_status in {'done','partial'},'sync_status':sync_status,'sync_errors':sync_errors,'last_sync':last_sync.isoformat() if last_sync else None,
         'pending_sales':pending,'pending_return_inspection_units':pending_return_inspection_units,'pending_reasons':{'COGS_PENDING':pending} if pending else {},'financial_complete':not pending and not api_unconverted and not pending_return_inspection_units,
         'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'commission_estimate_suppressed':commission_estimate_suppressed,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
-        'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':not sync_in_progress and not api_unconverted}
+        'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':not sync_in_progress and not sync_errors and not api_unconverted}
+
+
+@app.get("/api/kaspi/orders-created")
+def kaspi_orders_created(start: date, end: date, company_id: int | None = None,
+                         limit: int = Query(default=100, ge=1, le=500),
+                         offset: int = Query(default=0, ge=0),
+                         u=Depends(current_user), db=Depends(get_db)):
+    """List locally cached Kaspi orders whose creationDate is inside the selected range."""
+    require(u, "analytics")
+    if end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
+    aq = select(Account).where(Account.channel == "Kaspi", Account.active.is_(True))
+    if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
+    if company_id is not None: scope(u, company_id); aq = aq.where(Account.company_id == company_id)
+    accounts = list(db.scalars(aq)); ids = [a.id for a in accounts]
+    if not ids:
+        return {"start":str(start),"end":str(end),"items":[],"total":0,"orders_amount":None,"api_data_available":False,
+                "sync_status":"not_connected","sync_errors":[],"last_sync":None}
+    rows = db.scalars(select(MarketplaceRecord).where(
+        MarketplaceRecord.account_id.in_(ids), MarketplaceRecord.source == "kaspi")).all()
+    orders = {}
+    for row in rows:
+        p = row.payload or {}
+        if p.get("record_type") == "order":
+            try: created = marketplace_pipeline._day(p.get("creation_date"), "Asia/Almaty")
+            except marketplace_pipeline.Pending: continue
+            if start <= created <= end:
+                orders[(row.account_id, str(p.get("order_id") or row.external_id.removeprefix("order:")))] = {
+                    "order_id":str(p.get("order_id") or row.external_id.removeprefix("order:")),
+                    "account_id":row.account_id,"created_date":str(created),
+                    "status":str(p.get("status") or p.get("order_status") or "unknown"),
+                    "amount":p.get("total_price"),"units":0}
+    for row in rows:
+        p = row.payload or {}
+        if p.get("record_type") != "order_entry": continue
+        key = (row.account_id, str(p.get("order_id") or ""))
+        if key in orders:
+            try: orders[key]["units"] += int(p.get("quantity") or 0)
+            except (ValueError, TypeError): pass
+    items = sorted(orders.values(), key=lambda x:(x["created_date"],x["order_id"]), reverse=True)
+    display_sync = [sync_status_for_display(a) for a in accounts]
+    statuses = [x[0] for x in display_sync]
+    sync_state = "failed" if "failed" in statuses else "running" if "running" in statuses else "done" if "done" in statuses else "partial" if "partial" in statuses else "never"
+    verified = bool(items) or sync_state in {"done", "partial"}
+    return {"start":str(start),"end":str(end),"items":items[offset:offset+limit],"total":len(items),
+            "orders_amount":sum((Decimal(str(x["amount"])) for x in items if x["amount"] not in (None,"")),Decimal("0")) if verified else None,
+            "api_data_available":verified,"sync_status":sync_state,
+            "sync_errors":[x[1] for x in display_sync if x[1]],
+            "last_sync":max((a.last_sync for a in accounts if a.last_sync),default=None).isoformat() if any(a.last_sync for a in accounts) else None}
 
 
 @app.post("/api/wildberries/weekly-excel-preview")
@@ -2395,6 +2463,120 @@ def _stage_marketplace_records(db, acc, result):
             db.add(MarketplaceRecord(account_id=acc.id, company_id=acc.company_id, source=result.source, external_id=external_id, payload=payload))
             inserted += 1
     return inserted, updated
+
+
+def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_ids):
+    """Refresh only a requested Kaspi creation-date window plus old open orders."""
+    with SessionLocal() as db:
+        acc = db.get(Account, account_id)
+        user = db.get(User, user_id)
+        if not acc:
+            return
+        warnings = []
+        try:
+            if not user or not user.active:
+                raise AccessRequired("Пользователь отключён")
+            require(user, "accounts", True)
+            scope(user, acc.company_id)
+            worker = connector(acc, load_saved_credentials(db, acc.id))
+            local_start = datetime.combine(start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
+            today_local = datetime.now(ZoneInfo("Asia/Almaty"))
+            local_end = (today_local if end >= today_local.date() else
+                         datetime.combine(end + timedelta(days=1), datetime.min.time(), ZoneInfo("Asia/Almaty")))
+            cursor = json.dumps({"_qor_kaspi_cursor":1,"scope":"period",
+                "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
+                "page":0,"offset":0,"extra_ids":extra_order_ids,"extra_offset":0}, separators=(",", ":"))
+            pages = records = inserted_total = updated_total = 0
+            while cursor:
+                result = worker.fetch(cursor)
+                inserted, updated = _stage_marketplace_records(db, acc, result)
+                record_ids = [str(x.get("external_id")) for x in result.records if x.get("external_id")]
+                projection = marketplace_pipeline.project_account(db, user, acc, external_ids=record_ids)
+                pages += 1
+                records += len(result.records)
+                inserted_total += inserted
+                updated_total += updated
+                warnings.extend(result.warnings or [])
+                cursor = result.next_cursor
+                acc.last_sync = now()
+                acc.sync_status = "running"
+                acc.sync_error = "KASPI_PERIOD_SYNC" + ("; " + "; ".join(warnings)[-350:] if warnings else "")
+                db.commit()
+                if pages >= 20000:
+                    raise AccessRequired("Kaspi: превышен защитный лимит страниц диапазона")
+            acc = db.get(Account, account_id)
+            acc.last_sync = now()
+            acc.sync_status = "partial" if warnings else "done"
+            acc.sync_error = "; ".join(warnings)[:500]
+            audit(db, user, "sync_kaspi_period", "accounts", acc.id,
+                  {"start":str(start),"end":str(end),"records":records,"pages":pages,
+                   "inserted":inserted_total,"updated":updated_total})
+            db.commit()
+        except Exception as exc:
+            logger.exception("Kaspi period sync failed for account %s", account_id)
+            db.rollback()
+            acc = db.get(Account, account_id)
+            if acc:
+                acc.last_sync = now()
+                acc.sync_status = "failed"
+                acc.sync_error = str(getattr(exc, "detail", exc))[:500]
+                db.commit()
+
+
+@app.post("/api/accounts/{id}/sync-kaspi-period")
+def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
+                      report_mode: str = Query(default="issued", regex="^(created|issued)$"),
+                      u=Depends(current_user), db=Depends(get_db)):
+    """Schedule a bounded Kaspi sync and refresh previously open/very recent orders."""
+    require(u, "accounts", True)
+    acc = db.get(Account, id)
+    if not acc:
+        raise HTTPException(404, "Интеграция не найдена")
+    scope(u, acc.company_id)
+    if acc.channel != "Kaspi" or acc.mode != "api" or not acc.active:
+        raise HTTPException(409, "Активная API-интеграция Kaspi не найдена")
+    if end < start or (end - start).days > 366:
+        raise HTTPException(422, "Укажите корректный период не длиннее 367 дней")
+    if sync_status_for_display(acc)[0] == "running":
+        raise HTTPException(409, "Синхронизация Kaspi уже выполняется; отображаются сохранённые данные")
+    local_today = datetime.now(ZoneInfo("Asia/Almaty")).date()
+    if start > local_today:
+        raise HTTPException(422, "Начало периода не может быть в будущем")
+    bounded_end = min(end, local_today)
+    refresh_after = local_today - timedelta(days=30)
+    records = db.scalars(select(MarketplaceRecord).where(
+        MarketplaceRecord.account_id == acc.id,
+        MarketplaceRecord.source == "kaspi",
+    )).all()
+    refresh_ids = set()
+    for row in records if report_mode == "issued" else []:
+        payload = row.payload or {}
+        if payload.get("record_type") != "order":
+            continue
+        status = str(payload.get("status") or payload.get("order_status") or "").upper()
+        if status in {"CANCELLED", "RETURNED"}:
+            continue
+        order_code = str(payload.get("code") or "").strip()
+        if not order_code:
+            continue
+        if status != "COMPLETED":
+            refresh_ids.add(order_code)
+            continue
+        try:
+            created = marketplace_pipeline._day(payload.get("creation_date"), "Asia/Almaty")
+        except marketplace_pipeline.Pending:
+            continue
+        if created >= refresh_after:
+            refresh_ids.add(order_code)
+    claimed = db.execute(update(Account).where(Account.id == id,
+        or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None)))
+        .values(sync_status="running", sync_error="KASPI_PERIOD_SYNC", last_sync=now()))
+    if claimed.rowcount != 1:
+        raise HTTPException(409, "Синхронизация Kaspi уже выполняется")
+    db.commit()
+    tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, sorted(refresh_ids))
+    return {"ok":True,"status":"running","account_id":acc.id,"start":str(start),"end":str(bounded_end),
+            "report_mode":report_mode,"old_orders_to_refresh":len(refresh_ids)}
 
 
 @app.post("/api/accounts/{id}/sync-now")
