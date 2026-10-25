@@ -426,6 +426,9 @@ class WildberriesConnector(Connector):
     statistics_page_size = 80000
     finance_page_size = 100000
     stocks_page_size = 250000
+    seller_warehouses_url = 'https://marketplace-api.wildberries.ru/api/v3/warehouses'
+    prices_filter_url = 'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter'
+    prices_upload_url = 'https://discounts-prices-api.wildberries.ru/api/v2/upload/task'
 
     def required_secret_names(self): return ['token']
     def test_connection(self):
@@ -471,6 +474,28 @@ class WildberriesConnector(Connector):
         if not hasattr(self, '_request_times'): self._request_times = {}
         self._request_times[url.split('?')[0]] = time.monotonic()
         return _json_request(url, self._headers(), method=method, payload=payload)[1]
+
+    def list_seller_warehouses(self):
+        """List seller warehouses used for FBS inventory writes."""
+        return self._request(self.seller_warehouses_url)
+
+    def product_prices(self, nm_id):
+        return self._request(self.prices_filter_url + "?" + urlencode({"filterNmID": int(nm_id), "limit": 100, "offset": 0}))
+
+    def upload_prices(self, rows):
+        if not isinstance(rows, list) or not rows or len(rows) > 1000:
+            raise AccessRequired("WB: передайте от 1 до 1000 цен за запрос")
+        return self._request(self.prices_upload_url, "POST", {"data": rows}, interval=10)
+
+    def update_seller_stocks(self, warehouse_id, rows):
+        if not str(warehouse_id).isdigit():
+            raise AccessRequired("WB: укажите числовой ID склада продавца")
+        if not isinstance(rows, list) or len(rows) > 1000:
+            raise AccessRequired("WB: передайте не более 1000 остатков за запрос")
+        if not rows:
+            return {"ok": True, "updated": 0}
+        url = "https://marketplace-api.wildberries.ru/api/v3/stocks/" + str(int(warehouse_id))
+        return self._request(url, "PUT", {"stocks": rows}, interval=0.6)
 
     sections = ("new_orders", "order", "sale", "realization", "stocks", "products")
 
