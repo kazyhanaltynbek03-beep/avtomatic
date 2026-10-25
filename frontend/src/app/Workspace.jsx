@@ -1596,7 +1596,7 @@ function MarketplaceInbox({ channel, ctx }) {
     const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}`;
     if (kaspiAutoSyncRef.current.has(key)) return;
     kaspiAutoSyncRef.current.add(key);
-    Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}`,{method:"POST",timeoutMs:10000})))
+    Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}&force=true`,{method:"POST",timeoutMs:10000})))
       .then(()=>setSummaryReload(v=>v+1));
   },[channel,accountKey,ctx.start,ctx.end,kaspiReportMode,canSyncKaspi]);
   const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress;
