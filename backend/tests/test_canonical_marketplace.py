@@ -40,6 +40,39 @@ def test_marketplace_summary_rejects_inverted_period(client):
     assert response.status_code == 422
 
 
+def test_kaspi_orders_created_report_filters_by_almaty_creation_date(client):
+    with SessionLocal() as db:
+        acc=db.get(Account,1); acc.channel='Kaspi'; acc.sync_status='done'
+        staged(db,acc,'order:K-1',record_type='order',order_id='id-1',code='K-1',
+               status='COMPLETED',creation_date='2026-10-25T00:00:00+05:00',total_price='1200')
+        staged(db,acc,'entry:id-1:e-1',record_type='order_entry',order_id='id-1',
+               order_status='COMPLETED',quantity=2,total_price='1200')
+        db.commit()
+    response=client.get('/api/kaspi/orders-created',params={'start':'2026-10-25','end':'2026-10-25'})
+    assert response.status_code==200,response.text
+    data=response.json()
+    assert data['api_data_available'] is True
+    assert data['total']==1
+    assert data['items'][0]['created_date']=='2026-10-25'
+    assert data['items'][0]['units']==2
+
+
+def test_kaspi_summary_does_not_use_creation_date_as_issue_date(client, monkeypatch):
+    monkeypatch.delenv('KASPI_COMMISSION_RATE',raising=False)
+    with SessionLocal() as db:
+        acc=db.get(Account,1); acc.channel='Kaspi'
+        staged(db,acc,'creation-only',record_type='order_entry',order_status='COMPLETED',
+               sku='A',quantity=1,total_price='1000',order_creation_date='2026-10-25')
+        db.commit()
+    response=client.get('/api/marketplace-summary',params={'channel':'Kaspi','start':'2026-10-25','end':'2026-10-25'})
+    assert response.status_code==200,response.text
+    data=response.json()
+    assert data['api_revenue'] is None
+    assert data['api_units'] is None
+    assert data['commission_estimated']==0
+    assert data['commission_rate'] is None
+
+
 def test_report_skips_ignored_non_financial_staging_rows(client):
     with SessionLocal() as db:
         acc=db.get(Account,1);u=db.get(User,1)
@@ -61,7 +94,7 @@ def test_normalized_api_sale_three_replays_metrics(client,channel):
     with SessionLocal() as db:
         acc=db.get(Account,1);acc.channel=channel;u=db.get(User,1)
         payload={
-          'Kaspi':dict(record_type='order_entry',order_status='COMPLETED',sku='A',quantity=10,total_price='100000',order_creation_date='2026-10-02'),
+          'Kaspi':dict(record_type='order_entry',order_status='COMPLETED',sku='A',quantity=10,total_price='100000',order_creation_date='2026-10-02',completed_date='2026-10-02'),
           'Wildberries':dict(record_type='realization',sellerOperName='Продажа',vendorCode='A',nmId=42,sku='barcode',quantity=10,retailPriceWithDisc='10000',currency='KZT',saleDt='2026-10-02',rrDate='2026-10-02',srid='sale42',retailAmount='100000',ppvzForPay='84000',ppvzSalesCommission='12',commissionPercent=24,deliveryService='4000'),
           'Ozon':dict(record_type='posting',status='delivered',shipment_date='2026-10-02',products=[dict(offer_id='A',sku=42,quantity=10,price='10000',currency_code='KZT')])}[channel]
         row=staged(db,acc,'SRC1',**payload)
@@ -164,7 +197,7 @@ def test_confirmed_marketplace_return_reverses_existing_sale_once(client, channe
     with SessionLocal() as db:
         acc=db.get(Account,1); acc.channel=channel; u=db.get(User,1)
         if channel=='Kaspi':
-            sale_payload=dict(record_type='order_entry',order_status='COMPLETED',sku='A',quantity=1,total_price=10000,order_creation_date='2026-10-02')
+            sale_payload=dict(record_type='order_entry',order_status='COMPLETED',sku='A',quantity=1,total_price=10000,order_creation_date='2026-10-02',completed_date='2026-10-02')
             return_payload={**sale_payload,'order_status':'RETURNED','returned_date':'2026-10-03'}
         else:
             sale_payload=dict(record_type='posting',status='delivered',shipment_date='2026-10-02',products=[dict(offer_id='A',sku=11,quantity=1,price=10000,currency_code='KZT')])
