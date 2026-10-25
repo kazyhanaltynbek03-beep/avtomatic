@@ -193,19 +193,21 @@ class KaspiConnector(Connector):
         if period_mode and not selected:
             page_count = (payload.get("meta") or {}).get("pageCount")
             no_more_pages = not data or (page_count is not None and page >= int(page_count))
-            if no_more_pages:
+            # Finish every selected-date chunk before refreshing older orders.
+            if no_more_pages and (status_only or window_end >= until):
                 extra_ids = state.get("extra_ids") or []
                 extra_offset = max(0, int(state.get("extra_offset") or 0))
-                selected = []
                 extra_batch = extra_ids[extra_offset:extra_offset+10]
                 extras_requested = len(extra_batch)
-                for code in extra_batch:
-                    _, detail = _json_request(self.base_url + "?" + urlencode({"filter[orders][code]":str(code)}), self._headers())
-                    items = detail.get("data") or []
-                    selected.extend(items[:1])
-                    if not items:
-                        missing_errors.append(f"Kaspi: заказ с code={code} не найден при обновлении статуса")
-                extras_selected = True
+                if extra_batch:
+                    selected = []
+                    for code in extra_batch:
+                        _, detail = _json_request(self.base_url + "?" + urlencode({"filter[orders][code]":str(code)}), self._headers())
+                        items = detail.get("data") or []
+                        selected.extend(items[:1])
+                        if not items:
+                            missing_errors.append(f"Kaspi: заказ с code={code} не найден при обновлении статуса")
+                    extras_selected = True
         records = {}; errors = missing_errors; pages = 1
         included = payload.get("included") or []
         for item in selected:
