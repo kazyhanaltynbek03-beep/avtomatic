@@ -76,9 +76,48 @@ def test_historical_sale_after_newer_stock_and_return_before_cost(client):
     assert response.status_code==200,response.text
     with SessionLocal() as db:
         ret=db.scalar(select(Return));assert ret.cogs==2000000
+        rid=ret.id
         sale=db.get(Sale,sid);assert not sale.cogs_pending and sale.cogs==26000000
+        # Cost is linked to the original batch, but unavailable until inspection.
+        assert db.scalar(select(func.sum(Batch.remaining)).where(Batch.product_id==pid))==0
+        assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=='return'))==0
+    for status in ("approved","in_transit","received","inspection","restocked"):
+        response=client.post(f'/api/returns/{rid}/status',json={"status":status})
+        assert response.status_code==200,response.text
+    # Replaying the final transition is idempotent.
+    response=client.post(f'/api/returns/{rid}/status',json={"status":"restocked"})
+    assert response.status_code==200,response.text
+    with SessionLocal() as db:
         assert db.scalar(select(func.sum(Batch.remaining)).where(Batch.product_id==pid))==1
         assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=='return'))==1
+
+
+def test_defective_return_never_enters_available_stock(client):
+    buy(client,qty=1,cost=1000,day='2026-10-01')
+    sale_response=client.post('/api/post/sales',json=dict(
+        company_id=1,account_id=1,product_id=1,reference='DEFECT-SALE',
+        date='2026-10-02',quantity=1,unit_price=2000,
+    ))
+    assert sale_response.status_code==200,sale_response.text
+    sale_id=sale_response.json()["id"]
+    ret_response=client.post('/api/post/returns',json=dict(
+        sale_id=sale_id,reference='DEFECT-RETURN',date='2026-10-03',quantity=1,
+    ))
+    assert ret_response.status_code==200,ret_response.text
+    rid=ret_response.json()["id"]
+    with SessionLocal() as db:
+        assert db.scalar(select(func.sum(Batch.remaining)))==0
+    for status in ("approved","in_transit","received","inspection"):
+        response=client.post(f'/api/returns/{rid}/status',json={"status":status})
+        assert response.status_code==200,response.text
+    response=client.post(f'/api/returns/{rid}/status',json={"status":"defective","reason":"Broken on arrival"})
+    assert response.status_code==200,response.text
+    response=client.post(f'/api/returns/{rid}/status',json={"status":"written_off","reason":"Disposed of"})
+    assert response.status_code==200,response.text
+    with SessionLocal() as db:
+        ret=db.get(Return,rid);assert ret.inventory_status=="written_off"
+        assert db.scalar(select(func.sum(Batch.remaining)))==0
+        assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=='return'))==0
 
 
 def test_missing_fifo_does_not_consume_partial_batch(client):

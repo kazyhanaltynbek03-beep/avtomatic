@@ -219,17 +219,32 @@ export default function App() {
     const now = new Date(today() + "T12:00:00Z");
     let a = new Date(now),
       b = new Date(now);
+    const mondayOffset = (now.getUTCDay() + 6) % 7;
     if (v === "Вчера") {
       a.setUTCDate(a.getUTCDate() - 1);
       b = new Date(a);
     }
-    if (v === "Неделя") a.setUTCDate(a.getUTCDate() - 6);
-    if (v === "Месяц") a.setUTCDate(1);
-    if (v === "Квартал") {
-      a.setUTCMonth(Math.floor(a.getUTCMonth() / 3) * 3, 1);
+    if (v === "Неделя") a.setUTCDate(a.getUTCDate() - mondayOffset);
+    if (v === "Прошлая неделя") {
+      a.setUTCDate(a.getUTCDate() - mondayOffset - 7);
+      b.setUTCDate(b.getUTCDate() - mondayOffset - 1);
     }
-    if (v === "Год") {
+    if (v === "Месяц") a.setUTCDate(1);
+    if (v === "Прошлый месяц") {
+      a.setUTCDate(1);
+      a.setUTCMonth(a.getUTCMonth() - 1);
+      b = new Date(a);
+      b.setUTCMonth(b.getUTCMonth() + 1);
+      b.setUTCDate(0);
+    }
+    if (v === "Квартал") a.setUTCMonth(Math.floor(a.getUTCMonth() / 3) * 3, 1);
+    if (v === "Год") a.setUTCMonth(0, 1);
+    if (v === "Прошлый год") {
       a.setUTCMonth(0, 1);
+      a.setUTCFullYear(a.getUTCFullYear() - 1);
+      b = new Date(a);
+      b.setUTCFullYear(b.getUTCFullYear() + 1);
+      b.setUTCDate(0);
     }
     if (v !== "Период") {
       setStart(a.toISOString().slice(0, 10));
@@ -409,9 +424,12 @@ export default function App() {
                   "Сегодня",
                   "Вчера",
                   "Неделя",
+                  "Прошлая неделя",
                   "Месяц",
+                  "Прошлый месяц",
                   "Квартал",
                   "Год",
+                  "Прошлый год",
                   "Период",
                 ].map((v) => (
                   <button
@@ -1540,6 +1558,7 @@ function MarketplaceInbox({ channel, ctx }) {
   ];
   return <div className="panel">
     <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
+    {channel === "Kaspi" && m.sync_in_progress && <p className="muted" role="status">Идёт синхронизация истории Kaspi. Итоги за выбранный период предварительные и изменятся после завершения загрузки.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"],["costs","Себестоимость"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
     {channel === "Wildberries" && wbTab === "costs" && <WBCostManager accounts={accounts} company={ctx.company} notify={ctx.notify}/>}
     {(channel !== "Wildberries" || wbTab === "daily") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
@@ -1605,6 +1624,31 @@ function DataPage({ page, ctx }) {
       setError(e.message);
     }
   };
+  const setReturnStatus = async (row, status) => {
+    let reason;
+    if (status === "defective" || status === "written_off") {
+      reason = prompt(status === "defective" ? "Причина брака" : "Причина списания");
+      if (!reason || !reason.trim()) return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/returns/${row.id}/status`, { method: "POST", body: { status, reason } });
+      ctx.notify(status === "restocked" ? "Возврат принят в пригодный остаток" : "Статус возврата обновлён");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const returnNext = (row) => ({
+    requested: [["approved", "Одобрить"]],
+    approved: [["in_transit", "Отправлен"]],
+    in_transit: [["received", "Получен"]],
+    received: [["inspection", "На проверку"]],
+    inspection: [["restocked", "Пригоден: вернуть в остаток"], ["defective", "Брак"]],
+    defective: [["written_off", "Списать"]],
+  }[row.inventory_status || "requested"] || []);
   const openIntegration = async (row) => {
     setError("");
     try {
@@ -1825,6 +1869,9 @@ function DataPage({ page, ctx }) {
                         )}
                       </>
                     )}
+                  {entity === "returns" && writable && returnNext(row).map(([status, title]) => (
+                    <button key={status} className={status === "defective" || status === "written_off" ? "secondary" : "secondary"} disabled={busy} onClick={() => setReturnStatus(row, status)}>{title}</button>
+                  ))}
                   {entity === "sales" && (
                     <>
                       <a

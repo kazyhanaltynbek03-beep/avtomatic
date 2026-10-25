@@ -204,7 +204,7 @@ class KaspiConnector(Connector):
                 records[delivery_id] = {
                     "external_id": delivery_id, "record_type": "delivery_charge",
                     "order_id": oid, "amount": seller_delivery, "currency": "KZT",
-                    "order_status": "COMPLETED" if str(a.get("status") or "").upper() == "COMPLETED" or a.get("completionDate") else a.get("status"), "order_state": a.get("state"),
+                    "order_status": a.get("status"), "order_state": a.get("state"),
                     "order_creation_date": a.get("creationDate"),
                     "completed_date": a.get("completionDate"),
                     "delivery_mode": a.get("deliveryMode"),
@@ -249,7 +249,7 @@ class KaspiConnector(Connector):
                             "mapping_error": mapping_error, "raw_attributes": ea,
                             "product_attributes": product.get('attributes') or {},
                             "merchant_product_attributes": merchant.get('attributes') or {},
-                            "order_status": "COMPLETED" if str(a.get('status') or '').upper() == "COMPLETED" or a.get("completionDate") else a.get('status'), "order_state": a.get('state'),
+                            "order_status": a.get('status'), "order_state": a.get('state'),
                             "order_creation_date": a.get('creationDate'),
                             "completed_date": a.get('completionDate'), "returned_date": a.get('returnedDate') or a.get('returnDate')}
                     entry_page += 1

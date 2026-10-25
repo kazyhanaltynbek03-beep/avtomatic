@@ -4,7 +4,7 @@ from urllib.parse import urlparse, parse_qs
 import pytest
 from sqlalchemy import select,func
 from app import connectors,canonical,importing,marketplace_pipeline as mp,schemas as s,finance as f
-from app.models import Account,User,MarketplaceRecord,Sale,CanonicalEvent,Batch,Expense
+from app.models import Account,User,MarketplaceRecord,Sale,Return,CanonicalEvent,Batch,Movement,Expense
 from app.db import SessionLocal
 from .conftest import buy
 
@@ -151,7 +151,14 @@ def test_confirmed_marketplace_return_reverses_existing_sale_once(client, channe
         report=f.report(db,u,date(2026,10,1),date(2026,10,31),1)
         assert report['revenue']==0 and report['units']==0
         assert db.scalar(select(func.count()).select_from(Sale))==1
+        ret=db.scalar(select(Return))
+        assert ret.inventory_status == "requested"
+        assert db.scalar(select(func.sum(Batch.remaining)))==0
+        ret.inventory_status = "restocked"
+        assert f.restock_return_inventory(db,u,ret)==1
+        assert f.restock_return_inventory(db,u,ret)==0
         assert db.scalar(select(func.sum(Batch.remaining)))==1
+        assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=="return"))==1
 
 
 def test_kaspi_summary_uses_only_issued_sales_and_separates_delivery_costs(client):
@@ -197,7 +204,9 @@ def test_fx_revision_and_return_replay(client, monkeypatch):
         assert mp.project_record(db,u,acc,ret)[1]=='RETURN_STOCK_CONFIRMATION_REQUIRED'
         ret.payload={**ret.payload,'returned_to_warehouse':True}
         for _ in range(3):assert mp.project_record(db,u,acc,ret)[0]
-        assert db.scalar(select(func.sum(Batch.remaining)))==3
+        assert db.scalar(select(func.sum(Batch.remaining)))==2
+        pending=db.scalar(select(Return))
+        assert pending is not None and pending.inventory_status == "requested"
         assert f.report(db,u,date(2026,10,1),date(2026,10,31),1)['revenue']==0
 
 
@@ -241,7 +250,9 @@ def test_kaspi_window_pagination_and_merchant_sku(monkeypatch):
         assert int(q['filter[orders][creationDate][$le]'][0])-int(q['filter[orders][creationDate][$ge]'][0])<14*86400000
         return 200,{'data':[{'id':'order'+q['page[number]'][0],'attributes':{'status':'COMPLETED','creationDate':1}}],'meta':{'pageCount':2}}
     monkeypatch.setattr(connectors,'_json_request',request)
-    r=connectors.KaspiConnector(SimpleNamespace(channel='Kaspi',mode='api'),{'token':'x'}).fetch()
+    connector=connectors.KaspiConnector(SimpleNamespace(channel='Kaspi',mode='api'),{'token':'x'})
+    first=connector.fetch()
+    r=connector.fetch(first.next_cursor)
     assert any('page%5Bnumber%5D=1' in x for x in calls)
     assert all(x['sku']=='A' for x in r.records if x['record_type']=='order_entry')
     assert not r.warnings
@@ -290,11 +301,17 @@ def test_user_golden_31000_all_sources(client,source):
             row=staged(db,acc,'GOLD',**payload);assert mp.project_record(db,u,acc,row)[0],row.payload
         sale=db.scalar(select(Sale))
         canonical.post_event(db,u,'return',s.ReturnIn(sale_id=sale.id,reference='RETURN',date=date(2026,10,3),quantity=1))
+        ret=db.scalar(select(Return).where(Return.reference == 'RETURN'))
+        ret.inventory_status='restocked'
+        f.restock_return_inventory(db,u,ret)
         for category,amount in [('Marketplace commission',12000),('Marketplace logistics',4000),('Реклама',5000),('Other',3000)]:
             canonical.post_event(db,u,'expense',s.ExpenseIn(company_id=1,account_id=1,reference=category,date=date(2026,10,3),category=category,amount=amount*100))
         report=f.report(db,u,date(2026,10,1),date(2026,10,31),1)
         for key,value in dict(revenue=9000000,returns=1000000,cogs=3500000,commission=1200000,logistics=400000,advertising=500000,net_profit=3100000,cash_flow=0).items():
             assert report[key]==value,(key,report[key])
+        if source == 'Kaspi':
+            assert report['commission_estimated'] == 0
+            assert report['commission_estimate_suppressed'] is True
 
 def test_wb_nonfinancial_realization_never_becomes_expense(client):
     with SessionLocal() as db:

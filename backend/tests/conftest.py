@@ -78,6 +78,25 @@ def post(c, entity, **kw):
     return r.json()
 
 
+def restock_return(c, return_id):
+    """Advance a test return through receipt and inspection on its event date."""
+    from app import finance
+    from app.db import SessionLocal
+    from app.models import Return
+
+    with SessionLocal() as db:
+        ret = db.get(Return, return_id)
+        movement_date = ret.date
+    original_today = finance.business_today
+    finance.business_today = lambda: movement_date
+    try:
+        for status in ("approved", "in_transit", "received", "inspection", "restocked"):
+            r = c.post(f"/api/returns/{return_id}/status", json={"status": status})
+            assert r.status_code == 200, r.text
+    finally:
+        finance.business_today = original_today
+
+
 def buy(c, ref="P1", qty=10, cost=1000, extra=0, paid=0, day="2026-10-01", company=1):
     return post(
         c,

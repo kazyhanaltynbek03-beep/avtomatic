@@ -20,7 +20,22 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
       - name: Kaspi integration tests
-        run: pytest -q tests/test_kaspi_catalog_api.py tests/test_marketplace_cost_cards.py
+        run: pytest -q tests/test_kaspi_catalog_api.py tests/test_marketplace_cost_cards.py tests/test_connectors.py tests/test_production_financial_engine.py tests/test_accounting_invariants.py tests/test_migration_upgrade.py tests/test_canonical_marketplace.py::test_kaspi_window_pagination_and_merchant_sku 'tests/test_canonical_marketplace.py::test_user_golden_31000_all_sources[Kaspi]' 'tests/test_canonical_marketplace.py::test_confirmed_marketplace_return_reverses_existing_sale_once[Kaspi]' 'tests/test_canonical_marketplace.py::test_fx_revision_and_return_replay'
       - name: Full regression suite
         run: pytest -q
         continue-on-error: true
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
