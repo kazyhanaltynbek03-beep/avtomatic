@@ -701,8 +701,8 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
     if company_id is not None: scope(u, company_id); aq = aq.where(Account.company_id == company_id)
     accounts = list(db.scalars(aq)); ids = [a.id for a in accounts]; by_id = {a.id:a for a in accounts}
-    sync_in_progress = any(str(a.sync_status or '').lower() == 'running' for a in accounts)
     display_sync = [sync_status_for_display(a) for a in accounts]
+    sync_in_progress = any(status == 'running' for status, _error in display_sync)
     sync_status = ('failed' if any(x[0] == 'failed' for x in display_sync) else
                    'running' if any(x[0] == 'running' for x in display_sync) else
                    'partial' if any(x[0] == 'partial' for x in display_sync) else
@@ -2545,12 +2545,14 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     if end < start or (end - start).days > 366:
         raise HTTPException(422, "Укажите корректный период не длиннее 367 дней")
     if sync_status_for_display(acc)[0] == "running":
-        raise HTTPException(409, "Синхронизация Kaspi уже выполняется; отображаются сохранённые данные")
+        return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
+                "start":str(start),"end":str(end),"report_mode":report_mode}
     local_today = datetime.now(ZoneInfo("Asia/Almaty")).date()
     if start > local_today:
         raise HTTPException(422, "Начало периода не может быть в будущем")
     bounded_end = min(end, local_today)
-    refresh_after = local_today - timedelta(days=30)
+    # A short return-status window keeps routine period syncs bounded. Older, still-open orders are always refreshed below.
+    refresh_after = local_today - timedelta(days=7)
     period_key = f"{report_mode}:{start}:{bounded_end}"
     settings = dict(acc.integration_settings or {})
     cache = dict(settings.get("kaspi_period_sync") or {})
@@ -2559,6 +2561,7 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         try: cached_at = datetime.fromisoformat(str(cache[period_key]))
         except ValueError: cached_at = None
     age = (now() - cached_at).total_seconds() if cached_at else None
+    completed_status_stale = force or cached_at is None or age is None or age >= 6 * 60 * 60
     is_historical = bounded_end < local_today
     cache_ttl = 60 if start == bounded_end == local_today else (300 if bounded_end == local_today - timedelta(days=1) else 3600)
     cache_fresh = cached_at is not None and (is_historical or age is not None and age < cache_ttl)
@@ -2586,14 +2589,15 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
             created = marketplace_pipeline._day(payload.get("creation_date"), "Asia/Almaty")
         except marketplace_pipeline.Pending:
             continue
-        if created >= refresh_after:
+        if created >= refresh_after and completed_status_stale:
             refresh_ids.add(order_code)
     status_only = bool(cache_fresh and not force and report_mode == "issued")
     claimed = db.execute(update(Account).where(Account.id == id,
         or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None)))
         .values(sync_status="running", sync_error="KASPI_PERIOD_SYNC", last_sync=now()))
     if claimed.rowcount != 1:
-        raise HTTPException(409, "Синхронизация Kaspi уже выполняется")
+        return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
+                "start":str(start),"end":str(bounded_end),"report_mode":report_mode}
     db.commit()
     tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, sorted(refresh_ids), report_mode, status_only)
     return {"ok":True,"status":"running","account_id":acc.id,"start":str(start),"end":str(bounded_end),

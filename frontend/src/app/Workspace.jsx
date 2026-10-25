@@ -1437,6 +1437,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
   const [syncing, setSyncing] = useState(false);
   const [syncStartedAt, setSyncStartedAt] = useState(0);
   const [syncError, setSyncError] = useState("");
+  const autoSyncRef = useRef(new Set());
   const [downloadingExcel, setDownloadingExcel] = useState(false);
   const [excelError, setExcelError] = useState("");
   useEffect(() => {
@@ -1500,6 +1501,19 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
       setSyncError(error.message);
     }
   };
+  useEffect(() => {
+    if (!accountId) return;
+    const key = `${accountId}:${period}:${range.start}:${range.end}:${company || ""}`;
+    if (autoSyncRef.current.has(key)) return;
+    autoSyncRef.current.add(key);
+    const matchesRange = data.start === range.start && data.end === range.end && data.period === period;
+    const updatedAt = Date.parse(data.updated_at || "");
+    const refreshAfterMs = period === "daily" ? 5 * 60 * 1000 : 60 * 60 * 1000;
+    const fresh = matchesRange && ["готов", "ожидается", "частично"].includes(data.status) &&
+      Number.isFinite(updatedAt) && Date.now() - updatedAt < refreshAfterMs;
+    if (fresh || matchesRange && data.status === "загружается") return;
+    startReportSync();
+  }, [accountId, period, range.start, range.end, company, data.start, data.end, data.period, data.status, data.updated_at, startReportSync]);
   const downloadExcel = async () => {
     setExcelError("");
     setDownloadingExcel(true);
