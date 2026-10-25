@@ -1357,14 +1357,17 @@ def listing(
             )
             physical_units = int(physical.get(row["id"], 0) or 0)
             defective_units = int(defective.get(row["id"], 0) or 0)
-            in_transit = specs.get("in_transit_quantity")
-            reserved = specs.get("reserved_quantity")
+            in_transit = max(0, int(specs.get("in_transit_quantity") or 0))
+            reserved = max(0, int(specs.get("reserved_quantity") or 0))
+            available_units = max(0, physical_units - reserved)
+            total_units = physical_units + marketplace_units + in_transit + defective_units
             row["inventory"] = {
+                "total": total_units,
                 "physical": physical_units,
-                "available": max(0, physical_units - int(reserved)) if reserved is not None else None,
-                "reserved": int(reserved) if reserved is not None else None,
+                "available": available_units,
+                "reserved": reserved,
                 "marketplace": marketplace_units,
-                "in_transit": int(in_transit) if in_transit is not None else None,
+                "in_transit": in_transit,
                 "defective": defective_units,
                 "sold": int(sold.get(row["id"], 0) or 0),
                 "returned": int(returned.get(row["id"], 0) or 0),
