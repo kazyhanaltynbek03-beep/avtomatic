@@ -14,6 +14,32 @@ def staged(db,acc,external,**payload):
     db.add(row);db.flush();return row
 
 
+def test_kaspi_period_projection_uses_completion_and_return_dates(client):
+    with SessionLocal() as db:
+        acc = db.get(Account, 1)
+        user = db.get(User, 1)
+        row = staged(db, acc, 'CROSS-MONTH', record_type='order_entry',
+                     order_status='COMPLETED', sku='A', quantity=1, total_price='1000',
+                     order_creation_date='2026-09-30', completed_date='2026-10-02')
+        result = mp.project_account(db, user, acc, date_from=date(2026, 10, 1), date_to=date(2026, 10, 31))
+        sale = db.scalar(select(Sale).where(Sale.reference == mp.reference(acc, row.external_id)))
+        assert sale is not None, result
+        assert sale.date == date(2026, 10, 2)
+        row.payload = {**row.payload, 'order_status': 'RETURNED', 'returned_date': '2026-11-03'}
+        result = mp.project_account(db, user, acc, date_from=date(2026, 11, 1), date_to=date(2026, 11, 30))
+        returned = db.scalar(select(Return).where(Return.sale_id == sale.id))
+        assert returned is not None, result
+        assert returned.date == date(2026, 11, 3)
+        assert db.scalar(select(func.count()).select_from(Sale)) == 1
+
+
+def test_marketplace_summary_rejects_inverted_period(client):
+    response = client.get('/api/marketplace-summary', params={
+        'channel': 'Kaspi', 'start': '2026-10-31', 'end': '2026-10-01',
+    })
+    assert response.status_code == 422
+
+
 def test_report_skips_ignored_non_financial_staging_rows(client):
     with SessionLocal() as db:
         acc=db.get(Account,1);u=db.get(User,1)

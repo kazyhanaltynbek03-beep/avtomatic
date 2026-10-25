@@ -1627,7 +1627,7 @@ function DataPage({ page, ctx }) {
   const setReturnStatus = async (row, status) => {
     let reason;
     if (status === "defective" || status === "written_off") {
-      reason = prompt(status === "defective" ? "Причина брака" : "Причина списания");
+      reason = globalThis.prompt(status === "defective" ? "Причина брака" : "Причина списания");
       if (!reason || !reason.trim()) return;
     }
     setBusy(true);
@@ -2135,7 +2135,7 @@ function EditModal({ kind, item, ctx, close }) {
           : !credentials.token;
         if (missing) throw new Error("Введите API-данные интеграции");
         await api(`/accounts/${saved.id}/credentials`, {method:"PUT", body:credentials});
-        await api(`/accounts/${saved.id}/sync-now`, {method:"POST"});
+        await api(`/accounts/${saved.id}/sync-now?background=true`, {method:"POST", timeoutMs:10000});
         ctx.notify(`${payload.channel}: интеграция создана, API сохранён, проверка и синхронизация запущены`);
       } else {
         ctx.notify(editing ? "Изменения сохранены" : "Операция выполнена");

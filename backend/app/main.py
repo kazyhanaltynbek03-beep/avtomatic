@@ -659,6 +659,8 @@ def _kaspi_commission_estimate(sales, expenses, api_bases, configured_rate=None)
 def marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None, u=Depends(current_user), db=Depends(get_db)):
     """Fast marketplace page summary; bounded to the selected channel and period."""
     require(u, "analytics")
+    if end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
     if channel not in {"Kaspi", "Wildberries", "Ozon"}: raise HTTPException(422, "Неподдерживаемый маркетплейс")
     aq = select(Account).where(Account.channel == channel, Account.active.is_(True))
     if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
