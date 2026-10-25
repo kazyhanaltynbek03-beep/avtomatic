@@ -2465,7 +2465,7 @@ def _stage_marketplace_records(db, acc, result):
     return inserted, updated
 
 
-def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_ids):
+def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_ids, report_mode="issued", status_only=False):
     """Refresh only a requested Kaspi creation-date window plus old open orders."""
     with SessionLocal() as db:
         acc = db.get(Account, account_id)
@@ -2483,7 +2483,7 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             today_local = datetime.now(ZoneInfo("Asia/Almaty"))
             local_end = (today_local if end >= today_local.date() else
                          datetime.combine(end + timedelta(days=1), datetime.min.time(), ZoneInfo("Asia/Almaty")))
-            cursor = json.dumps({"_qor_kaspi_cursor":1,"scope":"period",
+            cursor = json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
                 "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
                 "page":0,"offset":0,"extra_ids":extra_order_ids,"extra_offset":0}, separators=(",", ":"))
             pages = records = inserted_total = updated_total = 0
@@ -2508,8 +2508,14 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             acc.last_sync = now()
             acc.sync_status = "partial" if warnings else "done"
             acc.sync_error = "; ".join(warnings)[:500]
+            if not warnings:
+                settings = dict(acc.integration_settings or {})
+                coverage = dict(settings.get("kaspi_period_sync") or {})
+                coverage[f"{report_mode}:{start}:{end}"] = now().isoformat()
+                settings["kaspi_period_sync"] = dict(list(coverage.items())[-100:])
+                acc.integration_settings = settings
             audit(db, user, "sync_kaspi_period", "accounts", acc.id,
-                  {"start":str(start),"end":str(end),"records":records,"pages":pages,
+                  {"start":str(start),"end":str(end),"report_mode":report_mode,"status_only":status_only,"records":records,"pages":pages,
                    "inserted":inserted_total,"updated":updated_total})
             db.commit()
         except Exception as exc:
@@ -2526,6 +2532,7 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
 @app.post("/api/accounts/{id}/sync-kaspi-period")
 def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
                       report_mode: str = Query(default="issued", regex="^(created|issued)$"),
+                      force: bool = False,
                       u=Depends(current_user), db=Depends(get_db)):
     """Schedule a bounded Kaspi sync and refresh previously open/very recent orders."""
     require(u, "accounts", True)
@@ -2544,6 +2551,19 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         raise HTTPException(422, "Начало периода не может быть в будущем")
     bounded_end = min(end, local_today)
     refresh_after = local_today - timedelta(days=30)
+    period_key = f"{report_mode}:{start}:{bounded_end}"
+    settings = dict(acc.integration_settings or {})
+    cache = dict(settings.get("kaspi_period_sync") or {})
+    cached_at = None
+    if cache.get(period_key):
+        try: cached_at = datetime.fromisoformat(str(cache[period_key]))
+        except ValueError: cached_at = None
+    age = (now() - cached_at).total_seconds() if cached_at else None
+    is_historical = bounded_end < local_today
+    cache_ttl = 60 if start == bounded_end == local_today else (300 if bounded_end == local_today - timedelta(days=1) else 3600)
+    cache_fresh = cached_at is not None and (is_historical or age is not None and age < cache_ttl)
+    if cache_fresh and not force and report_mode == "created":
+        return {"ok":True,"status":"cached","cached":True,"account_id":acc.id,"start":str(start),"end":str(bounded_end),"report_mode":report_mode}
     records = db.scalars(select(MarketplaceRecord).where(
         MarketplaceRecord.account_id == acc.id,
         MarketplaceRecord.source == "kaspi",
@@ -2568,15 +2588,16 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
             continue
         if created >= refresh_after:
             refresh_ids.add(order_code)
+    status_only = bool(cache_fresh and not force and report_mode == "issued")
     claimed = db.execute(update(Account).where(Account.id == id,
         or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None)))
         .values(sync_status="running", sync_error="KASPI_PERIOD_SYNC", last_sync=now()))
     if claimed.rowcount != 1:
         raise HTTPException(409, "Синхронизация Kaspi уже выполняется")
     db.commit()
-    tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, sorted(refresh_ids))
+    tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, sorted(refresh_ids), report_mode, status_only)
     return {"ok":True,"status":"running","account_id":acc.id,"start":str(start),"end":str(bounded_end),
-            "report_mode":report_mode,"old_orders_to_refresh":len(refresh_ids)}
+            "report_mode":report_mode,"old_orders_to_refresh":len(refresh_ids),"status_only":status_only}
 
 
 @app.post("/api/accounts/{id}/sync-now")
