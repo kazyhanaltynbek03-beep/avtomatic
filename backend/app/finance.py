@@ -37,13 +37,15 @@ def kaspi_commission_estimates(db, user, start, end, company_id, account_id, sal
     import os
     from . import marketplace_pipeline
 
-    raw_rate = os.getenv("KASPI_COMMISSION_RATE", "0.12")
+    raw_rate = os.getenv("KASPI_COMMISSION_RATE")
+    if raw_rate in (None, ""):
+        return {}, None, False
     try:
         rate = Decimal(str(raw_rate))
         if not rate.is_finite() or rate < 0 or rate > 1:
             raise ValueError
     except (ValueError, TypeError):
-        rate = Decimal("0.12")
+        return {}, None, False
     bps = int(rate * 10000)
     actual_days = {
         (e.account_id, e.date) for e in expenses
@@ -79,7 +81,7 @@ def kaspi_commission_estimates(db, user, start, end, company_id, account_id, sal
             if str(p.get("order_status") or "").upper() != "COMPLETED":
                 continue
             try:
-                day = marketplace_pipeline._day(p.get("completed_date") or p.get("order_creation_date"))
+                day = marketplace_pipeline._day(p.get("completed_date"), "Asia/Almaty")
                 if not start <= day <= end:
                     continue
                 base = marketplace_pipeline._cents(p.get("total_price"), accounts[raw.account_id], "KZT", db, day)
@@ -757,7 +759,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
                    or (typ=='posting' and p.get('status') in {'delivered','completed'})
                    or (typ=='order_entry' and p.get('order_status')=='COMPLETED'))
         if not confirmed: continue
-        try: day=_day(p.get('saleDt') or p.get('sale_dt') or p.get('date') or p.get('completed_date') or p.get('order_creation_date') or p.get('delivered_at') or p.get('shipment_date') or p.get('created_at'))
+        try: day=_day(p.get('saleDt') or p.get('sale_dt') or p.get('date') or p.get('completed_date') or p.get('delivered_at') or p.get('shipment_date') or p.get('created_at'), "Asia/Almaty" if typ=='order_entry' else None)
         except Pending: day=None
         if day is None or start<=day<=end: pending_sources.append(raw)
     profit_complete = not pending_cogs_sales and not pending_return_sales and not pending_sources
