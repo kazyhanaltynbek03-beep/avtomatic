@@ -2036,3 +2036,47 @@ aside{border-right:1px solid rgba(255,255,255,.055);box-shadow:14px 0 42px rgba(
 @media(max-width:420px){.kaspi-preorder-selects{grid-template-columns:1fr}.kaspi-preorder-search{grid-column:auto}.kaspi-preorder-upload{min-height:280px;padding:20px}.kaspi-preorder-actions{display:grid;width:100%;grid-template-columns:1fr 1.3fr}.kaspi-preorder-actions button{justify-content:center;padding:7px 9px;font-size:12px}.kaspi-preorder-pagination{flex-direction:column}}
 .product-ai-draft{display:grid;gap:12px;padding:16px;border:1px solid var(--line,#dfe5ec);border-radius:14px;background:linear-gradient(135deg,rgba(115,95,255,.07),rgba(35,170,150,.05));margin:0 0 16px}.product-ai-draft h3{margin:5px 0}.product-ai-draft p{margin:5px 0 0}.product-ai-draft textarea{width:100%;resize:vertical}.product-ai-questions{padding:10px 12px;border-radius:10px;background:rgba(255,190,60,.12);font-size:.9rem}.product-ai-questions ul{margin:6px 0 0;padding-left:20px}
 .marketplace-sync-settings{display:grid;gap:12px;padding:15px;border:1px solid #dce8e1;border-radius:14px;background:#f8fbf9}.marketplace-sync-settings h3,.marketplace-sync-settings p{margin:0}.marketplace-sync-settings>label{display:grid;gap:5px}.marketplace-sync-settings small{color:#74847b;font-size:12px}.marketplace-sync-settings .check-label{display:flex;align-items:flex-start;gap:8px}
+
+/* Kaspi reports: keep controls readable and prevent horizontal overflow on phones. */
+.kaspi-report-controls{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  align-items:stretch;
+  gap:10px;
+  min-width:0;
+}
+.kaspi-report-controls>button{
+  min-width:0;
+  min-height:44px;
+  padding:10px 14px;
+  border:1px solid #dce5de;
+  border-radius:12px;
+  background:#fff;
+  color:#315345;
+  font-weight:650;
+  line-height:1.3;
+  text-align:center;
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+.kaspi-report-controls>button.primary{color:#fff;background:#1c745d;border-color:#1c745d}
+.kaspi-report-controls>button:disabled{opacity:.55}
+.kaspi-report-controls>.muted{grid-column:1/-1;min-width:0;overflow-wrap:anywhere}
+.marketplace-kpis,.marketplace-kpis>.kpi{min-width:0}
+.marketplace-kpis>.kpi{overflow-wrap:anywhere}
+.marketplace-kpis>.kpi>strong{overflow-wrap:anywhere}
+@media(max-width:700px){
+  .kaspi-report-controls{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .kaspi-report-controls>button{padding:9px 8px;font-size:12px}
+  .kaspi-report-controls>button:nth-of-type(3){grid-column:1/-1}
+  .kaspi-report-controls>.muted{font-size:12px}
+  .marketplace-kpis{grid-template-columns:repeat(2,minmax(0,1fr));padding:0;gap:8px}
+  .marketplace-kpis>.kpi{min-width:0;padding:12px 10px}
+  .section-heading{min-width:0;flex-wrap:wrap}
+  .panel{min-width:0}
+}
+@media(max-width:390px){
+  .kaspi-report-controls{grid-template-columns:1fr}
+  .kaspi-report-controls>button:nth-of-type(3),.kaspi-report-controls>.muted{grid-column:1}
+  .marketplace-kpis{grid-template-columns:1fr}
+}
