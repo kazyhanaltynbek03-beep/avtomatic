@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import {
   AreaChart,
   Area,
@@ -1288,7 +1288,7 @@ function MarketplaceProductCard({ p, channel, onSaveCost, canEditCost, defaultEf
 }
 
 function ProductImage({ product, label = "Фото не добавлено" }) {
-  const images = Array.from(new Set((product?.media || []).filter((x) => typeof x === "string" && /^https?:\/\//i.test(x))));
+  const images = Array.from(new Set((product?.media || []).filter((x) => typeof x === "string" && /^(https?:\/\/|data:image\/)/i.test(x))));
   const [index, setIndex] = useState(0);
   const [failed, setFailed] = useState(images.length === 0);
   const imageKey = images.join("|");
@@ -1298,15 +1298,26 @@ function ProductImage({ product, label = "Фото не добавлено" }) {
   </div>;
 }
 
-function ProductCatalogCard({ product, onEdit, onDelete }) {
+function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selected, onSelect }) {
   return <article className="qor-item-card">
     <ProductImage product={product}/>
     <div className="qor-item-body">
+      <label className="catalog-select"><input type="checkbox" checked={selected} onChange={onSelect}/> Выбрать</label>
       <span className="marketplace-product-meta">SKU · {product.sku || "—"}</span>
       <h3>{product.name || "Товар без названия"}</h3>
       <div className="qor-item-price">{Number(product.price || 0) > 0 ? money(product.price) : <span className="muted">Цена не указана</span>}</div>
       <div className="qor-item-facts"><span>{product.category || "Без категории"}</span><b>Мин. остаток {product.min_stock ?? 0}</b></div>
-      <div className="row-actions"><button className="secondary" onClick={onEdit}>Изменить</button><button className="icon-button danger" title="Архивировать товар" onClick={onDelete}><Trash2 size={16}/></button></div>
+      <div className="qor-stock-facts">
+        <span>Доступно <b>{product.inventory?.available ?? "—"}</b></span>
+        <span>Резерв <b>{product.inventory?.reserved ?? "—"}</b></span>
+        <span>На площадках <b>{product.inventory?.marketplace ?? "—"}</b></span>
+        <span>В пути <b>{product.inventory?.in_transit ?? "—"}</b></span>
+        <span>Брак <b>{product.inventory?.defective ?? "—"}</b></span>
+        <span>Продажи / возвраты <b>{product.inventory?.sold ?? 0} / {product.inventory?.returned ?? 0}</b></span>
+      </div>
+      {product.inventory?.low_stock && <div className="low-stock-note">Низкий остаток</div>}
+      <small className="muted">Физически: {product.inventory?.physical ?? "—"} · Синхронизация: {product.inventory?.last_sync ? new Date(product.inventory.last_sync).toLocaleString("ru-RU") : "нет данных"}</small>
+      <div className="row-actions"><button className="secondary" onClick={onEdit}>Изменить</button><button className="secondary" onClick={onPrice}>Цена</button><button className="secondary" onClick={onCount}>Изменить остаток</button><button className="icon-button danger" title="Архивировать товар" onClick={onDelete}><Trash2 size={16}/></button></div>
     </div>
   </article>;
 }
@@ -1320,6 +1331,50 @@ function SaleProductCard({ sale, product, account, onReturn }) {
       <div className="row-actions"><a className="secondary" href={`/api/sales/${sale.id}/invoice`}><FileText size={15}/> Счёт</a><button className="secondary" onClick={onReturn}><RotateCcw size={15}/> Возврат</button></div>
     </div>
   </article>;
+}
+
+function ProductOperationModal({ operation, company, onClose, onSaved }) {
+  const product = operation.product;
+  const [value, setValue] = useState(operation.kind === "price" ? String((product.price || 0) / 100) : String(product.inventory?.physical ?? 0));
+  const [unitCost, setUnitCost] = useState(product.purchase_cost ? String(product.purchase_cost / 100) : "");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async e => {
+    e.preventDefault(); setBusy(true); setError("");
+    try {
+      if (operation.kind === "count") {
+        const counted = Number(value);
+        if (!Number.isInteger(counted) || counted < 0) throw new Error("Введите целое количество от нуля");
+        if (reason.trim().length < 5) throw new Error("Укажите причину не короче 5 символов");
+        let cost;
+        if (counted > Number(product.inventory?.physical ?? 0)) {
+          cost = Math.round(Number(String(unitCost).replace(",", ".")) * 100);
+          if (!Number.isFinite(cost) || cost <= 0) throw new Error("Для увеличения остатка нужна подтверждённая себестоимость единицы");
+        }
+        await api("/inventory/count", {method:"POST", body:{company_id:Number(company), product_id:product.id, counted_quantity:counted, unit_cost:cost, reason:reason.trim(), idempotency_key:globalThis.crypto.randomUUID()}});
+        onSaved("Остаток пересчитан. Движение записано в историю.");
+      } else {
+        const price = Math.round(Number(String(value).replace(",", ".")) * 100);
+        if (!Number.isFinite(price) || price < 0) throw new Error("Введите корректную цену");
+        const body = {version:product.version, description:product.description || "", barcode:product.barcode || "", purchase_cost:product.purchase_cost || 0, custom_fields:product.custom_fields || {}, sku:product.sku, name:product.name, category:product.category || "", article:product.article || "", brand:product.brand || "", supplier:product.supplier || "", country:product.country || "", media:product.media || [], currency:product.currency || "KZT", fx_rate:product.fx_rate || 10000, weight_g:product.weight_g || 0, volume_cm3:product.volume_cm3 || 0, min_price:product.min_price || 0, recommended_price:product.recommended_price || 0, price, min_stock:product.min_stock || 0, active:product.active !== false, specifications:product.specifications || {}};
+        await api(`/data/products/${product.id}`, {method:"PUT", body});
+        onSaved("Цена сохранена");
+      }
+    } catch(e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const close = () => { if (!busy) onClose(); };
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal product-operation-modal" role="dialog" aria-modal="true" onSubmit={submit}>
+    <div className="modal-heading"><div><span className="eyebrow">{operation.kind === "count" ? "СКЛАДСКОЙ ПЕРЕСЧЁТ" : "БЫСТРОЕ ИЗМЕНЕНИЕ ЦЕНЫ"}</span><h2>{product.name}</h2><p className="muted">SKU · {product.sku}</p></div><button type="button" className="icon-button" onClick={close} aria-label="Закрыть"><X/></button></div>
+    {operation.kind === "count" ? <>
+      <label>Фактическое физическое количество<input autoFocus type="number" min="0" step="1" value={value} onChange={e=>setValue(e.target.value)} required/></label>
+      {Number(value) > Number(product.inventory?.physical ?? 0) && <label>Себестоимость добавляемой единицы, ₸<input type="number" min="0.01" step="0.01" value={unitCost} onChange={e=>setUnitCost(e.target.value)} required/></label>}
+      <label>Причина пересчёта<textarea rows={3} minLength={5} value={reason} onChange={e=>setReason(e.target.value)} required placeholder="Например: инвентаризация склада"/></label>
+      <small>ERP создаст отдельное складское движение. Количество не перезаписывается напрямую.</small>
+    </> : <label>Новая цена, ₸<input autoFocus type="number" min="0" step="0.01" value={value} onChange={e=>setValue(e.target.value)} required/></label>}
+    <ErrorBox error={error}/><div className="modal-actions"><button className="secondary" type="button" onClick={close} disabled={busy}>Отмена</button><button className="primary" disabled={busy}>{busy ? "Сохраняем…" : "Сохранить"}</button></div>
+  </form></div>;
 }
 
 function WBCostManager({ accounts, company, notify }) {
@@ -1591,6 +1646,11 @@ function DataPage({ page, ctx }) {
     [busy, setBusy] = useState(false),
     [integration, setIntegration] = useState(null),
     [integrationForm, setIntegrationForm] = useState({token:"",client_id:"",api_key:""}),
+    [selectedProducts, setSelectedProducts] = useState([]),
+    [productOperation, setProductOperation] = useState(null),
+    [catalogView, setCatalogView] = useState("cards"),
+    [catalogCategory, setCatalogCategory] = useState(""),
+    [catalogSort, setCatalogSort] = useState("name"),
     [kaspiAction, setKaspiAction] = useState({order_id:"",code:"",status:"ACCEPTED_BY_MERCHANT",cancellation_reason:"BUYER_CANCELLATION_BY_MERCHANT",cancellation_comment:"",number_of_space:"1",security_code:""});
   const params = new URLSearchParams({
     limit: "30",
@@ -1599,6 +1659,7 @@ function DataPage({ page, ctx }) {
   });
   if (ctx.company) params.set("company_id", ctx.company);
   if (channels.includes(page)) params.set("channel", page);
+  if (entity === "products") { params.set("start", ctx.start || today().slice(0, 8) + "01"); params.set("end", ctx.end || today()); }
   const state = useLoad("/data/" + entity + "?" + params, ctx.refresh);
   useEffect(() => setOffset(0), [search, ctx.company]);
   const cap = flat.find((x) => x[0] === page)?.[3];
@@ -1624,6 +1685,38 @@ function DataPage({ page, ctx }) {
       setError(e.message);
     }
   };
+  const saveProductPrice = async (product, price) => {
+    const normalized = Math.round(Number(String(price).replace(",", ".")) * 100);
+    if (!Number.isFinite(normalized) || normalized < 0) throw new Error("Введите корректную цену");
+    const body = {version:product.version, description:product.description || "", barcode:product.barcode || "", purchase_cost:product.purchase_cost || 0, custom_fields:product.custom_fields || {}, sku:product.sku, name:product.name, category:product.category || "", article:product.article || "", brand:product.brand || "", supplier:product.supplier || "", country:product.country || "", media:product.media || [], currency:product.currency || "KZT", fx_rate:product.fx_rate || 10000, weight_g:product.weight_g || 0, volume_cm3:product.volume_cm3 || 0, min_price:product.min_price || 0, recommended_price:product.recommended_price || 0, price:normalized, min_stock:product.min_stock || 0, active:product.active !== false, specifications:product.specifications || {}};
+    await api(`/data/products/${product.id}`, {method:"PUT", body});
+  };
+  const quickPrice = async product => {
+    setProductOperation({kind:"price", product});
+  };
+  const countStock = async product => {
+    if (!ctx.company) { setError("Для инвентаризации выберите компанию в верхнем фильтре"); return; }
+    setProductOperation({kind:"count", product});
+  };
+  const bulkPrice = async () => {
+    const rows = (state.data?.items || []).filter(p => selectedProducts.includes(p.id));
+    if (!rows.length) return;
+    const value = globalThis.prompt(`Новая цена для ${rows.length} товаров (₸)`);
+    if (value == null) return;
+    setBusy(true); setError("");
+    let saved = 0;
+    try {
+      for (const product of rows) { await saveProductPrice(product, value); saved += 1; }
+      setSelectedProducts([]); ctx.notify(`Цена сохранена для ${saved} товаров`);
+    } catch(e) { setError(`Сохранено ${saved} из ${rows.length}. ${e.message}`); }
+    finally { setBusy(false); }
+  };
+  const catalogRows = [...(state.data?.items || [])]
+    .filter(p => !catalogCategory || p.category === catalogCategory)
+    .sort((a,b) => catalogSort === "stock" ? (a.inventory?.available ?? 0)-(b.inventory?.available ?? 0)
+      : catalogSort === "stock_desc" ? (b.inventory?.available ?? 0)-(a.inventory?.available ?? 0)
+        : catalogSort === "price" ? (a.price || 0)-(b.price || 0)
+          : String(a.name || "").localeCompare(String(b.name || ""), "ru"));
   const setReturnStatus = async (row, status) => {
     let reason;
     if (status === "defective" || status === "written_off") {
@@ -1788,6 +1881,12 @@ function DataPage({ page, ctx }) {
             />
           </div>
           <div className="row-actions">
+            {entity === "products" && <>
+              <select aria-label="Категория товара" value={catalogCategory} onChange={e=>setCatalogCategory(e.target.value)}><option value="">Все категории</option>{[...new Set((state.data?.items || []).map(p=>p.category).filter(Boolean))].sort().map(x=><option key={x}>{x}</option>)}</select>
+              <select aria-label="Сортировка каталога" value={catalogSort} onChange={e=>setCatalogSort(e.target.value)}><option value="name">Название</option><option value="stock">Остаток ↑</option><option value="stock_desc">Остаток ↓</option><option value="price">Цена ↑</option></select>
+              <button className="secondary" onClick={()=>setCatalogView(catalogView === "cards" ? "table" : "cards")}>{catalogView === "cards" ? "Таблица" : "Карточки"}</button>
+              {selectedProducts.length > 0 && <button className="secondary" disabled={busy} onClick={bulkPrice}>Цена для выбранных ({selectedProducts.length})</button>}
+            </>}
             <a
               className="secondary"
               href={"/api/export/" + entity + "?format=xlsx"}
@@ -1841,7 +1940,7 @@ function DataPage({ page, ctx }) {
           <ErrorBox error={state.error} />
         ) : (
           <>
-            {entity === "products" ? <div className="qor-item-grid">{state.data.items.map((product) => <ProductCatalogCard key={product.id} product={product} onEdit={() => ctx.open("products", product)} onDelete={() => remove(product)}/>)}</div> : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
+            {entity === "products" ? (catalogView === "cards" ? <div className="qor-item-grid">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={() => ctx.open("products", product)} onDelete={() => remove(product)} onCount={() => countStock(product)} onPrice={() => quickPrice(product)}/>)}</div> : <div className="table-scroll"><table><thead><tr><th></th><th>Фото / товар</th><th>SKU</th><th>Цена</th><th>Физический остаток</th><th>Продано</th><th>Возврат</th><th>Действия</th></tr></thead><tbody>{catalogRows.map(p=><tr key={p.id}><td data-label="Выбрать"><input aria-label={`Выбрать ${p.name}`} type="checkbox" checked={selectedProducts.includes(p.id)} onChange={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,p.id])] : v.filter(id=>id!==p.id))}/></td><td data-label="Товар">{p.name}</td><td data-label="SKU">{p.sku}</td><td data-label="Цена">{money(p.price || 0)}</td><td data-label="Физический остаток">{p.inventory?.physical ?? "—"}</td><td data-label="Продано">{p.inventory?.sold ?? 0}</td><td data-label="Возврат">{p.inventory?.returned ?? 0}</td><td data-label="Действия"><button className="secondary" onClick={()=>ctx.open("products",p)}>Изменить</button> <button className="secondary" onClick={()=>quickPrice(p)}>Цена</button> <button className="secondary" onClick={()=>countStock(p)}>Остаток</button></td></tr>)}</tbody></table></div>) : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
               rows={state.data.items}
               cols={columns[entity] || ["id", "created_at"]}
               refs={ctx.refs}
@@ -1958,6 +2057,7 @@ function DataPage({ page, ctx }) {
           создают отдельные операции с сохранением истории.
         </p>
       )}
+      {productOperation && <ProductOperationModal operation={productOperation} company={ctx.company} onClose={()=>setProductOperation(null)} onSaved={message=>{setProductOperation(null);ctx.notify(message);}}/>}
     </>
   );
 }
@@ -2055,7 +2155,7 @@ function EditModal({ kind, item, ctx, close }) {
               : f.type === "multiref"
                 ? []
                 : f.type === "json"
-                  ? "{}"
+                  ? f.key === "media" ? "[]" : "{}"
                   : f.type === "niche"
                     ? {}
                     : f.key === "company_id"
@@ -2080,14 +2180,52 @@ function EditModal({ kind, item, ctx, close }) {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""});
+  const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
+  const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? ""));
+  const requestClose = useCallback(() => {
+    if (dirty && !globalThis.confirm("Есть несохранённые изменения. Закрыть без сохранения?")) return;
+    close();
+  }, [dirty, close]);
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
   useEffect(() => {
     const fn = (e) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") requestClose();
     };
     document.addEventListener("keydown", fn);
     return () => document.removeEventListener("keydown", fn);
-  }, [close]);
+  }, [requestClose]);
   const set = (k, v) => setValues((x) => ({ ...x, [k]: v }));
+  const addProductPhotos = async (files) => {
+    const chosen = Array.from(files || []).slice(0, 8);
+    try {
+      const encoded = await Promise.all(chosen.map(file => new Promise((resolve, reject) => {
+        if (!file.type.startsWith("image/") || file.size > 8 * 1024 * 1024) { reject(new Error("Выберите изображения до 8 МБ")); return; }
+        const reader = new globalThis.FileReader();
+        reader.onerror = () => reject(new Error("Не удалось прочитать изображение"));
+        reader.onload = () => {
+          const image = new globalThis.Image();
+          image.onerror = () => reject(new Error("Файл не является корректным изображением"));
+          image.onload = () => {
+            const scale = Math.min(1, 1200 / Math.max(image.width, image.height));
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
+            canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL("image/jpeg", 0.82));
+          };
+          image.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      })));
+      const current = JSON.parse(values.media || "[]");
+      set("media", JSON.stringify([...current, ...encoded].slice(0, 8), null, 2));
+      setError("");
+    } catch (e) { setError(e.message); }
+  };
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -2104,6 +2242,8 @@ function EditModal({ kind, item, ctx, close }) {
         else if (f.type === "json") payload[f.key] = JSON.parse(v || "{}");
         else payload[f.key] = v;
       }
+      if (kind === "products" && editing) payload.version = item.version;
+      if (kind === "adjustments") payload.reference = submissionRef;
       if (kind === "purchases")
         payload.lines = lines.map((l) => ({
           product_id: Number(l.product_id),
@@ -2205,6 +2345,8 @@ function EditModal({ kind, item, ctx, close }) {
           ))}
         </div>
       );
+    if (f.type === "longtext")
+      return <textarea rows={5} value={v} onChange={(e) => set(f.key, e.target.value)} />;
     if (f.type === "json")
       return (
         <textarea
@@ -2273,7 +2415,7 @@ function EditModal({ kind, item, ctx, close }) {
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
+        if (e.target === e.currentTarget) requestClose();
       }}
     >
       <form
@@ -2299,7 +2441,7 @@ function EditModal({ kind, item, ctx, close }) {
           <button
             type="button"
             className="icon-button"
-            onClick={close}
+            onClick={requestClose}
             aria-label="Закрыть"
           >
             <X />
@@ -2322,6 +2464,7 @@ function EditModal({ kind, item, ctx, close }) {
             </label>
           ))}
         </div>
+        {kind === "products" && <div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div>}
         {kind === "accounts" && !editing && ["Kaspi","Wildberries","Ozon"].includes(values.channel) && (
           <div className="panel padded wide integration-create-box">
             <div className="info-banner"><ShieldCheck size={18}/> API-данные сохраняются на сервере в зашифрованном виде. После создания QOR сразу проверит соединение и запустит синхронизацию.</div>
@@ -2433,6 +2576,7 @@ function EditModal({ kind, item, ctx, close }) {
           </div>
         )}
         <ErrorBox error={error} />
+        {dirty && <p className="panel-note">Есть несохранённые изменения</p>}
         <div className="modal-footer">
           <button type="button" className="secondary" onClick={close}>
             Отмена

@@ -37,7 +37,7 @@ def test_postgres_upgrade_preserves_existing_ledger():
     with engine.begin() as conn:
         assert conn.execute(text('SELECT reference,revenue FROM sales WHERE id=1')).one() == ('OLD-SALE',10000)
         assert conn.execute(text('SELECT inventory_status FROM returns WHERE id=1')).scalar_one() == 'restocked'
-        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == 'f98b9c1d2008'
+        assert conn.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == 'f99c0d1e2009'
         conn.execute(text("INSERT INTO returns (id,company_id,sale_id,date,reference,quantity,revenue,cogs,created_at) VALUES (2,1,1,'2026-01-03','NEW-RETURN',1,10000,4000,now())"))
         assert conn.execute(text('SELECT inventory_status FROM returns WHERE id=2')).scalar_one() == 'requested'
         assert conn.execute(text('SELECT count(*) FROM return_inventory_allocations')).scalar_one() == 0
