@@ -99,6 +99,7 @@ class Account(Record, Base):
     sync_cursor: Mapped[str] = mapped_column(Text, default="")
     settlement_currency: Mapped[str] = mapped_column(String(3), default="KZT")
     settlement_fx_rate: Mapped[int] = mapped_column(BigInteger, default=10000)
+    integration_settings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class IntegrationSecret(Record, Base):
