@@ -643,7 +643,7 @@ def adjust(db, user, p):
         fail("Приход не может уменьшать остаток")
     if p.kind in ("writeoff", "defect") and p.quantity > 0:
         fail("Списание/брак должны уменьшать остаток")
-    ref = "adjust:" + __import__("uuid").uuid4().hex
+    ref = p.reference or ("adjust:" + __import__("uuid").uuid4().hex)
     if p.quantity > 0:
         b = Batch(
             company_id=p.company_id,
@@ -664,9 +664,9 @@ def adjust(db, user, p):
                 db, p.company_id, p.product_id, -p.quantity, p.date
             )
         ]
+    movements = []
     for b, n, c in parts:
-        db.add(
-            Movement(
+        movement = Movement(
                 company_id=p.company_id,
                 product_id=p.product_id,
                 batch_id=b.id,
@@ -676,7 +676,8 @@ def adjust(db, user, p):
                 kind=p.kind,
                 reference=p.reason,
             )
-        )
+        db.add(movement)
+        movements.append(movement)
     # Only economic losses hit P&L. A count correction changes inventory, but is not
     # silently classified as an operating loss; accountant can post a separate expense.
     if p.kind in ("writeoff", "defect") and p.quantity < 0 and sum(c for b, n, c in parts) < 0:
@@ -693,7 +694,7 @@ def adjust(db, user, p):
     audit(db, user, "adjust", "inventory", details=p.model_dump(mode="json"))
     db.flush()
     if p.quantity > 0: reconcile_pending_cogs(db,user,p.company_id,[p.product_id])
-    return {"reference": ref}
+    return {"reference": ref, "movement_ids": [m.id for m in movements]}
 
 
 def report(db, user, start, end, company_id=None, account_id=None):

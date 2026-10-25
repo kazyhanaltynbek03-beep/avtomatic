@@ -387,11 +387,12 @@ def test_report_details_reconciles_profit_and_cash(client):
 ])
 def test_full_cost_allocation_methods_conserve_every_tenge(client, method, weights, expected):
     # product 1: 1kg / 1000cm3; product 2: 2kg / 4000cm3
+    versions = {p["id"]: p["version"] for p in client.get("/api/data/products?limit=10").json()["items"]}
     assert client.put("/api/data/products/1", json={
-        "sku":"A","name":"Alpha","price":10000,"weight_g":1000,"volume_cm3":1000
+        "version":versions[1],"sku":"A","name":"Alpha","price":10000,"weight_g":1000,"volume_cm3":1000
     }).status_code == 200
     assert client.put("/api/data/products/2", json={
-        "sku":"B","name":"Beta","price":0,"weight_g":2000,"volume_cm3":4000
+        "version":versions[2],"sku":"B","name":"Beta","price":0,"weight_g":2000,"volume_cm3":4000
     }).status_code == 200
     r = client.post("/api/post/purchases", json={
         "company_id":1,"reference":"FULL-"+method,"supplier":"CN","date":"2026-10-01",

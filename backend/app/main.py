@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select, func, or_, text, update
+from sqlalchemy import select, func, or_, text, update, cast, String
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field, ValidationError
 from .db import get_db, SessionLocal
@@ -146,6 +146,12 @@ def dump(obj):
         if c.name not in ("password_hash", "token_hash", "path", "rows")
     })
     if isinstance(obj,Sale) and obj.cogs_pending: result["cogs"]=None
+    if isinstance(obj, Product):
+        specs = obj.specifications or {}
+        result["description"] = specs.get("description", "")
+        result["barcode"] = specs.get("barcode", "")
+        result["purchase_cost"] = int(specs.get("purchase_cost") or 0)
+        result["custom_fields"] = specs.get("custom_fields") or {}
     return result
 
 
@@ -384,7 +390,10 @@ def access_query(db, u, entity, search="", company_id=None, account_id=None):
             if hasattr(model, k)
         ]
         if cols:
-            q = q.where(or_(*[c.ilike("%" + search[:100] + "%") for c in cols]))
+            search_terms = [c.ilike("%" + search[:100] + "%") for c in cols]
+            if entity == "products":
+                search_terms.append(cast(Product.specifications, String).ilike("%" + search[:100] + "%"))
+            q = q.where(or_(*search_terms))
     return q
 
 
@@ -1277,6 +1286,8 @@ def listing(
     company_id: int | None = None,
     account_id: int | None = None,
     channel: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     u=Depends(current_user),
@@ -1298,6 +1309,62 @@ def listing(
     if entity == "niches":
         for row in rows:
             row["analysis"] = ai.niche_score(row["data"])
+    if entity == "products" and rows:
+        product_ids = [r["id"] for r in rows]
+        from_date = start or business_today().replace(day=1)
+        to_date = end or business_today()
+        if to_date < from_date:
+            raise HTTPException(422, "Конец периода раньше начала")
+        batch_q = scope_query(select(Batch.product_id, func.coalesce(func.sum(Batch.remaining), 0)), Batch, u)
+        batch_q = batch_q.where(Batch.product_id.in_(product_ids)).group_by(Batch.product_id)
+        if company_id:
+            batch_q = batch_q.where(Batch.company_id == company_id)
+        physical = dict(db.execute(batch_q).all())
+        sold_q = scope_query(select(Sale.product_id, func.coalesce(func.sum(Sale.quantity), 0)), Sale, u)
+        sold_q = sold_q.where(Sale.product_id.in_(product_ids), Sale.date >= from_date, Sale.date <= to_date).group_by(Sale.product_id)
+        if company_id:
+            sold_q = sold_q.where(Sale.company_id == company_id)
+        sold = dict(db.execute(sold_q).all())
+        returned_q = select(Sale.product_id, func.coalesce(func.sum(Return.quantity), 0)).join(Return, Return.sale_id == Sale.id)
+        returned_q = scope_query(returned_q, Sale, u).where(Sale.product_id.in_(product_ids), Return.date >= from_date, Return.date <= to_date).group_by(Sale.product_id)
+        if company_id:
+            returned_q = returned_q.where(Sale.company_id == company_id)
+        returned = dict(db.execute(returned_q).all())
+        defective_q = select(Sale.product_id, func.coalesce(func.sum(Return.quantity), 0)).join(Return, Return.sale_id == Sale.id)
+        defective_q = scope_query(defective_q, Sale, u).where(
+            Sale.product_id.in_(product_ids), Return.inventory_status == "defective"
+        ).group_by(Sale.product_id)
+        if company_id:
+            defective_q = defective_q.where(Sale.company_id == company_id)
+        defective = dict(db.execute(defective_q).all())
+        accounts_q = scope_query(select(Account), Account, u)
+        if company_id:
+            accounts_q = accounts_q.where(Account.company_id == company_id)
+        sync_times = [a.last_sync for a in db.scalars(accounts_q) if a.last_sync]
+        latest_sync = max(sync_times) if sync_times else None
+        for row in rows:
+            specs = row.get("specifications") or {}
+            market_snapshot = specs.get("marketplace_stock") or {}
+            marketplace_units = sum(
+                int(v.get("quantity") or 0) for v in market_snapshot.values()
+                if isinstance(v, dict)
+            )
+            physical_units = int(physical.get(row["id"], 0) or 0)
+            defective_units = int(defective.get(row["id"], 0) or 0)
+            in_transit = specs.get("in_transit_quantity")
+            reserved = specs.get("reserved_quantity")
+            row["inventory"] = {
+                "physical": physical_units,
+                "available": max(0, physical_units - int(reserved)) if reserved is not None else None,
+                "reserved": int(reserved) if reserved is not None else None,
+                "marketplace": marketplace_units,
+                "in_transit": int(in_transit) if in_transit is not None else None,
+                "defective": defective_units,
+                "sold": int(sold.get(row["id"], 0) or 0),
+                "returned": int(returned.get(row["id"], 0) or 0),
+                "last_sync": latest_sync,
+                "low_stock": physical_units - int(reserved or 0) <= int(row.get("min_stock") or 0),
+            }
     return {"items": rows, "total": count}
 
 
@@ -1334,6 +1401,17 @@ def validate_master(db, u, entity, p, existing=None):
 
 def master_values(p, entity):
     values = p.model_dump()
+    # Product version is an optimistic concurrency token, not an editable field.
+    if entity == "products":
+        values.pop("version", None)
+        description = values.pop("description", "")
+        barcode = values.pop("barcode", "")
+        purchase_cost = values.pop("purchase_cost", 0)
+        custom_fields = values.pop("custom_fields", {})
+        specs = dict(values.get("specifications") or {})
+        specs.update({"description": description, "barcode": barcode,
+                      "purchase_cost": purchase_cost, "custom_fields": custom_fields})
+        values["specifications"] = specs
     if entity == "users":
         pw = values.pop("password")
         values["email"] = values["email"].lower()
@@ -1371,15 +1449,23 @@ def edit_master(
     obj = db.get(model, id)
     if not obj:
         raise HTTPException(404, "Не найдено")
+    if entity == "products":
+        obj = db.scalar(select(Product).where(Product.id == id).with_for_update().execution_options(populate_existing=True))
     if hasattr(obj, "company_id"):
         scope(u, obj.company_id)
     p = schema.model_validate(payload)
+    if entity == "products" and p.version is None:
+        raise HTTPException(428, "Для сохранения товара нужна версия карточки. Обновите список товаров.")
+    if entity == "products" and p.version != obj.version:
+        raise HTTPException(409, "Товар уже изменён другим сотрудником. Обновите карточку и повторите правку.")
     validate_master(db, u, entity, p, obj)
     if entity == "customers" and p.company_id != obj.company_id:
         raise HTTPException(422, "Компания покупателя неизменяема")
     before = dump(obj)
     for k, v in master_values(p, entity).items():
         setattr(obj, k, v)
+    if entity == "products":
+        obj.version += 1
     audit(db, u, "update", entity, id, {"before": before, "after": dump(obj)})
     db.commit()
     return dump(obj)
@@ -1624,6 +1710,44 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
         for x in rows:
             x.pop("value", None)
     return rows
+
+
+@app.post("/api/inventory/count")
+def inventory_count(p: s.StockCountIn, u=Depends(current_user), db=Depends(get_db)):
+    """Reconcile counted physical quantity as one auditable, replay-safe movement."""
+    require(u, "inventory", True)
+    f.get_company(db, u, p.company_id)
+    identity = f"stock-count:{p.company_id}:{p.idempotency_key}"
+    body = p.model_dump(mode="json")
+    old = db.scalar(select(CanonicalEvent).where(CanonicalEvent.identity == identity))
+    if old:
+        if old.event_type != "stock_count" or old.payload.get("request") != body:
+            raise HTTPException(409, "Ключ операции уже использован для другой корректировки")
+        db.commit()
+        return {"ok": True, "replayed": True, "movement_id": old.target_id, **old.payload["result"]}
+    product = f.lock_product(db, p.product_id)
+    current = db.scalar(select(func.coalesce(func.sum(Batch.remaining), 0)).where(
+        Batch.company_id == p.company_id, Batch.product_id == product.id
+    )) or 0
+    delta = p.counted_quantity - current
+    movement_id = None
+    if delta:
+        if delta > 0 and (p.unit_cost is None or p.unit_cost <= 0):
+            raise HTTPException(422, "При увеличении остатка укажите подтверждённую себестоимость единицы")
+        adjustment = s.AdjustIn(
+            company_id=p.company_id, product_id=product.id, date=business_today(),
+            quantity=delta, unit_cost=p.unit_cost or 0,
+            kind="adjustment", reason=p.reason,
+            reference=f"count:{p.company_id}:{p.idempotency_key}",
+        )
+        posted = f.adjust(db, u, adjustment)
+        movement_id = posted["movement_ids"][0] if posted.get("movement_ids") else None
+    result = {"previous_quantity": current, "counted_quantity": p.counted_quantity, "delta": delta}
+    db.add(CanonicalEvent(company_id=p.company_id, account_id=None, event_type="stock_count",
+        identity=identity, payload={"request": body, "result": result}, target_id=movement_id, status="posted"))
+    audit(db, u, "stock_count", "inventory", product.id, {**body, **result, "movement_id": movement_id})
+    db.commit()
+    return {"ok": True, "replayed": False, "movement_id": movement_id, **result}
 
 
 @app.get("/api/forecast")

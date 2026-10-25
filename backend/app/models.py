@@ -79,6 +79,7 @@ class Product(Record, Base):
     recommended_price: Mapped[int] = mapped_column(BigInteger, default=0)
     price: Mapped[int] = mapped_column(BigInteger, default=0)
     min_stock: Mapped[int] = mapped_column(default=5)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     active: Mapped[bool] = mapped_column(default=True)
     specifications: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (CheckConstraint("price >= 0 AND min_price >= 0 AND recommended_price >= 0 AND min_stock >= 0 AND weight_g >= 0 AND volume_cm3 >= 0 AND fx_rate > 0"),)

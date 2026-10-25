@@ -16,6 +16,11 @@ class CompanyIn(Strict):
 
 
 class ProductIn(Strict):
+    version: int | None = Field(default=None, ge=1)
+    description: str = Field(default="", max_length=10000)
+    barcode: str = Field(default="", max_length=100)
+    purchase_cost: int = Field(default=0, ge=0, le=10**14)
+    custom_fields: dict = Field(default_factory=dict)
     sku: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
     category: str = ""
@@ -136,6 +141,16 @@ class AdjustIn(Strict):
     unit_cost: int = Field(default=0, ge=0)
     kind: Literal["receipt", "writeoff", "defect", "adjustment"] = "adjustment"
     reason: str = Field(min_length=5, max_length=160)
+    reference: str | None = Field(default=None, min_length=8, max_length=120)
+
+
+class StockCountIn(Strict):
+    company_id: int
+    product_id: int
+    counted_quantity: int = Field(ge=0, le=10**9)
+    unit_cost: int | None = Field(default=None, ge=0, le=10**14)
+    reason: str = Field(min_length=5, max_length=160)
+    idempotency_key: str = Field(min_length=16, max_length=100)
 
 
 class UserIn(Strict):

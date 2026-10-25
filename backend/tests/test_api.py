@@ -51,7 +51,7 @@ def test_master_crud_and_audit(client):
     assert (
         client.put(
             "/api/data/products/" + str(row["id"]),
-            json={"sku": "NEW", "name": "Changed", "price": 200},
+            json={"version": row["version"], "sku": "NEW", "name": "Changed", "price": 200},
         ).status_code
         == 200
     )
