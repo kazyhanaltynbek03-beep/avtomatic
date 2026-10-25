@@ -1605,6 +1605,18 @@ function MarketplaceInbox({ channel, ctx }) {
     const timer=window.setInterval(()=>setSummaryReload(v=>v+1),5000);
     return ()=>window.clearInterval(timer);
   },[activeSync]);
+  useEffect(()=>{
+    const localToday=today();
+    const yesterday=new Date(`${localToday}T00:00:00Z`); yesterday.setUTCDate(yesterday.getUTCDate()-1);
+    const yesterdayKey=yesterday.toISOString().slice(0,10);
+    if(channel!=="Kaspi" || kaspiReportMode!=="issued" || !canSyncKaspi || ctx.start!==ctx.end || ![localToday,yesterdayKey].includes(ctx.end)) return;
+    const interval=ctx.end===localToday?60000:300000;
+    const timer=window.setInterval(()=>{
+      Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})))
+        .then(()=>setSummaryReload(v=>v+1));
+    },interval);
+    return ()=>window.clearInterval(timer);
+  },[channel,kaspiReportMode,canSyncKaspi,accountKey,ctx.start,ctx.end]);
   useEffect(()=>{ if (!costAccountId && accounts.length) setCostAccountId(String(accounts[0].id)); },[accounts,costAccountId]);
   const productParams = new URLSearchParams({channel, limit:"60", start:ctx.start, end:ctx.end});
   if (ctx.company) productParams.set("company_id", ctx.company);
