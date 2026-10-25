@@ -347,7 +347,7 @@ def apply(db, user, kind, p):
         kind = 'expense' if event in {'commission','logistics','advertising'} else event
         return canonical.post_event(db, user, kind, payload, "stock-report:" + str(payload.company_id) + ":" + payload.reason if kind == "stock" else None)
     if kind == "products":
-        values = p.model_dump(exclude={"version", "description", "barcode", "purchase_cost", "custom_fields"})
+        values = p.model_dump(exclude={"version", "description", "barcode", "purchase_cost", "custom_fields", "marketplace_stock_allocations"})
         specs = dict(values.get("specifications") or {})
         specs.update({"description": p.description, "barcode": p.barcode,
                       "purchase_cost": p.purchase_cost, "custom_fields": p.custom_fields})
