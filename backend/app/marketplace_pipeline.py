@@ -587,9 +587,10 @@ def project_account(db, user, acc, external_ids=None, date_from=None, date_to=No
             if acc.channel == 'Kaspi' and payload.get('record_type') in {'order_entry', 'delivery_charge', 'return_delivery_charge'}:
                 # Financial periods follow completion/return, not order placement.
                 # A September order delivered in October belongs to October.
-                returned = str(payload.get('order_status') or '').upper() in RETURNED_KASPI
-                value = ((payload.get('returned_date') or payload.get('return_date')) if returned else None)
-                value = value or payload.get('completed_date')
+                if payload.get('record_type') == 'return_delivery_charge' or (str(payload.get('order_status') or '').upper() in RETURNED_KASPI and payload.get('record_type') == 'order_entry'):
+                    value = payload.get('returned_date') or payload.get('return_date')
+                else:
+                    value = payload.get('completed_date')
             else:
                 value = (payload.get('order_creation_date') or payload.get('completed_date')
                      or payload.get('saleDt') or payload.get('sale_dt') or payload.get('date')
