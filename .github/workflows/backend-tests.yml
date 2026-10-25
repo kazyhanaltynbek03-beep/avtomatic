@@ -39,3 +39,32 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  postgres-upgrade:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: qor
+          POSTGRES_PASSWORD: qor-ci-only
+          POSTGRES_DB: qor_migration_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U qor -d qor_migration_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      QOR_POSTGRES_MIGRATION_URL: postgresql+psycopg://qor:qor-ci-only@localhost:5432/qor_migration_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - run: pip install -r requirements.lock
+      - name: Preserve existing PostgreSQL sales and returns during upgrade
+        run: pytest -q tests/test_postgres_upgrade.py
