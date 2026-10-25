@@ -171,7 +171,7 @@ class KaspiConnector(Connector):
         params = {"page[number]": page, "page[size]": 10 if period_mode else 100,
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
-            "include[orders]": "user"}
+            **({} if period_mode else {"include[orders]": "user"})}
         _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
         data = payload.get("data") or []
         selected = data[offset:offset+10]
