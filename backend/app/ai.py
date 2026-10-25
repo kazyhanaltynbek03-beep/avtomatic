@@ -331,7 +331,7 @@ def product_draft(payload):
     if len(facts) < 8:
         raise HTTPException(422, "Добавьте название или подтверждённые сведения о товаре")
     res = call_response(
-        [{"role": "user", "content": "Подготовь черновик карточки товара на русском. ВХОДНЫЕ ФАКТЫ:\\n" + facts}],
+        [{"role": "user", "content": "Подготовь черновик карточки товара на русском. ВХОДНЫЕ ФАКТЫ:\n" + facts}],
         "Ты помощник по заполнению каталога ERP. Верни только один JSON объект с ключами name, description, specifications, questions. "
         "name — краткое название; description — ясное описание для каталога; specifications — массив объектов name/value только с характеристиками, прямо подтверждёнными входными фактами; questions — массив важных неизвестных полей, которые нужно уточнить. "
         "Не придумывай бренд, состав, материал, размер, совместимость, сертификаты, гарантию, характеристики, SKU, штрихкод, цену, себестоимость или остатки. "
@@ -343,8 +343,9 @@ def product_draft(payload):
                 "questions": {"type": "array", "items": {"type": "string"}},
             }, "required": ["name", "description", "specifications", "questions"], "additionalProperties": False}}
     )
+    text = output_text(res).strip()
     try:
-        data = json.loads(output_text(res).strip())
+        data = json.loads(text)
     except (TypeError, ValueError):
         raise HTTPException(502, "AI вернул некорректный черновик. Повторите запрос.")
     if not isinstance(data, dict):
