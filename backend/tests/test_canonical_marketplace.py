@@ -77,7 +77,8 @@ def test_normalized_api_sale_three_replays_metrics(client,channel):
         assert row.status=='projected'
 
 
-def test_kaspi_commission_estimate_is_in_central_report_and_detail(client):
+def test_kaspi_commission_estimate_is_in_central_report_and_detail(client, monkeypatch):
+    monkeypatch.setenv('KASPI_COMMISSION_RATE','0.12')
     buy(client,qty=10,cost=350000)
     with SessionLocal() as db:
         acc=db.get(Account,1);acc.channel='Kaspi';u=db.get(User,1)
@@ -187,13 +188,14 @@ def test_confirmed_marketplace_return_reverses_existing_sale_once(client, channe
         assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=="return"))==1
 
 
-def test_kaspi_summary_uses_only_issued_sales_and_separates_delivery_costs(client):
+def test_kaspi_summary_uses_only_issued_sales_and_separates_delivery_costs(client, monkeypatch):
+    monkeypatch.setenv('KASPI_COMMISSION_RATE','0.12')
     with SessionLocal() as db:
         acc=db.get(Account,1)
         staged(db,acc,'entry:issued:1',record_type='order_entry',order_status='COMPLETED',
-               sku='A',quantity=1,total_price=100000,order_creation_date='2026-10-02')
+               sku='A',quantity=1,total_price=100000,order_creation_date='2026-10-02',completed_date='2026-10-02')
         staged(db,acc,'entry:cancelled:2',record_type='order_entry',order_status='CANCELLED',
-               sku='A',quantity=1,total_price=50000,order_creation_date='2026-10-02')
+               sku='A',quantity=1,total_price=50000,order_creation_date='2026-10-02',completed_date='2026-10-02')
         db.add_all([
             Expense(company_id=1,account_id=1,reference='seller-delivery',date=date(2026,10,2),
                     category='Marketplace logistics',amount=100000),
@@ -321,7 +323,7 @@ def test_user_golden_31000_all_sources(client,source):
             canonical.post_event(db,u,'sale',s.SaleIn(company_id=1,account_id=1,product_id=1,reference='GOLD',date=date(2026,10,2),quantity=10,unit_price=1000000))
         else:
             payload={
-                'Kaspi':dict(record_type='order_entry',order_status='COMPLETED',sku='A',quantity=10,total_price=100000,order_creation_date='2026-10-02'),
+                'Kaspi':dict(record_type='order_entry',order_status='COMPLETED',sku='A',quantity=10,total_price=100000,order_creation_date='2026-10-02',completed_date='2026-10-02'),
                 'Wildberries':dict(record_type='realization',sellerOperName='Продажа',vendorCode='A',quantity=10,retailPriceWithDisc=10000,currency='KZT',saleDt='2026-10-02',srid='GOLD'),
                 'Ozon':dict(record_type='posting',status='delivered',shipment_date='2026-10-02',products=[dict(offer_id='A',sku=42,quantity=10,price=10000,currency_code='KZT')])}[source]
             row=staged(db,acc,'GOLD',**payload);assert mp.project_record(db,u,acc,row)[0],row.payload
