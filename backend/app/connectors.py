@@ -180,7 +180,7 @@ class KaspiConnector(Connector):
         missing_errors = []
         if period_mode and not selected:
             page_count = (payload.get("meta") or {}).get("pageCount")
-            no_more_pages = page_count is not None and page >= int(page_count)
+            no_more_pages = not data or (page_count is not None and page >= int(page_count))
             if no_more_pages:
                 extra_ids = state.get("extra_ids") or []
                 extra_offset = max(0, int(state.get("extra_offset") or 0))
