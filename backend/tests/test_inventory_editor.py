@@ -55,10 +55,14 @@ def test_product_inventory_listing_returns_period_sales_and_return_columns(clien
     assert response.status_code == 200, response.text
     row = next(x for x in response.json()["items"] if x["id"] == 1)
     assert set(row["inventory"]) == {
-        "physical", "available", "reserved", "marketplace", "in_transit",
+        "total", "physical", "available", "reserved", "marketplace", "in_transit",
         "defective", "sold", "returned", "last_sync", "low_stock",
     }
-    assert row["inventory"]["reserved"] is None
+    assert row["inventory"]["available"] == row["inventory"]["physical"]
+    assert row["inventory"]["reserved"] == 0
+    assert row["inventory"]["total"] == sum(
+        row["inventory"][key] for key in ("physical", "marketplace", "in_transit", "defective")
+    )
 
 
 def test_inventory_count_requires_confirmed_cost_for_positive_adjustment(client):
