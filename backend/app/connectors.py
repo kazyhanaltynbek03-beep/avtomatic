@@ -153,7 +153,9 @@ class KaspiConnector(Connector):
                     state = candidate
             except (TypeError, ValueError):
                 pass
-        period_mode = state.get("scope") == "period"
+        status_only = state.get("scope") == "status_only"
+        period_mode = state.get("scope") in {"period", "status_only"}
+        period_scope = "status_only" if status_only else "period"
         history_start = now - timedelta(days=370)
         # Legacy cursors were created by oldest-first syncs. Restart those from
         # the latest week; previously imported rows are upserted by external ID.
@@ -172,7 +174,10 @@ class KaspiConnector(Connector):
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
             **({} if period_mode else {"include[orders]": "user"})}
-        _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
+        if status_only:
+            payload = {"data":[],"meta":{"pageCount":0}}
+        else:
+            _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
         data = payload.get("data") or []
         selected = data[offset:offset+10]
         extras_selected = False
@@ -285,7 +290,7 @@ class KaspiConnector(Connector):
         if period_mode and extras_selected:
             extra_offset = max(0, int(state.get("extra_offset") or 0)) + extras_requested
             extra_ids = state.get("extra_ids") or []
-            next_state = ({"_qor_kaspi_cursor":1,"scope":"period","start_ms":int(window_start.timestamp()*1000),
+            next_state = ({"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
                 "until_ms":int(until.timestamp()*1000),"page":page,"offset":len(data),
                 "extra_ids":extra_ids,"extra_offset":extra_offset} if extra_offset < len(extra_ids) else None)
         elif period_mode and selected and next_offset < len(data):
