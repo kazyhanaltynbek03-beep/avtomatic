@@ -1486,7 +1486,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     const timer = window.setInterval(() => setReportRefresh((v) => v + 1), 5000);
     return () => window.clearInterval(timer);
   }, [syncing, data.status]);
-  const startReportSync = async () => {
+  const startReportSync = useCallback(async () => {
     if (!accountId) return;
     setSyncError("");
     setSyncing(true);
@@ -1500,7 +1500,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
       setSyncStartedAt(0);
       setSyncError(error.message);
     }
-  };
+  }, [accountId, period, range.start, range.end]);
   useEffect(() => {
     if (!accountId) return;
     const key = `${accountId}:${period}:${range.start}:${range.end}:${company || ""}`;
