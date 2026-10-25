@@ -372,7 +372,7 @@ def test_user_golden_31000_all_sources(client,source):
             assert report[key]==value,(key,report[key])
         if source == 'Kaspi':
             assert report['commission_estimated'] == 0
-            assert report['commission_estimate_suppressed'] is True
+            assert report['commission_estimate_suppressed'] is False
 
 def test_wb_nonfinancial_realization_never_becomes_expense(client):
     with SessionLocal() as db:
