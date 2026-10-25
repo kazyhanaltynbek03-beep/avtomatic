@@ -1420,6 +1420,13 @@ def master_values(p, entity):
     return values
 
 
+@app.post("/api/products/ai-draft")
+def product_ai_draft(p: dict, u=Depends(current_user)):
+    """Generate an editable product draft; the caller must review and save it."""
+    require(u, "catalog", True)
+    return ai.product_draft(p)
+
+
 @app.post("/api/data/{entity}")
 def create_master(
     entity: str, payload: dict, u=Depends(current_user), db=Depends(get_db)
