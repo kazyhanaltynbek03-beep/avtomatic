@@ -153,10 +153,13 @@ class KaspiConnector(Connector):
                     state = candidate
             except (TypeError, ValueError):
                 pass
+        status_only = state.get("scope") == "status_only"
+        period_mode = state.get("scope") in {"period", "status_only"}
+        period_scope = "status_only" if status_only else "period"
         history_start = now - timedelta(days=370)
         # Legacy cursors were created by oldest-first syncs. Restart those from
         # the latest week; previously imported rows are upserted by external ID.
-        if state and not state.get("direction"):
+        if state and not state.get("direction") and not period_mode:
             state = {}
         # New syncs start with the latest week so the current dashboard is useful
         # immediately, then walk backwards through a full reporting year.
@@ -166,15 +169,37 @@ class KaspiConnector(Connector):
                         if state.get("start_ms") else max(history_start, now - timedelta(days=7)))
         page = max(0, int(state.get("page") or 0))
         offset = max(0, int(state.get("offset") or 0))
-        window_end = min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until)
-        params = {"page[number]": page, "page[size]": 100,
+        window_end = (until if period_mode else min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until))
+        params = {"page[number]": page, "page[size]": 10 if period_mode else 100,
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
-            "include[orders]": "user"}
-        _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
+            **({} if period_mode else {"include[orders]": "user"})}
+        if status_only:
+            payload = {"data":[],"meta":{"pageCount":0}}
+        else:
+            _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
         data = payload.get("data") or []
         selected = data[offset:offset+10]
-        records = {}; errors = []; pages = 1
+        extras_selected = False
+        extras_requested = 0
+        missing_errors = []
+        if period_mode and not selected:
+            page_count = (payload.get("meta") or {}).get("pageCount")
+            no_more_pages = not data or (page_count is not None and page >= int(page_count))
+            if no_more_pages:
+                extra_ids = state.get("extra_ids") or []
+                extra_offset = max(0, int(state.get("extra_offset") or 0))
+                selected = []
+                extra_batch = extra_ids[extra_offset:extra_offset+10]
+                extras_requested = len(extra_batch)
+                for code in extra_batch:
+                    _, detail = _json_request(self.base_url + "?" + urlencode({"filter[orders][code]":str(code)}), self._headers())
+                    items = detail.get("data") or []
+                    selected.extend(items[:1])
+                    if not items:
+                        missing_errors.append(f"Kaspi: заказ с code={code} не найден при обновлении статуса")
+                extras_selected = True
+        records = {}; errors = missing_errors; pages = 1
         included = payload.get("included") or []
         for item in selected:
             a = item.get("attributes") or {}
@@ -262,14 +287,33 @@ class KaspiConnector(Connector):
                 errors.append('entries:'+oid+': '+str(exc))
         next_state = None
         next_offset = offset + len(selected)
-        if selected and next_offset < len(data):
+        if period_mode and extras_selected:
+            extra_offset = max(0, int(state.get("extra_offset") or 0)) + extras_requested
+            extra_ids = state.get("extra_ids") or []
+            next_state = ({"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
+                "until_ms":int(until.timestamp()*1000),"page":page,"offset":len(data),
+                "extra_ids":extra_ids,"extra_offset":extra_offset} if extra_offset < len(extra_ids) else None)
+        elif period_mode and selected and next_offset < len(data):
+            next_state = {"_qor_kaspi_cursor":1,"scope":"period","start_ms":int(window_start.timestamp()*1000),
+                "until_ms":int(until.timestamp()*1000),"page":page,"offset":next_offset,
+                "extra_ids":state.get("extra_ids") or [],"extra_offset":int(state.get("extra_offset") or 0)}
+        elif selected and next_offset < len(data):
             next_state = {"_qor_kaspi_cursor":1,"direction":direction,"start_ms":int(window_start.timestamp()*1000),
                           "until_ms":int(until.timestamp()*1000),"page":page,"offset":next_offset}
         else:
             page_count = (payload.get('meta') or {}).get('pageCount')
             has_more_pages = bool(data) and ((page_count is not None and page + 1 < int(page_count))
-                                               or (page_count is None and len(data) >= 100))
-            if has_more_pages:
+                                               or (page_count is None and len(data) >= (10 if period_mode else 100)))
+            if period_mode:
+                extra_ids = state.get("extra_ids") or []
+                extra_offset = max(0, int(state.get("extra_offset") or 0))
+                next_state = ({"_qor_kaspi_cursor":1,"scope":"period","start_ms":int(window_start.timestamp()*1000),
+                    "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0,
+                    "extra_ids":extra_ids,"extra_offset":extra_offset} if has_more_pages else
+                    ({"_qor_kaspi_cursor":1,"scope":"period","start_ms":int(window_start.timestamp()*1000),
+                    "until_ms":int(until.timestamp()*1000),"page":page,"offset":len(data),
+                    "extra_ids":extra_ids,"extra_offset":extra_offset} if extra_offset < len(extra_ids) else None))
+            elif has_more_pages:
                 next_state = {"_qor_kaspi_cursor":1,"direction":direction,"start_ms":int(window_start.timestamp()*1000),
                               "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0}
             elif direction == "backward" and window_start > history_start:

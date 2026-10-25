@@ -1568,6 +1568,10 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
 
 function MarketplaceInbox({ channel, ctx }) {
   const [wbTab,setWbTab] = useState("weekly");
+  const [kaspiReportMode,setKaspiReportMode] = useState("issued");
+  const [summaryReload,setSummaryReload] = useState(0);
+  const kaspiAutoSyncRef = useRef(new Set());
+
   const [showTechnical,setShowTechnical] = useState(false);
   const [offset,setOffset] = useState(0), [status,setStatus] = useState(""),
     [selected,setSelected] = useState(null), [product,setProduct] = useState(""),
@@ -1580,8 +1584,39 @@ function MarketplaceInbox({ channel, ctx }) {
   const state = useLoad("/marketplace-records?" + params, ctx.refresh);
   const summaryParams = new URLSearchParams({channel, start:ctx.start, end:ctx.end});
   if (ctx.company) summaryParams.set("company_id", ctx.company);
-  const summary = useLoad("/marketplace-summary?" + summaryParams, ctx.refresh);
+  const summary = useLoad("/marketplace-summary?" + summaryParams, `${ctx.refresh}:${summaryReload}`);
   const accounts = (ctx.refs.accounts || []).filter(a=>a.active !== false && a.channel===channel && (!ctx.company || String(a.company_id)===String(ctx.company)));
+  const canSyncKaspi = can(ctx.auth,"accounts",true);
+  const accountKey = accounts.map(a=>a.id).join(",");
+  const ordersCreatedParams = new URLSearchParams({start:ctx.start,end:ctx.end,limit:"100"});
+  if (ctx.company) ordersCreatedParams.set("company_id",ctx.company);
+  const ordersCreated = useLoad(channel === "Kaspi" ? "/kaspi/orders-created?" + ordersCreatedParams : null, `${ctx.refresh}:${summaryReload}`);
+  useEffect(()=>{
+    if (channel !== "Kaspi" || !accountKey || !canSyncKaspi) return;
+    const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}`;
+    if (kaspiAutoSyncRef.current.has(key)) return;
+    kaspiAutoSyncRef.current.add(key);
+    Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}&force=true`,{method:"POST",timeoutMs:10000})))
+      .then(()=>setSummaryReload(v=>v+1));
+  },[channel,accountKey,ctx.start,ctx.end,kaspiReportMode,canSyncKaspi]);
+  const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress;
+  useEffect(()=>{
+    if (!activeSync) return;
+    const timer=window.setInterval(()=>setSummaryReload(v=>v+1),5000);
+    return ()=>window.clearInterval(timer);
+  },[activeSync]);
+  useEffect(()=>{
+    const localToday=today();
+    const yesterday=new Date(`${localToday}T00:00:00Z`); yesterday.setUTCDate(yesterday.getUTCDate()-1);
+    const yesterdayKey=yesterday.toISOString().slice(0,10);
+    if(channel!=="Kaspi" || kaspiReportMode!=="issued" || !canSyncKaspi || ctx.start!==ctx.end || ![localToday,yesterdayKey].includes(ctx.end)) return;
+    const interval=ctx.end===localToday?60000:300000;
+    const timer=window.setInterval(()=>{
+      Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})))
+        .then(()=>setSummaryReload(v=>v+1));
+    },interval);
+    return ()=>window.clearInterval(timer);
+  },[channel,kaspiReportMode,canSyncKaspi,accountKey,ctx.start,ctx.end]);
   useEffect(()=>{ if (!costAccountId && accounts.length) setCostAccountId(String(accounts[0].id)); },[accounts,costAccountId]);
   const productParams = new URLSearchParams({channel, limit:"60", start:ctx.start, end:ctx.end});
   if (ctx.company) productParams.set("company_id", ctx.company);
@@ -1599,16 +1634,17 @@ function MarketplaceInbox({ channel, ctx }) {
     ctx.notify(`Проведено ${r.projected}; ожидает обработки ${r.pending_erp}`);setSelected(null);
   });
   const m = summary.data || {};
+  const created = ordersCreated.data || {};
   const incomplete = m.financial_complete === false;
   const fxPending = Number(m.api_unconverted || 0);
   const marketplaceKpis = [
-    [channel === "Wildberries" ? "Оборот продаж WB" : channel === "Kaspi" ? "Выручка API за вычетом возвратов" : "Продажи API", m.api_revenue ?? m.revenue, fxPending ? `${fxPending} операций ожидают курс` : (channel === "Wildberries" ? "Отдельный отчёт продаж за выбранный период" : channel === "Kaspi" ? "Выручка по дате выдачи минус возвраты по дате возврата" : "Подтверждённая выручка непосредственно из API")],
-    ...(channel === "Kaspi" ? [["Возвраты API", m.api_returns || 0, `${m.api_return_units || 0} шт. за выбранный период`]] : []),
+    [channel === "Wildberries" ? "Оборот продаж WB" : channel === "Kaspi" ? "Выручка API за вычетом возвратов" : "Продажи API", channel === "Kaspi" ? (m.api_revenue == null ? "Нет подтверждённых данных" : m.api_revenue) : (m.api_revenue ?? m.revenue), fxPending ? `${fxPending} операций ожидают курс` : (channel === "Wildberries" ? "Отдельный отчёт продаж за выбранный период" : channel === "Kaspi" ? "Выручка по дате выдачи минус возвраты по дате возврата" : "Подтверждённая выручка непосредственно из API")],
+    ...(channel === "Kaspi" ? [["Возвраты API", m.api_returns == null ? "—" : m.api_returns, `${m.api_return_units == null ? "—" : m.api_return_units} шт. за выбранный период`]] : []),
     ["Продано", m.api_units == null ? "—" : `${m.api_units} шт`, "Количество продаж за выбранный период за вычетом возвращённых единиц"],
     ...(channel === "Wildberries" ? [["К перечислению по отчёту", (m.settlement_rows > 0 ? m.settlement_accrued : "Нет данных отчёта"), m.settlement_unconverted ? `${m.settlement_unconverted} строк ожидают курс` : (m.settlement_rows > 0 ? "Начислено по финансовому отчёту; не банковская выплата" : "Загрузите недельный отчёт WB; ноль не означает отсутствие начислений")]] : []),
     ["Проведено в ERP", m.revenue, m.pending_sales ? `${m.pending_sales} продаж проведены, но ожидают себестоимость FIFO` : "Финансовые продажи, уже проведённые в ERP"],
     ["Себестоимость FIFO", incomplete ? "—" : m.cogs, incomplete ? "Будет рассчитана после наличия себестоимости/партий" : "Только проведённые продажи"],
-    ["Комиссия", m.commission, channel === "Kaspi" && Number(m.commission_estimated || 0) > 0 ? `Включает расчёт ${Math.round(Number(m.commission_rate || 0.12) * 100)}% там, где фактическая комиссия не загружена` : "Расход маркетплейса"],
+    ["Комиссия", m.commission, channel === "Kaspi" && Number(m.commission_estimated || 0) > 0 ? `Расчётная ставка ${Math.round(Number(m.commission_rate || 0) * 100)}% по настройке; не фактическая комиссия Kaspi` : "Расход маркетплейса"],
     ["Логистика продавца", m.logistics, "Стоимость доставки за счёт продавца; доставка покупателя не вычитается"],
     ...(channel === "Kaspi" ? [["Доставка возврата", m.return_logistics, "Отдельный расход возврата, если он пришёл из API или импорта"], ["К получению (расчёт)", m.kaspi_estimated_proceeds, "Выданные продажи − комиссия Kaspi − доставка продавца − доставка возврата; не банковская выплата"]] : []),
     ["Реклама", m.advertising, "Расход маркетплейса"],
@@ -1616,10 +1652,32 @@ function MarketplaceInbox({ channel, ctx }) {
   ];
   return <div className="panel">
     <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
-    {channel === "Kaspi" && m.sync_in_progress && <p className="muted" role="status">Идёт синхронизация истории Kaspi. Итоги за выбранный период предварительные и изменятся после завершения загрузки.</p>}
+    {channel === "Kaspi" && <div className="row-actions kaspi-report-controls" role="group" aria-label="Режим отчёта Kaspi">
+      <button type="button" className={kaspiReportMode==="issued"?"primary":""} aria-pressed={kaspiReportMode==="issued"} onClick={()=>setKaspiReportMode("issued")}>Продажи по дате выдачи</button>
+      <button type="button" className={kaspiReportMode==="created"?"primary":""} aria-pressed={kaspiReportMode==="created"} onClick={()=>setKaspiReportMode("created")}>Заказы по дате создания</button>
+      {can(ctx.auth,"accounts",true) && <button type="button" disabled={busy || !accounts.length} onClick={()=>run(async()=>{
+        const results=await Promise.allSettled(accounts.map(a=>api(`/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}`,{method:"POST",timeoutMs:10000})));
+        const failed=results.find(x=>x.status==="rejected");
+        if(failed) throw failed.reason;
+        setSummaryReload(v=>v+1);ctx.notify("Синхронизация Kaspi за выбранный диапазон запущена.");
+      })}>Синхронизировать период</button>}
+      <span className="muted">Последняя попытка: {(kaspiReportMode==="created"?created.last_sync:m.last_sync)?new Date(kaspiReportMode==="created"?created.last_sync:m.last_sync).toLocaleString("ru-RU"):"нет данных"}</span>
+    </div>}
+    {channel === "Kaspi" && (m.sync_errors?.length || created.sync_errors?.length) ? <p className="error-box" role="alert">Синхронизация не подтверждена. Показаны сохранённые данные, если они есть. {(kaspiReportMode==="created"?created.sync_errors:m.sync_errors)?.join("; ")}</p> : null}
+    {channel === "Kaspi" && kaspiReportMode === "created" ? <>
+      {ordersCreated.loading ? <Spinner/> : ordersCreated.error ? <ErrorBox error={ordersCreated.error}/> : <>
+        <p className="muted">Созданные заказы за период. Сумма заказов не является выручкой или суммой к перечислению. {created.sync_status==="running"?"Обновляются данные API…":!created.api_data_available?"Нет подтверждённого ответа API для этого периода.":""}</p>
+        <div className="table-scroll"><table><thead><tr><th>Дата создания</th><th>Заказ</th><th>Статус</th><th>Единиц</th><th>Сумма заказа</th></tr></thead><tbody>
+          {(created.items||[]).map(x=><tr key={`${x.account_id}:${x.order_id}`}><td>{x.created_date}</td><td>{x.order_id}</td><td>{x.status}</td><td>{x.units}</td><td>{x.amount==null?"—":money(Number(x.amount)*100)}</td></tr>)}
+          <tr><th colSpan="3">Итого по выбранной странице: {created.api_data_available?(created.total||0):"—"} заказов</th><th>{created.api_data_available?(created.items||[]).reduce((n,x)=>n+Number(x.units||0),0):"—"}</th><th>{created.orders_amount==null?"—":money(Number(created.orders_amount)*100)}</th></tr>
+        </tbody></table></div>
+      </>}
+    </> : null}
+    {channel === "Kaspi" && (m.sync_errors?.length || created.sync_errors?.length) ? <p className="error-box" role="alert">Синхронизация не подтверждена. Показаны сохранённые данные, если они есть. {(kaspiReportMode === "created" ? created.sync_errors : m.sync_errors)?.join("; ")}</p> : null}
+    {channel === "Kaspi" && m.sync_in_progress && kaspiReportMode === "issued" && <p className="muted" role="status">Идёт синхронизация истории Kaspi. Сохранённые итоги обновятся после завершения.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"],["costs","Себестоимость"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
     {channel === "Wildberries" && wbTab === "costs" && <WBCostManager accounts={accounts} company={ctx.company} notify={ctx.notify}/>}
-    {(channel !== "Wildberries" || wbTab === "daily") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
+    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
     {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={accounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
     {(channel !== "Wildberries" || wbTab === "products") && <><div className="section-heading"><div><h3>Товары маркетплейса</h3><p className="muted">Карточки показывают продажи за период и себестоимость. Нажмите «Подробнее», чтобы изменить её и пересчитать прибыль в отчётах.</p></div><span className="pill">{marketplaceProducts.data?.total || 0} товаров</span></div>
     {accounts.length>1 && <div className="row-actions"><label>Магазин для карточек товаров и себестоимости<select value={costAccountId} onChange={e=>setCostAccountId(e.target.value)}>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><span className="muted">Продажи в отчётах объединяются по всем подключённым магазинам.</span></div>}

@@ -152,6 +152,36 @@ def test_kaspi_legacy_forward_cursor_restarts_at_latest_week(monkeypatch):
     assert now_ms - state["start_ms"] == pytest.approx(14 * 24 * 60 * 60 * 1000, abs=5000)
 
 
+def test_kaspi_period_cursor_uses_only_documented_date_filters_and_refreshes_old_open_orders(monkeypatch):
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    from urllib.parse import parse_qs, urlparse
+    calls=[]
+    def fake_request(url, headers, timeout=20, method="GET", payload=None, retries=2):
+        calls.append(url)
+        if "filter%5Borders%5D%5Bcode%5D" in url:
+            return 200, {"data":[{"id":"old-order","attributes":{"code":"old-order","status":"COMPLETED","creationDate":1792627200000,"completionDate":1792886400000}}],"meta":{"pageCount":1}}
+        if "/orders?" in url:
+            return 200, {"data":[],"meta":{"pageCount":0}}
+        if "/entries?" in url:
+            return 200, {"data":[],"meta":{"pageCount":0}}
+        raise AssertionError(f"unexpected Kaspi route: {url}")
+    monkeypatch.setattr(connectors,"_json_request",fake_request)
+    tz=ZoneInfo("Asia/Almaty")
+    start=int(datetime(2026,10,24,0,0,tzinfo=tz).timestamp()*1000)
+    until=int(datetime(2026,10,25,0,0,tzinfo=tz).timestamp()*1000)-1
+    cursor=connectors.json.dumps({"_qor_kaspi_cursor":1,"scope":"period","start_ms":start,
+        "until_ms":until,"page":0,"offset":0,"extra_ids":["old-order"],"extra_offset":0})
+    result=KaspiConnector(acc("Kaspi"),{"token":"x"}).fetch(cursor)
+    query=parse_qs(urlparse(calls[0]).query)
+    assert query["filter[orders][creationDate][$ge]"]==[str(start)]
+    assert query["filter[orders][creationDate][$le]"]==[str(until)]
+    assert not any(key.startswith("page[filter]") for key in query)
+    assert "filter%5Borders%5D%5Bcode%5D=old-order" in calls[1]
+    assert any(x["record_type"]=="order" for x in result.records)
+    assert result.next_cursor is None
+
+
 def test_wildberries_connection_test_checks_finance_permissions(monkeypatch):
     calls=[]
     def fake_request(url, token, payload):

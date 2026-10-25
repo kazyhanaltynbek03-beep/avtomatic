@@ -9,7 +9,7 @@ from . import schemas as s, canonical, exchange_rates, finance as f
 from . import wb_operation
 
 CONFIRMED_KASPI = {'COMPLETED'}
-RETURNED_KASPI = {'RETURNED', 'ARRIVED_BACKWARD'}
+RETURNED_KASPI = {'RETURNED'}
 CONFIRMED_OZON = {'delivered', 'completed'}
 # Do not treat a cancelled Ozon posting as a restocked return: cancellation can
 # happen before delivery. Only an explicit returned posting can restore FIFO.
@@ -360,7 +360,7 @@ def normalize_record(db, acc, row):
         status = str(p.get('order_status') or '').upper()
         if status in CONFIRMED_KASPI:
             charge = _expense_event(db, acc, row.external_id, 'Marketplace logistics',
-                p.get('amount'), p.get('completed_date') or p.get('order_creation_date'),
+                p.get('amount'), p.get('completed_date'),
                 p.get('currency') or 'KZT')
             if charge: events.append(charge)
         else:
@@ -369,7 +369,7 @@ def normalize_record(db, acc, row):
         status = str(p.get('order_status') or '').upper()
         if status in RETURNED_KASPI:
             charge = _expense_event(db, acc, row.external_id, 'Marketplace return logistics',
-                p.get('amount'), p.get('returned_date') or p.get('return_date') or p.get('completed_date') or p.get('order_creation_date'),
+                p.get('amount'), p.get('returned_date') or p.get('return_date'),
                 p.get('currency') or 'KZT')
             if charge: events.append(charge)
         else:
@@ -378,12 +378,12 @@ def normalize_record(db, acc, row):
         status=str(p.get('order_status') or '').upper()
         if status in CONFIRMED_KASPI:
             events.append(_sale_event(db, acc, p, p.get('quantity'), p.get('total_price'),
-                p.get('completed_date') or p.get('order_creation_date'), row.external_id, 'KZT'))
+                p.get('completed_date'), row.external_id, 'KZT'))
         elif status in RETURNED_KASPI:
             # A return is booked only after Kaspi confirms it came back, never
             # at a mere cancellation/request stage.
             events.append(_return_event(db, acc, p, p.get('quantity'),
-                p.get('returned_date') or p.get('completed_date') or p.get('order_creation_date'),
+                p.get('returned_date') or p.get('return_date'),
                 'return:' + row.external_id, row.external_id, True))
         else:
             return [], 'received', 'NOT_FINANCIAL_OR_NOT_CONFIRMED'
@@ -528,7 +528,7 @@ def project_record(db, user, acc, row):
                 if prior_sale is None:
                     sale_kind, sale_payload = _sale_event(
                         db, acc, payload, payload.get("quantity"), payload.get("total_price"),
-                        payload.get("completed_date") or payload.get("order_creation_date"),
+                        payload.get("completed_date"),
                         row.external_id, "KZT",
                     )
                     canonical.post_event(db, user, sale_kind, sale_payload, confirmed_marketplace=True)
@@ -587,9 +587,10 @@ def project_account(db, user, acc, external_ids=None, date_from=None, date_to=No
             if acc.channel == 'Kaspi' and payload.get('record_type') in {'order_entry', 'delivery_charge', 'return_delivery_charge'}:
                 # Financial periods follow completion/return, not order placement.
                 # A September order delivered in October belongs to October.
-                returned = str(payload.get('order_status') or '').upper() in RETURNED_KASPI
-                value = ((payload.get('returned_date') or payload.get('return_date')) if returned else None)
-                value = value or payload.get('completed_date') or payload.get('order_creation_date')
+                if payload.get('record_type') == 'return_delivery_charge' or (str(payload.get('order_status') or '').upper() in RETURNED_KASPI and payload.get('record_type') == 'order_entry'):
+                    value = payload.get('returned_date') or payload.get('return_date')
+                else:
+                    value = payload.get('completed_date')
             else:
                 value = (payload.get('order_creation_date') or payload.get('completed_date')
                      or payload.get('saleDt') or payload.get('sale_dt') or payload.get('date')
