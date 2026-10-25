@@ -1596,10 +1596,12 @@ function MarketplaceInbox({ channel, ctx }) {
     const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}`;
     if (kaspiAutoSyncRef.current.has(key)) return;
     kaspiAutoSyncRef.current.add(key);
-    Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}&force=true`,{method:"POST",timeoutMs:10000})))
+    // Let the API cache decide whether this range needs a pull. A page view must
+    // never force a historical re-download.
+    Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}`,{method:"POST",timeoutMs:10000})))
       .then(()=>setSummaryReload(v=>v+1));
   },[channel,accountKey,ctx.start,ctx.end,kaspiReportMode,canSyncKaspi]);
-  const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress;
+  const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress && !summary.data?.sync_errors?.length;
   useEffect(()=>{
     if (!activeSync) return;
     const timer=window.setInterval(()=>setSummaryReload(v=>v+1),5000);
@@ -1655,12 +1657,7 @@ function MarketplaceInbox({ channel, ctx }) {
     {channel === "Kaspi" && <div className="row-actions kaspi-report-controls" role="group" aria-label="Режим отчёта Kaspi">
       <button type="button" className={kaspiReportMode==="issued"?"primary":""} aria-pressed={kaspiReportMode==="issued"} onClick={()=>setKaspiReportMode("issued")}>Продажи по дате выдачи</button>
       <button type="button" className={kaspiReportMode==="created"?"primary":""} aria-pressed={kaspiReportMode==="created"} onClick={()=>setKaspiReportMode("created")}>Заказы по дате создания</button>
-      {can(ctx.auth,"accounts",true) && <button type="button" disabled={busy || !accounts.length} onClick={()=>run(async()=>{
-        const results=await Promise.allSettled(accounts.map(a=>api(`/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}`,{method:"POST",timeoutMs:10000})));
-        const failed=results.find(x=>x.status==="rejected");
-        if(failed) throw failed.reason;
-        setSummaryReload(v=>v+1);ctx.notify("Синхронизация Kaspi за выбранный диапазон запущена.");
-      })}>Синхронизировать период</button>}
+
       <span className="muted">Последняя попытка: {(kaspiReportMode==="created"?created.last_sync:m.last_sync)?new Date(kaspiReportMode==="created"?created.last_sync:m.last_sync).toLocaleString("ru-RU"):"нет данных"}</span>
     </div>}
     {channel === "Kaspi" && (m.sync_errors?.length || created.sync_errors?.length) ? <p className="error-box" role="alert">Синхронизация не подтверждена. Показаны сохранённые данные, если они есть. {(kaspiReportMode==="created"?created.sync_errors:m.sync_errors)?.join("; ")}</p> : null}
@@ -1673,8 +1670,7 @@ function MarketplaceInbox({ channel, ctx }) {
         </tbody></table></div>
       </>}
     </> : null}
-    {channel === "Kaspi" && (m.sync_errors?.length || created.sync_errors?.length) ? <p className="error-box" role="alert">Синхронизация не подтверждена. Показаны сохранённые данные, если они есть. {(kaspiReportMode === "created" ? created.sync_errors : m.sync_errors)?.join("; ")}</p> : null}
-    {channel === "Kaspi" && m.sync_in_progress && kaspiReportMode === "issued" && <p className="muted" role="status">Идёт синхронизация истории Kaspi. Сохранённые итоги обновятся после завершения.</p>}
+    {channel === "Kaspi" && m.sync_in_progress && !m.sync_errors?.length && kaspiReportMode === "issued" && <p className="muted" role="status">Обновляем выбранный период Kaspi в фоне. Страница продолжает показывать сохранённые итоги.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"],["costs","Себестоимость"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
     {channel === "Wildberries" && wbTab === "costs" && <WBCostManager accounts={accounts} company={ctx.company} notify={ctx.notify}/>}
     {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
