@@ -246,3 +246,27 @@ def test_ozon_accrual_null_posting_does_not_crash_sync(monkeypatch):
     accruals = [r for r in result.records if r.get("record_type") == "finance_accrual"]
     assert accruals
     assert accruals[0]["external_id"].startswith("accrual:")
+
+def test_kaspi_long_selected_period_is_paged_in_one_week_api_windows(monkeypatch):
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    from urllib.parse import parse_qs, urlparse
+
+    calls = []
+    def fake_request(url, headers, timeout=20, method="GET", payload=None, retries=2):
+        calls.append(url)
+        return 200, {"data": [], "meta": {"pageCount": 0}}
+
+    monkeypatch.setattr(connectors, "_json_request", fake_request)
+    tz = ZoneInfo("Asia/Almaty")
+    start = int(datetime(2026, 10, 1, 0, 0, tzinfo=tz).timestamp() * 1000)
+    until = int(datetime(2026, 10, 25, 0, 0, tzinfo=tz).timestamp() * 1000) - 1
+    cursor = connectors.json.dumps({"_qor_kaspi_cursor": 1, "scope": "period",
+        "start_ms": start, "until_ms": until, "page": 0, "offset": 0})
+    result = KaspiConnector(acc("Kaspi"), {"token": "x"}).fetch(cursor)
+    query = parse_qs(urlparse(calls[0]).query)
+    assert query["filter[orders][creationDate][$ge]"] == [str(start)]
+    assert query["filter[orders][creationDate][$le]"][0] < str(until)
+    next_state = connectors.json.loads(result.next_cursor)
+    assert next_state["start_ms"] == int(datetime(2026, 10, 8, 0, 0, tzinfo=tz).timestamp() * 1000)
+

@@ -106,6 +106,13 @@ def _json_request(url, headers, timeout=20, method="GET", payload=None, retries=
                         "Проверьте токен и разрешения для этого раздела."
                     )
                 raise AccessRequired("API отклонил ключ или недостаточно прав доступа.")
+            if exc.code == 400 and "kaspi.kz" in url:
+                # Keep the provider response body private; surface a useful,
+                # non-secret explanation instead of the generic marketplace code.
+                raise AccessRequired(
+                    "Kaspi отклонил параметры запроса выбранного периода (HTTP 400). "
+                    "Последние подтверждённые данные сохранены."
+                )
             if exc.code == 429 and attempt < retries:
                 time.sleep(_retry_delay(exc.headers, 60 if "wildberries.ru" in url else 1))
                 continue
@@ -169,7 +176,7 @@ class KaspiConnector(Connector):
                         if state.get("start_ms") else max(history_start, now - timedelta(days=7)))
         page = max(0, int(state.get("page") or 0))
         offset = max(0, int(state.get("offset") or 0))
-        window_end = (until if period_mode else min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until))
+        window_end = (until if status_only else min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until))
         params = {"page[number]": page, "page[size]": 10 if period_mode else 100,
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
@@ -186,19 +193,21 @@ class KaspiConnector(Connector):
         if period_mode and not selected:
             page_count = (payload.get("meta") or {}).get("pageCount")
             no_more_pages = not data or (page_count is not None and page >= int(page_count))
-            if no_more_pages:
+            # Finish every selected-date chunk before refreshing older orders.
+            if no_more_pages and (status_only or window_end >= until):
                 extra_ids = state.get("extra_ids") or []
                 extra_offset = max(0, int(state.get("extra_offset") or 0))
-                selected = []
                 extra_batch = extra_ids[extra_offset:extra_offset+10]
                 extras_requested = len(extra_batch)
-                for code in extra_batch:
-                    _, detail = _json_request(self.base_url + "?" + urlencode({"filter[orders][code]":str(code)}), self._headers())
-                    items = detail.get("data") or []
-                    selected.extend(items[:1])
-                    if not items:
-                        missing_errors.append(f"Kaspi: заказ с code={code} не найден при обновлении статуса")
-                extras_selected = True
+                if extra_batch:
+                    selected = []
+                    for code in extra_batch:
+                        _, detail = _json_request(self.base_url + "?" + urlencode({"filter[orders][code]":str(code)}), self._headers())
+                        items = detail.get("data") or []
+                        selected.extend(items[:1])
+                        if not items:
+                            missing_errors.append(f"Kaspi: заказ с code={code} не найден при обновлении статуса")
+                    extras_selected = True
         records = {}; errors = missing_errors; pages = 1
         included = payload.get("included") or []
         for item in selected:
@@ -307,12 +316,24 @@ class KaspiConnector(Connector):
             if period_mode:
                 extra_ids = state.get("extra_ids") or []
                 extra_offset = max(0, int(state.get("extra_offset") or 0))
-                next_state = ({"_qor_kaspi_cursor":1,"scope":"period","start_ms":int(window_start.timestamp()*1000),
-                    "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0,
-                    "extra_ids":extra_ids,"extra_offset":extra_offset} if has_more_pages else
-                    ({"_qor_kaspi_cursor":1,"scope":"period","start_ms":int(window_start.timestamp()*1000),
-                    "until_ms":int(until.timestamp()*1000),"page":page,"offset":len(data),
-                    "extra_ids":extra_ids,"extra_offset":extra_offset} if extra_offset < len(extra_ids) else None))
+                if has_more_pages:
+                    next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
+                        "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0,
+                        "extra_ids":extra_ids,"extra_offset":extra_offset}
+                elif not status_only and window_end < until:
+                    # Kaspi accepts date-range filters but may reject wide windows.
+                    # Split the selected range into one-week API windows without
+                    # requesting anything outside the user's selected dates.
+                    next_state = {"_qor_kaspi_cursor":1,"scope":"period",
+                        "start_ms":int((window_end+timedelta(milliseconds=1)).timestamp()*1000),
+                        "until_ms":int(until.timestamp()*1000),"page":0,"offset":0,
+                        "extra_ids":extra_ids,"extra_offset":extra_offset}
+                elif extra_offset < len(extra_ids):
+                    next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,
+                        "start_ms":int(window_start.timestamp()*1000),"until_ms":int(until.timestamp()*1000),
+                        "page":page,"offset":len(data),"extra_ids":extra_ids,"extra_offset":extra_offset}
+                else:
+                    next_state = None
             elif has_more_pages:
                 next_state = {"_qor_kaspi_cursor":1,"direction":direction,"start_ms":int(window_start.timestamp()*1000),
                               "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0}
