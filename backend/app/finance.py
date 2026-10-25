@@ -30,8 +30,9 @@ def rounded(numerator, denominator):
 def kaspi_commission_estimates(db, user, start, end, company_id, account_id, sales, expenses, accounts):
     """Return estimated Kaspi fees by (account_id, order day), without booking cash.
 
-    Only completed API order entries qualify. An explicit marketplace commission
-    on the same seller/day takes precedence so a fee is never counted twice.
+    Only completed API order entries qualify. An explicit fee on the same seller/day
+    takes precedence. If fees are present elsewhere in the selected period, unlinked
+    estimates are suppressed and a reconciliation warning is returned.
     """
     import os
     from . import marketplace_pipeline
@@ -49,6 +50,14 @@ def kaspi_commission_estimates(db, user, start, end, company_id, account_id, sal
         if e.category in {"Marketplace commission", "Marketplace commission VAT"}
     }
     actual_days.update((sale.account_id, sale.date) for sale in sales if sale.commission > 0)
+    # Explicit Kaspi fee rows may be dated on settlement/reporting day, while
+    # order entries use completion day. Avoid adding unlinked estimates as if
+    # they were a second confirmed fee when actual fees exist in the period.
+    actual_period_accounts = {
+        e.account_id for e in expenses
+        if e.account_id and e.category in {"Marketplace commission", "Marketplace commission VAT"}
+    }
+    actual_period_accounts.update(sale.account_id for sale in sales if sale.commission > 0)
 
     account_ids = [a.id for a in accounts.values() if a.channel == "Kaspi"]
     if account_id:
@@ -78,12 +87,17 @@ def kaspi_commission_estimates(db, user, start, end, company_id, account_id, sal
                 continue
             bases[(raw.account_id, day)] += max(0, base)
 
-    estimates = {
-        key: (base * bps + 5000) // 10000
-        for key, base in bases.items()
-        if key not in actual_days
-    }
-    return estimates, str(rate)
+    estimates = {}
+    suppressed = False
+    for key, base in bases.items():
+        if key in actual_days:
+            continue
+        amount = (base * bps + 5000) // 10000
+        if key[0] in actual_period_accounts:
+            suppressed = suppressed or amount > 0
+            continue
+        estimates[key] = amount
+    return estimates, str(rate), suppressed
 
 
 def get_company(db, user, cid):
@@ -359,21 +373,80 @@ def settle_pending_sale_cogs(db, user, sale_obj):
     return True
 
 
-def restore_return_cost(db, sale_obj, ret):
-    need=ret.quantity; cost=0
-    allocations=db.scalars(select(Allocation).where(Allocation.sale_id==sale_obj.id).order_by(Allocation.id).with_for_update()).all()
-    for a in allocations:
-        n=min(need,a.quantity-a.returned)
-        if not n: continue
-        c=a.cost-a.returned_cost if n==a.quantity-a.returned else rounded((a.cost-a.returned_cost)*n,a.quantity-a.returned)
-        b=db.scalar(select(Batch).where(Batch.id==a.batch_id).with_for_update())
-        a.returned+=n; a.returned_cost+=c; b.remaining+=n; b.remaining_cost+=c
-        cost+=c; need-=n
-        db.add(Movement(company_id=sale_obj.company_id,product_id=sale_obj.product_id,batch_id=b.id,
-            date=ret.date,quantity=n,cost=c,kind='return',reference=ret.reference))
-    if need: fail('Не удалось восстановить FIFO возврата')
-    ret.cogs=cost
+def restock_return_inventory(db, user, ret):
+    """Add a inspected, saleable return to FIFO stock once."""
+    ret = db.scalar(select(Return).where(Return.id == ret.id).with_for_update())
+    if not ret:
+        fail("Возврат не найден")
+    if ret.inventory_status != "restocked":
+        fail("Возврат не прошёл проверку пригодности")
+    sale = db.get(Sale, ret.sale_id)
+    if not sale:
+        fail("Исходная продажа не найдена")
+    lock_product(db, sale.product_id)
+    links = db.scalars(
+        select(ReturnInventoryAllocation)
+        .where(ReturnInventoryAllocation.return_id == ret.id)
+        .order_by(ReturnInventoryAllocation.id)
+        .with_for_update()
+    ).all()
+    restored = 0
+    for link in links:
+        if link.restocked:
+            continue
+        batch = db.scalar(select(Batch).where(Batch.id == link.batch_id).with_for_update())
+        if not batch or batch.product_id != sale.product_id or batch.company_id != ret.company_id:
+            fail("FIFO-партия возврата не найдена")
+        batch.remaining += link.quantity
+        batch.remaining_cost += link.cost
+        link.restocked = True
+        db.add(Movement(
+            company_id=ret.company_id, product_id=sale.product_id, batch_id=batch.id,
+            date=business_today(), quantity=link.quantity, cost=link.cost,
+            kind="return", reference=f"return-restock:{ret.id}:{link.id}",
+        ))
+        restored += link.quantity
     db.flush()
+    return restored
+
+
+def restore_return_cost(db, sale_obj, ret):
+    """Attach the original FIFO batches to a return after a pending sale gets cost."""
+    need = ret.quantity
+    cost = 0
+    allocations = db.scalars(
+        select(Allocation).where(Allocation.sale_id == sale_obj.id)
+        .order_by(Allocation.id).with_for_update()
+    ).all()
+    links = []
+    for allocation in allocations:
+        quantity = min(need, allocation.quantity - allocation.returned)
+        if not quantity:
+            continue
+        amount = (
+            allocation.cost - allocation.returned_cost
+            if quantity == allocation.quantity - allocation.returned
+            else rounded((allocation.cost - allocation.returned_cost) * quantity,
+                         allocation.quantity - allocation.returned)
+        )
+        allocation.returned += quantity
+        allocation.returned_cost += amount
+        links.append(ReturnInventoryAllocation(
+            return_id=ret.id, batch_id=allocation.batch_id,
+            quantity=quantity, cost=amount, restocked=False,
+        ))
+        cost += amount
+        need -= quantity
+        if not need:
+            break
+    if need:
+        fail("Не удалось связать возврат с исходными FIFO-партиями")
+    ret.cogs = cost
+    db.add_all(links)
+    db.flush()
+    if ret.inventory_status == "restocked":
+        restock_return_inventory(db, None, ret)
+    return cost
 
 
 def reconcile_pending_cogs(db,user,company_id,product_ids=None):
@@ -402,95 +475,85 @@ def opening_inventory(db,user,p):
 
 
 def return_sale(db, user, p):
-    s = db.get(Sale, p.sale_id)
-    if not s:
+    sale = db.get(Sale, p.sale_id)
+    if not sale:
         fail("Продажа не найдена")
-    get_company(db, user, s.company_id)
-    lock_product(db, s.product_id)
-    s = db.scalar(select(Sale).where(Sale.id == s.id).with_for_update())
-    check_date(db, s.company_id, p.date)
-    if p.date < s.date:
+    get_company(db, user, sale.company_id)
+    lock_product(db, sale.product_id)
+    sale = db.scalar(select(Sale).where(Sale.id == sale.id).with_for_update())
+    check_date(db, sale.company_id, p.date)
+    if p.date < sale.date:
         fail("Возврат раньше продажи")
     allocations = db.scalars(
-        select(Allocation)
-        .where(Allocation.sale_id == s.id)
-        .order_by(Allocation.id)
-        .with_for_update()
+        select(Allocation).where(Allocation.sale_id == sale.id)
+        .order_by(Allocation.id).with_for_update()
     ).all()
     prior_return_units = db.scalar(
-        select(func.coalesce(func.sum(Return.quantity), 0)).where(Return.sale_id == s.id)
+        select(func.coalesce(func.sum(Return.quantity), 0)).where(Return.sale_id == sale.id)
     )
-    available_return_units = (s.quantity - prior_return_units) if s.cogs_pending else sum(a.quantity - a.returned for a in allocations)
-    if p.quantity > available_return_units:
+    available = (sale.quantity - prior_return_units) if sale.cogs_pending else sum(
+        allocation.quantity - allocation.returned for allocation in allocations
+    )
+    if p.quantity > available:
         fail("Возврат превышает проданное количество")
     returned_revenue = db.scalar(
-        select(func.coalesce(func.sum(Return.revenue), 0)).where(Return.sale_id == s.id)
+        select(func.coalesce(func.sum(Return.revenue), 0)).where(Return.sale_id == sale.id)
     )
-    previously_returned = prior_return_units if s.cogs_pending else sum(a.returned for a in allocations)
+    previously_returned = prior_return_units if sale.cogs_pending else sum(
+        allocation.returned for allocation in allocations
+    )
     revenue = (
-        s.revenue - returned_revenue
-        if p.quantity == s.quantity - previously_returned
-        else rounded(s.revenue * p.quantity, s.quantity)
+        sale.revenue - returned_revenue
+        if p.quantity == sale.quantity - previously_returned
+        else rounded(sale.revenue * p.quantity, sale.quantity)
     )
     if p.refund > revenue:
         fail("Выплата больше суммы возврата")
     net_paid = db.scalar(
-        select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
-            CashEntry.sale_id == s.id
-        )
+        select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.sale_id == sale.id)
     )
     if p.refund > net_paid:
         fail("Нельзя вернуть больше полученной оплаты")
+
     need = p.quantity
     cost = 0
-    for a in allocations:
-        n = min(need, a.quantity - a.returned)
-        if not n:
+    links = []
+    for allocation in allocations:
+        quantity = min(need, allocation.quantity - allocation.returned)
+        if not quantity:
             continue
-        c = (
-            a.cost - a.returned_cost
-            if n == a.quantity - a.returned
-            else rounded((a.cost - a.returned_cost) * n, a.quantity - a.returned)
-        )
-        b = db.scalar(select(Batch).where(Batch.id == a.batch_id).with_for_update())
-        a.returned += n
-        a.returned_cost += c
-        b.remaining += n
-        b.remaining_cost += c
-        cost += c
-        need -= n
-        db.add(
-            Movement(
-                company_id=s.company_id,
-                product_id=s.product_id,
-                batch_id=b.id,
-                date=p.date,
-                quantity=n,
-                cost=c,
-                kind="return",
-                reference=p.reference,
+        amount = (
+            allocation.cost - allocation.returned_cost
+            if quantity == allocation.quantity - allocation.returned
+            else rounded(
+                (allocation.cost - allocation.returned_cost) * quantity,
+                allocation.quantity - allocation.returned,
             )
         )
+        batch = db.scalar(select(Batch).where(Batch.id == allocation.batch_id).with_for_update())
+        allocation.returned += quantity
+        allocation.returned_cost += amount
+        links.append((batch.id, quantity, amount))
+        cost += amount
+        need -= quantity
+        if not need:
+            break
+
     obj = Return(
-        company_id=s.company_id,
-        sale_id=s.id,
-        date=p.date,
-        reference=p.reference,
-        quantity=p.quantity,
-        revenue=revenue,
-        cogs=cost,
+        company_id=sale.company_id, sale_id=sale.id, date=p.date,
+        reference=p.reference, quantity=p.quantity, revenue=revenue, cogs=cost,
+        inventory_status="requested",
     )
     db.add(obj)
     db.flush()
+    for batch_id, quantity, amount in links:
+        db.add(ReturnInventoryAllocation(
+            return_id=obj.id, batch_id=batch_id, quantity=quantity, cost=amount,
+        ))
     cash_entry(
-        db,
-        company_id=s.company_id,
-        sale_id=s.id,
-        reference="return:" + p.reference,
-        date=p.date,
-        amount=-p.refund,
-        category="Возврат",
-        description=s.reference,
+        db, company_id=sale.company_id, sale_id=sale.id,
+        reference="return:" + p.reference, date=p.date, amount=-p.refund,
+        category="Возврат", description=sale.reference,
     )
     audit(db, user, "post", "returns", obj.id)
     return obj
@@ -661,6 +724,10 @@ def report(db, user, start, end, company_id=None, account_id=None):
     sales = [s for s in rows(Sale) if s.account_id in active_account_ids]
     allsales = {s.id: s for s in rows(Sale, False)}
     returns = [r for r in rows(Return) if allsales.get(r.sale_id) and allsales[r.sale_id].account_id in active_account_ids]
+    pending_return_inspection_units = sum(
+        r.quantity for r in returns
+        if r.inventory_status in {"requested", "approved", "in_transit", "received", "inspection"}
+    )
     expenses = [e for e in rows(Expense) if e.account_id is None or e.account_id in active_account_ids]
     if account_id:
         sales = [s for s in sales if s.account_id == account_id]
@@ -693,12 +760,14 @@ def report(db, user, start, end, company_id=None, account_id=None):
         except Pending: day=None
         if day is None or start<=day<=end: pending_sources.append(raw)
     profit_complete = not pending_cogs_sales and not pending_return_sales and not pending_sources
-    cogs = sum(sale_cogs.get(s.id, s.cogs) for s in sales) - sum(return_cogs.get(r.id, r.cogs) for r in returns)
+    net_profit_complete = profit_complete and pending_return_inspection_units == 0
+    restocked_returns = [r for r in returns if r.inventory_status == "restocked"]
+    cogs = sum(sale_cogs.get(s.id, s.cogs) for s in sales) - sum(return_cogs.get(r.id, r.cogs) for r in restocked_returns)
     commission_categories = {"Marketplace commission", "Marketplace commission VAT"}
     commission_actual = sum(s.commission for s in sales) + sum(
         e.amount for e in expenses if e.category in commission_categories
     )
-    kaspi_estimates, commission_rate = kaspi_commission_estimates(
+    kaspi_estimates, commission_rate, commission_estimate_suppressed = kaspi_commission_estimates(
         db, user, start, end, company_id, account_id, sales, expenses, accounts
     )
     commission_estimated = sum(kaspi_estimates.values())
@@ -717,7 +786,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
     known_np = known_gp - commissions - logistics - ads - operating
     # Revenue/units remain authoritative. Profit requires FIFO or a dated marketplace cost.
     gp = known_gp if profit_complete else None
-    np = known_np if profit_complete else None
+    np = known_np if net_profit_complete else None
     cash = rows(CashEntry, False)
     cash_period = [c for c in cash if start <= c.date <= end]
     cash_opening = sum(c.amount for c in cash if c.date < start)
@@ -819,24 +888,25 @@ def report(db, user, start, end, company_id=None, account_id=None):
             categories[catalog[s.product_id].category or 'Без категории']['pending_cogs']+=1
         ch = channels[accounts[s.account_id].name]
         ch["revenue"] -= r.revenue
-        ch["cogs"] -= return_cogs.get(r.id, r.cogs)
+        return_cost = return_cogs.get(r.id, r.cogs) if r.inventory_status == "restocked" else 0
+        ch["cogs"] -= return_cost
         ch["quantity"] -= r.quantity
         ct = channel_totals[accounts[s.account_id].channel]
         ct["revenue"] -= r.revenue
-        ct["cogs"] -= return_cogs.get(r.id, r.cogs)
+        ct["cogs"] -= return_cost
         ct["quantity"] -= r.quantity
         ct["returns"] += r.revenue
         ct["return_units"] += r.quantity
         pr = products[s.product_id]
         pr["revenue"] -= r.revenue
-        pr["cogs"] -= return_cogs.get(r.id, r.cogs)
+        pr["cogs"] -= return_cost
         pr["quantity"] -= r.quantity
         cat = categories[catalog[s.product_id].category or "Без категории"]
         cat["revenue"] -= r.revenue
-        cat["cogs"] -= return_cogs.get(r.id, r.cogs)
+        cat["cogs"] -= return_cost
         cat["quantity"] -= r.quantity
         daily[str(r.date)]["revenue"] -= r.revenue
-        daily[str(r.date)]["profit"] -= r.revenue - return_cogs.get(r.id, r.cogs)
+        daily[str(r.date)]["profit"] -= r.revenue - return_cost
     for e in expenses:
         daily[str(e.date)]["profit"] -= e.amount
         if e.account_id:
@@ -902,11 +972,15 @@ def report(db, user, start, end, company_id=None, account_id=None):
         "gross_profit": gp,
         "net_profit": np,
         "profit_complete": profit_complete,
+        "net_profit_complete": net_profit_complete,
+        "financial_complete": net_profit_complete,
+        "pending_return_inspection_units": pending_return_inspection_units,
         "pending_cogs_sales": len({s.id for s in pending_cogs_sales} | pending_return_sales),
         "known_net_before_pending_cogs": known_np,
         "commission": commissions,
         "commission_actual": commission_actual,
         "commission_estimated": commission_estimated,
+        "commission_estimate_suppressed": commission_estimate_suppressed,
         "commission_rate": commission_rate if commission_estimated else None,
         "logistics": logistics,
         "advertising": ads,
@@ -968,7 +1042,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
             }
             for pid, v in products.items()
         ],
-        "daily": [{"date": k, **v, "profit": v["profit"] if profit_complete else None} for k, v in sorted(daily.items())],
+        "daily": [{"date": k, **v, "profit": v["profit"] if net_profit_complete else None} for k, v in sorted(daily.items())],
         "stock": stockrows,
         "stock_alerts": [s for s in stockrows if s["quantity"] <= s["min_stock"]],
         "slow_products": [s for s in stockrows if s["quantity"] > 0 and s["sold"] <= 0],
@@ -1022,7 +1096,7 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
         rows += [item(r.date, "Возврат", r.reference, "Уменьшение выручки", -r.revenue, r.id) for r in returns]
     elif metric == "cogs":
         rows += [item(s.date, "Продажа", s.reference, "Себестоимость проданного", -s.cogs, s.id) for s in sales]
-        rows += [item(r.date, "Возврат", r.reference, "Восстановление себестоимости", r.cogs, r.id) for r in returns]
+        rows += [item(r.date, "Возврат", r.reference, "Восстановление себестоимости", r.cogs, r.id) for r in returns if r.inventory_status == "restocked"]
     elif metric in {"commission", "logistics"}:
         attr = metric
         title = "Комиссия" if metric == "commission" else "Логистика"
@@ -1031,7 +1105,7 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
         rows += [item(e.date, "Корректировка расхода" if e.amount < 0 else "Расход", e.reference,
                       e.description or e.category, -e.amount, e.id) for e in expenses if e.category in categories]
         if metric == "commission":
-            estimates, rate = kaspi_commission_estimates(
+            estimates, rate, _suppressed = kaspi_commission_estimates(
                 db, user, start, end, company_id, account_id, sales, expenses, accounts
             )
             rows += [

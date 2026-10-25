@@ -266,6 +266,22 @@ class Return(Record, Base):
     quantity: Mapped[int] = mapped_column(Integer)
     revenue: Mapped[int] = mapped_column(BigInteger)
     cogs: Mapped[int] = mapped_column(BigInteger)
+    # Existing returns were already restocked by the previous posting logic.
+    # New returns start pending and become available only after inspection.
+    inventory_status: Mapped[str] = mapped_column(String(30), default="requested", server_default="requested")
+
+
+class ReturnInventoryAllocation(Record, Base):
+    __tablename__ = "return_inventory_allocations"
+    return_id: Mapped[int] = mapped_column(ForeignKey("returns.id"), index=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("batches.id"), index=True)
+    quantity: Mapped[int] = mapped_column(Integer)
+    cost: Mapped[int] = mapped_column(BigInteger)
+    restocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (
+        CheckConstraint("quantity > 0 AND cost >= 0"),
+        UniqueConstraint("return_id", "batch_id", name="uq_return_inventory_return_batch"),
+    )
 
 
 class Movement(Record, Base):

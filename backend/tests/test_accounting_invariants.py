@@ -4,7 +4,7 @@ These tests intentionally exercise boundaries where ERP systems commonly drift:
 period cut-offs, receivables, landed cost, channel attribution, refunds and cash/accrual separation.
 All monetary values are integer tiyn.
 """
-from .conftest import buy, sell, post, report
+from .conftest import buy, sell, post, report, restock_return
 
 
 def account_report(client, account_id, start="2026-10-01", end="2026-10-31"):
@@ -107,7 +107,13 @@ def test_zero_cost_inventory_can_be_sold_without_division_errors(client):
 def test_full_return_reverses_revenue_cogs_units_but_not_sale_costs(client):
     buy(client, qty=2, cost=1000)
     s = sell(client, qty=2, price=3000, commission=300, logistics=100, advertising=50)
-    post(client, "returns", sale_id=s["id"], reference="R-FULL", date="2026-10-03", quantity=2)
+    ret = post(client, "returns", sale_id=s["id"], reference="R-FULL", date="2026-10-03", quantity=2)
+    # While return inventory is pending inspection, original COGS stays recognized.
+    pending = report(client)
+    assert pending["revenue"] == 0
+    assert pending["cogs"] == 2000
+    assert pending["net_profit"] is None
+    restock_return(client, ret["id"])
     r = report(client)
     assert r["revenue"] == 0
     assert r["cogs"] == 0

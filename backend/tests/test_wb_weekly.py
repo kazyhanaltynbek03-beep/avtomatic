@@ -92,7 +92,7 @@ def test_xlsx_totals_use_full_report_including_unallocated_operations():
     book = load_workbook(BytesIO(wb_weekly.create_xlsx(report)), data_only=True)
     assert book.sheetnames == ["Финансовый итог", "Продажи по товарам", "Себестоимость", "Расходы Wildberries", "Возвраты", "Прибыль и маржинальность", "Сверка с Wildberries"]
     assert book["Финансовый итог"]["B5"].value == 90
-    assert book["Расходы Wildberries"]["B5"].value == 15  # standalone delivery remains report-level
+    assert book["Расходы Wildberries"]["B6"].value == 15  # direct logistics row; standalone delivery remains report-level
     book.close()
 
 
@@ -116,7 +116,7 @@ def test_weekly_sync_is_idempotent_and_xlsx_is_real_workbook(client, monkeypatch
         report = wb_weekly.build_report(db, account, start, end)
         product = report["products"][0]
         assert product["payout"] == "700.00"
-        assert product["direct_logistics"] == "50.00"
+        assert product["direct_logistics"] is None  # delivery without product identity stays report-level
         assert product["profit"] is None  # missing actual FIFO cost; no invented profit
         xlsx = wb_weekly.create_xlsx(report)
         book = load_workbook(BytesIO(xlsx), data_only=False)
@@ -206,7 +206,7 @@ def test_fifo_cost_matches_wb_sale_and_return_ids_not_settlement_dates(client, m
         db.add(sale); db.flush()
         db.add(Return(company_id=1, sale_id=sale.id,
             reference=wb_reference(account, "realization:4902", "return"), date=date(2026, 10, 2),
-            quantity=1, revenue=90000, cogs=40000))
+            quantity=1, revenue=90000, cogs=40000, inventory_status="restocked"))
         db.commit()
         wb_weekly.sync_week(db, account, "token", start, end)
         report = wb_weekly.build_report(db, account, start, end)

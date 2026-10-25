@@ -18,6 +18,7 @@ export async function api(path, options = {}) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const abortFromCaller = () => controller.abort();
   callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  if (callerSignal?.aborted) controller.abort();
   try {
     const res = await fetch("/api" + path, {
       credentials: "same-origin",

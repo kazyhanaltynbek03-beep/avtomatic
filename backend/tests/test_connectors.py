@@ -17,6 +17,15 @@ def test_kaspi_reports_missing_secret(monkeypatch):
     assert s["configured"] is False
     assert s["missing"] == ["token"]
 
+def test_kaspi_period_day_uses_almaty_timezone():
+    from app.marketplace_pipeline import _day
+
+    epoch_ms = int(datetime(2026, 10, 23, 22, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert str(_day(epoch_ms)) == "2026-10-23"
+    assert str(_day(epoch_ms, "Asia/Almaty")) == "2026-10-24"
+
+
+
 def test_ozon_uses_two_server_side_secrets(monkeypatch):
     s = OzonConnector(acc("Ozon", ref="SHOP"), {"client_id":"x"}).connection_status()
     assert s["configured"] is False
@@ -86,7 +95,7 @@ def test_kaspi_sync_starts_with_latest_week_then_walks_back(monkeypatch):
     assert first_state["direction"] == "backward"
     first_start = first_state["start_ms"]
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    assert now_ms - first_start == pytest.approx(7 * 24 * 60 * 60 * 1000, abs=5000)
+    assert now_ms - first_start == pytest.approx(14 * 24 * 60 * 60 * 1000, abs=5000)
 
     second = c.fetch(first.next_cursor)
     second_state = connectors.json.loads(second.next_cursor)
@@ -95,28 +104,34 @@ def test_kaspi_sync_starts_with_latest_week_then_walks_back(monkeypatch):
     assert first_start - second_state["start_ms"] == 7 * 24 * 60 * 60 * 1000
 
 
-def test_kaspi_keeps_seller_and_return_delivery_fields_separate(monkeypatch):
-    issued_ms=1792627200000
+def test_kaspi_preserves_return_status_even_when_order_has_completion_date(monkeypatch):
+    issued_ms = 1792627200000
     def fake_request(url, headers, timeout=20, method="GET", payload=None, retries=2):
         if "/entries?" in url:
-            return 200, {"data": [], "meta": {"pageCount": 0}}
+            return 200, {"data": [{"id": "entry-1", "attributes": {"quantity": 1, "totalPrice": 1250}}], "meta": {"pageCount": 1}}
+        if "/orderentries/entry-1/product" in url:
+            return 200, {"data": {"id": "product-1", "attributes": {"name": "Item"}}}
+        if "/masterproducts/product-1/merchantProduct" in url:
+            return 200, {"data": {"attributes": {"code": "SKU-1", "name": "Item"}}}
         if "/orders?" in url:
-            return 200, {"data": [{"id":"returned-order","attributes":{
-                "status":"RETURNED","creationDate":issued_ms,"completionDate":issued_ms+86400000,
-                "deliveryCost":950,"deliveryCostForSeller":1250,"returnDeliveryCostForSeller":700,
-                "returnDate":issued_ms+172800000,
-            }}],"meta":{"pageCount":1}}
+            return 200, {"data": [{"id": "returned-order", "attributes": {
+                "status": "RETURNED", "creationDate": issued_ms, "completionDate": issued_ms + 86400000,
+                "deliveryCost": 950, "deliveryCostForSeller": 1250, "returnDeliveryCostForSeller": 700,
+                "returnDate": issued_ms + 172800000,
+            }}], "meta": {"pageCount": 1}}
         raise AssertionError(f"unexpected Kaspi route: {url}")
-    monkeypatch.setattr(connectors,"_json_request",fake_request)
-    result=KaspiConnector(acc("Kaspi"),{"token":"x"}).fetch()
-    order=next(x for x in result.records if x["record_type"]=="order")
-    seller=next(x for x in result.records if x["record_type"]=="delivery_charge")
-    returned=next(x for x in result.records if x["record_type"]=="return_delivery_charge")
-    assert order["delivery_cost_for_buyer"]==950
-    assert order["delivery_cost_for_seller"]==1250
-    assert order["completion_date"]==issued_ms+86400000
-    assert seller["amount"]==1250 and seller["order_status"]=="COMPLETED"
-    assert returned["amount"]==700 and returned["returned_date"]==issued_ms+172800000
+    monkeypatch.setattr(connectors, "_json_request", fake_request)
+    result = KaspiConnector(acc("Kaspi"), {"token": "x"}).fetch()
+    order = next(x for x in result.records if x["record_type"] == "order")
+    seller = next(x for x in result.records if x["record_type"] == "delivery_charge")
+    returned = next(x for x in result.records if x["record_type"] == "return_delivery_charge")
+    entry = next(x for x in result.records if x["record_type"] == "order_entry")
+    assert order["delivery_cost_for_buyer"] == 950
+    assert order["delivery_cost_for_seller"] == 1250
+    assert order["completion_date"] == issued_ms + 86400000
+    assert seller["amount"] == 1250 and seller["order_status"] == "RETURNED"
+    assert entry["order_status"] == "RETURNED"
+    assert returned["amount"] == 700 and returned["returned_date"] == issued_ms + 172800000
 
 
 def test_kaspi_legacy_forward_cursor_restarts_at_latest_week(monkeypatch):
@@ -134,7 +149,7 @@ def test_kaspi_legacy_forward_cursor_restarts_at_latest_week(monkeypatch):
     state = connectors.json.loads(result.next_cursor)
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     assert state["direction"] == "backward"
-    assert now_ms - state["start_ms"] == pytest.approx(7 * 24 * 60 * 60 * 1000, abs=5000)
+    assert now_ms - state["start_ms"] == pytest.approx(14 * 24 * 60 * 60 * 1000, abs=5000)
 
 
 def test_wildberries_connection_test_checks_finance_permissions(monkeypatch):

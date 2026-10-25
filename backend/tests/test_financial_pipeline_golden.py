@@ -15,7 +15,7 @@ from app import finance as f, importing, main
 from app import schemas as s
 from app.ai import _agent_tool_data
 from app.db import Base, SessionLocal, engine
-from app.models import Account, Company, Customer, Product, Sale, User
+from app.models import Account, Company, Customer, Product, Return, Sale, User
 
 
 START, END = date(2026, 10, 1), date(2026, 10, 31)
@@ -74,12 +74,24 @@ def _common_b2b_and_writeoff(db, user):
         quantity=2, unit_price=250_000, paid=100_000))
 
 
+def _mark_return_sellable(db, user, ret):
+    # Golden scenarios model an official, physically received and inspected return.
+    ret.inventory_status = "restocked"
+    original_today = f.business_today
+    f.business_today = lambda: ret.date
+    try:
+        f.restock_return_inventory(db, user, ret)
+    finally:
+        f.business_today = original_today
+
+
 def _manual(db, user):
     sale = f.sale(db, user, s.SaleIn(company_id=1, account_id=4, reference="SRC-SALE", date=date(2026, 10, 2),
         product_id=1, quantity=4, unit_price=300_000, discount=100_000,
         commission=50_000, logistics=20_000, advertising=30_000, paid=0))
     f.payment(db, user, s.CashIn(company_id=1, sale_id=sale.id, reference="SRC-PAY", date=date(2026, 10, 2), amount=1_100_000, category="Marketplace payout"))
-    f.return_sale(db, user, s.ReturnIn(sale_id=sale.id, reference="SRC-RETURN", date=date(2026, 10, 3), quantity=1, refund=275_000))
+    ret = f.return_sale(db, user, s.ReturnIn(sale_id=sale.id, reference="SRC-RETURN", date=date(2026, 10, 3), quantity=1, refund=275_000))
+    _mark_return_sellable(db, user, ret)
     _common_b2b_and_writeoff(db, user)
 
 
@@ -88,6 +100,9 @@ def _import(db, user, kind, rows, mapping):
     assert not run.errors, run.errors
     db.commit()
     importing.confirm(db, user, run)
+    if kind in {"returns", "marketplace_reports"}:
+        for ret in db.query(Return).filter(Return.inventory_status == "requested").all():
+            _mark_return_sellable(db, user, ret)
     db.commit()
 
 

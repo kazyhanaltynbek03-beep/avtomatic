@@ -8,13 +8,15 @@ import sys
 
 def _alembic(database, revision):
     env = {**os.environ, "DATABASE_URL": f"sqlite:///{database}"}
-    return subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", revision],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         env=env,
     )
+    assert result.returncode == 0, result.stdout + "\\n" + result.stderr
+    return result
 
 
 def test_existing_database_upgrade_preserves_sales_and_defaults_discount(tmp_path):
@@ -32,6 +34,8 @@ def test_existing_database_upgrade_preserves_sales_and_defaults_discount(tmp_pat
               VALUES (1, 'OLD-1', 'Existing SKU', '', 0, 0, 1, '{}', '2026-01-01 00:00:00');
             INSERT INTO sales (id, company_id, account_id, product_id, reference, date, quantity, revenue, cogs, commission, logistics, advertising, created_at)
               VALUES (1, 1, 1, 1, 'OLD-SALE', '2026-01-01', 1, 10000, 4000, 0, 0, 0, '2026-01-01 00:00:00');
+            INSERT INTO returns (id, company_id, sale_id, date, reference, quantity, revenue, cogs, created_at)
+              VALUES (1, 1, 1, '2026-01-02', 'OLD-RETURN', 1, 10000, 4000, '2026-01-02 00:00:00');
             """
         )
         connection.commit()
@@ -42,7 +46,13 @@ def test_existing_database_upgrade_preserves_sales_and_defaults_discount(tmp_pat
     connection = sqlite3.connect(database)
     try:
         assert connection.execute("SELECT reference, revenue, discount FROM sales WHERE id = 1").fetchone() == ("OLD-SALE", 10000, 0)
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("c2f5a8d1e300",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("f98b9c1d2008",)
         assert connection.execute("SELECT active FROM accounts WHERE id = 1").fetchone() == (1,)
+        assert connection.execute("SELECT inventory_status FROM returns WHERE id = 1").fetchone() == ("restocked",)
+        connection.execute(
+            "INSERT INTO returns (id, company_id, sale_id, date, reference, quantity, revenue, cogs, created_at) "
+            "VALUES (2, 1, 1, '2026-01-03', 'NEW-RETURN', 1, 10000, 4000, '2026-01-03 00:00:00')"
+        )
+        assert connection.execute("SELECT inventory_status FROM returns WHERE id = 2").fetchone() == ("requested",)
     finally:
         connection.close()

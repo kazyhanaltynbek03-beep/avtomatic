@@ -1,7 +1,7 @@
 from datetime import date
 
 import pytest
-from .conftest import buy, sell, post, report
+from .conftest import buy, sell, post, report, restock_return
 
 
 def test_dashboard_summary_reuses_selected_finance_report(client):
@@ -98,7 +98,7 @@ def test_partial_return_restores_original_fifo_cost(client):
     buy(client, qty=2, cost=1000)
     buy(client, ref="P2", qty=3, cost=2000, day="2026-10-02")
     s = sell(client, qty=4, price=4000, paid=16000, day="2026-10-03")
-    post(
+    r1 = post(
         client,
         "returns",
         sale_id=s["id"],
@@ -107,12 +107,13 @@ def test_partial_return_restores_original_fifo_cost(client):
         quantity=3,
         refund=12000,
     )
+    restock_return(client, r1["id"])
     r = report(client)
     assert r["revenue"] == 4000
     assert r["cogs"] == 2000
     assert r["stock_value"] == 6000
     assert r["cash"] == 4000
-    post(
+    r2 = post(
         client,
         "returns",
         sale_id=s["id"],
@@ -121,6 +122,7 @@ def test_partial_return_restores_original_fifo_cost(client):
         quantity=1,
         refund=4000,
     )
+    restock_return(client, r2["id"])
     r = report(client)
     assert r["revenue"] == 0
     assert r["cogs"] == 0
@@ -253,9 +255,10 @@ def test_historical_stock_and_cash(client):
 def test_late_return_hits_its_period(client):
     buy(client)
     s = sell(client)
-    post(
+    ret = post(
         client, "returns", sale_id=s["id"], reference="R", date="2026-11-01", quantity=1
     )
+    restock_return(client, ret["id"])
     r = report(client)
     assert r["revenue"] == 9000
     assert r["cogs"] == 3000

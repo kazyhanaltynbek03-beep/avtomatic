@@ -97,6 +97,11 @@ class ReturnIn(Strict):
     refund: int = Field(default=0, ge=0)
 
 
+class ReturnStatusIn(Strict):
+    status: Literal["approved", "in_transit", "received", "inspection", "restocked", "defective", "written_off"]
+    reason: str = Field(default="", max_length=160)
+
+
 class ExpenseIn(Strict):
     source_fx: dict = {}
     company_id: int

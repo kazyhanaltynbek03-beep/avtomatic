@@ -1,5 +1,6 @@
 """Normalize staging into validated canonical events and the existing ERP engine."""
 from datetime import datetime, timezone, date
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 from sqlalchemy import select
@@ -19,15 +20,26 @@ class Pending(ValueError):
     pass
 
 
-def _day(value):
+def _day(value, timezone_name=None):
     if isinstance(value, date) and not isinstance(value, datetime):
         return value
     try:
+        tz = ZoneInfo(timezone_name) if timezone_name else None
         if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value / 1000 if value > 10_000_000_000 else value, timezone.utc).date()
-        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).date()
-    except (ValueError, TypeError, OverflowError):
+            instant = datetime.fromtimestamp(
+                value / 1000 if value > 10_000_000_000 else value, timezone.utc
+            )
+            return instant.astimezone(tz).date() if tz else instant.date()
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if tz and parsed.tzinfo:
+            parsed = parsed.astimezone(tz)
+        return parsed.date()
+    except (ValueError, TypeError, OverflowError, KeyError):
         raise Pending('DATE_MISSING_OR_INVALID')
+
+
+def _day_for_account(value, acc):
+    return _day(value, "Asia/Almaty" if str(getattr(acc, "channel", "")).lower() == "kaspi" else None)
 
 
 def _number(value):
@@ -45,7 +57,7 @@ def _cents(value, acc=None, currency=None, db=None, on_date=None):
     if acc and currency and currency.upper() != 'KZT':
         if db is not None and on_date is not None:
             try:
-                rate, _source = exchange_rates.rate_scaled(db, currency, _day(on_date), acc)
+                rate, _source = exchange_rates.rate_scaled(db, currency, _day_for_account(on_date, acc), acc)
             except exchange_rates.FxUnavailable as exc:
                 raise Pending(str(exc))
         elif currency.upper() == acc.settlement_currency and acc.settlement_fx_rate > 0:
@@ -173,7 +185,7 @@ def resolve_product(db, acc, payload):
 
 
 def amount_snapshot(db,acc,value,currency,dt,model,ref):
-    currency=str(currency).upper();day=_day(dt);original=_number(value)
+    currency=str(currency).upper();day=_day_for_account(dt, acc);original=_number(value)
     existing=db.scalar(select(model).where(model.reference==ref,model.company_id==acc.company_id))
     prior=existing.source_fx if existing else None
     if prior:
@@ -209,7 +221,7 @@ def _sale_event(db, acc, payload, quantity, amount, dt, external, currency, lega
     total,fx=amount_snapshot(db,acc,amount,currency,dt,Sale,ref)
     unit=(total+qty-1)//qty
     return 'sale', s.SaleIn(company_id=acc.company_id, account_id=acc.id, product_id=product.id,
-        reference=ref, date=_day(dt), quantity=qty, unit_price=unit,
+        reference=ref, date=_day_for_account(dt, acc), quantity=qty, unit_price=unit,
         discount=unit * qty - total, paid=0,source_fx=fx)
 
 
@@ -222,7 +234,7 @@ def _return_event(db, acc, payload, quantity, dt, external, original, restocked)
     if not restocked and not sale.cogs_pending:
         raise Pending('RETURN_STOCK_CONFIRMATION_REQUIRED')
     return 'return', s.ReturnIn(sale_id=sale.id, reference=reference(acc, external, 'return'),
-                               date=_day(dt), quantity=int(quantity), refund=0)
+                               date=_day_for_account(dt, acc), quantity=int(quantity), refund=0)
 
 
 def _expense_event(db, acc, external, category, value, dt, currency):
@@ -232,7 +244,7 @@ def _expense_event(db, acc, external, category, value, dt, currency):
     if not amount:
         return None
     return 'expense', s.ExpenseIn(company_id=acc.company_id, account_id=acc.id,
-        reference=ref,date=_day(dt),category=category,amount=amount,paid=False,source_fx=fx)
+        reference=ref,date=_day_for_account(dt, acc),category=category,amount=amount,paid=False,source_fx=fx)
 
 
 def _ozon_commission_events(db, acc, posting, dt):
@@ -572,11 +584,18 @@ def project_account(db, user, acc, external_ids=None, date_from=None, date_to=No
         filtered = []
         for row in rows:
             payload = row.payload or {}
-            value = (payload.get('order_creation_date') or payload.get('completed_date')
+            if acc.channel == 'Kaspi' and payload.get('record_type') in {'order_entry', 'delivery_charge', 'return_delivery_charge'}:
+                # Financial periods follow completion/return, not order placement.
+                # A September order delivered in October belongs to October.
+                returned = str(payload.get('order_status') or '').upper() in RETURNED_KASPI
+                value = ((payload.get('returned_date') or payload.get('return_date')) if returned else None)
+                value = value or payload.get('completed_date') or payload.get('order_creation_date')
+            else:
+                value = (payload.get('order_creation_date') or payload.get('completed_date')
                      or payload.get('saleDt') or payload.get('sale_dt') or payload.get('date')
                      or payload.get('created_at') or payload.get('operation_date'))
             try:
-                day = _day(value)
+                day = _day_for_account(value, acc)
             except Pending:
                 continue
             if date_from is not None and day < date_from: continue
@@ -587,7 +606,7 @@ def project_account(db, user, acc, external_ids=None, date_from=None, date_to=No
         p = row.payload or {}
         if p.get('record_type') == 'product': return date.min, 0, row.id
         try:
-            day = _day(p.get('saleDt') or p.get('sale_dt') or p.get('date') or p.get('order_creation_date') or p.get('delivered_at') or p.get('shipment_date') or p.get('created_at') or p.get('operation_date'))
+            day = _day_for_account(p.get('saleDt') or p.get('sale_dt') or p.get('date') or p.get('order_creation_date') or p.get('delivered_at') or p.get('shipment_date') or p.get('created_at') or p.get('operation_date'), acc)
         except Pending:
             day = date.max
         # Prefer authoritative realization over preliminary sales for the same ID.

@@ -22,6 +22,8 @@ KINDS = {
 }
 MONEY = {
     "price",
+    "min_price",
+    "recommended_price",
     "unit_price",
     "unit_cost",
     "extra_cost",
@@ -35,7 +37,7 @@ MONEY = {
 }
 FIELDS = {
     "opening":["company_id","product_id","sku","reference","date","quantity","unit_cost","currency","fx_rate","evidence"],
-    "products": ["sku", "name", "category", "price", "min_stock"],
+    "products": ["sku", "name", "category", "article", "brand", "supplier", "country", "media", "currency", "fx_rate", "weight_g", "volume_cm3", "min_price", "recommended_price", "price", "min_stock", "active", "specifications"],
     "sales": [
         "reference",
         "date",
@@ -300,6 +302,28 @@ def normalize(kind, row, mapping):
                     Decimal("1")
                 )
             )
+    if kind == "products":
+        # Spreadsheet catalog rows may carry human-entered media lists and JSON
+        # specifications. Normalize these before strict schema validation.
+        if "fx_rate" in result:
+            result["fx_rate"] = int((Decimal(str(result["fx_rate"]).replace(",", ".")) * 10000).quantize(Decimal("1")))
+        if "media" in result and isinstance(result["media"], str):
+            raw_media = result["media"].strip()
+            if raw_media.startswith("["):
+                try:
+                    parsed_media = json.loads(raw_media)
+                except (ValueError, TypeError):
+                    raise HTTPException(422, "media: укажите список URL через ; или корректный JSON-массив")
+                if not isinstance(parsed_media, list):
+                    raise HTTPException(422, "media: ожидается список URL")
+                result["media"] = [str(item).strip() for item in parsed_media if str(item).strip()]
+            else:
+                result["media"] = [item.strip() for item in raw_media.split(";") if item.strip()]
+        if "specifications" in result and isinstance(result["specifications"], str):
+            try:
+                result["specifications"] = json.loads(result["specifications"] or "{}")
+            except (ValueError, TypeError):
+                raise HTTPException(422, "specifications: укажите корректный JSON")
     if kind == 'opening' and not result.get('evidence'):
         # The import run itself is auditable evidence; do not reject otherwise
         # valid opening inventory merely because a supplier sheet has no evidence column.

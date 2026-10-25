@@ -26,7 +26,7 @@ def upgrade():
         # naming convention gives Alembic's batch copier a stable drop handle.
         convention = {"ck": "ck_%(table_name)s_%(column_0_name)s"}
         with op.batch_alter_table("expenses", naming_convention=convention) as batch:
-            batch.drop_constraint(check.get("name") or "ck_expenses_amount", type_="check")
+            batch.drop_constraint(check.get("name") or "ck_expenses_", type_="check")
             batch.create_check_constraint("ck_expenses_amount_nonzero", "amount != 0")
     else:
         op.drop_constraint(check["name"], "expenses", type_="check")

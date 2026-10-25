@@ -640,32 +640,43 @@ def _kaspi_commission_estimate(sales, expenses, api_bases, configured_rate=None)
     sale_commission_days = {
         (sale.account_id, sale.date) for sale in sales if sale.commission > 0
     }
+    actual_accounts = {account_id for account_id, _day in explicit_days | sale_commission_days}
     skipped = explicit_days | sale_commission_days
     estimated = 0
+    suppressed = False
     for key, base in api_bases.items():
-        if key not in skipped:
-            estimated += (max(0, int(base or 0)) * basis_points + 5000) // 10000
-    return estimated, str(rate)
+        if key in skipped:
+            continue
+        amount = (max(0, int(base or 0)) * basis_points + 5000) // 10000
+        if key[0] in actual_accounts:
+            suppressed = suppressed or amount > 0
+        else:
+            estimated += amount
+    return estimated, str(rate), suppressed
 
 
 @app.get("/api/marketplace-summary")
 def marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None, u=Depends(current_user), db=Depends(get_db)):
     """Fast marketplace page summary; bounded to the selected channel and period."""
     require(u, "analytics")
+    if end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
     if channel not in {"Kaspi", "Wildberries", "Ozon"}: raise HTTPException(422, "Неподдерживаемый маркетплейс")
     aq = select(Account).where(Account.channel == channel, Account.active.is_(True))
     if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
     if company_id is not None: scope(u, company_id); aq = aq.where(Account.company_id == company_id)
     accounts = list(db.scalars(aq)); ids = [a.id for a in accounts]; by_id = {a.id:a for a in accounts}
+    sync_in_progress = any(str(a.sync_status or '').lower() == 'running' for a in accounts)
     if not ids:
-        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':0,'api_revenue':0,'api_units':0,'api_returns':0,'api_return_units':0,'api_unconverted':0,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None}
+        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':0,'api_revenue':0,'api_units':0,'api_returns':0,'api_return_units':0,'api_unconverted':0,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
 
     sales = list(db.scalars(select(Sale).where(Sale.account_id.in_(ids), Sale.date >= start, Sale.date <= end)))
     period_returns = list(db.scalars(select(Return).join(Sale, Return.sale_id == Sale.id).where(Sale.account_id.in_(ids), Return.date >= start, Return.date <= end)))
     sale_cogs, return_cogs, pending_ids = marketplace_costs.resolve_cost_overrides(db, sales, period_returns, by_id)
     return_revenue = sum(x.revenue for x in period_returns); return_units = sum(x.quantity for x in period_returns)
     revenue = sum(x.revenue for x in sales) - return_revenue; units = sum(x.quantity for x in sales) - return_units
-    cogs = sum(sale_cogs.get(x.id, x.cogs) for x in sales) - sum(return_cogs.get(x.id, x.cogs) for x in period_returns); commission = sum(x.commission for x in sales)
+    restocked_returns = [x for x in period_returns if x.inventory_status == "restocked"]
+    cogs = sum(sale_cogs.get(x.id, x.cogs) for x in sales) - sum(return_cogs.get(x.id, x.cogs) for x in restocked_returns); commission = sum(x.commission for x in sales)
     logistics = sum(x.logistics for x in sales); advertising = sum(x.advertising for x in sales)
     pending = sum(1 for x in sales if x.id in pending_ids)
     # Marketplace expenses may be posted independently from a Sale.
@@ -673,6 +684,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     commission += sum(x.amount for x in expenses if x.category in {"Marketplace commission", "Marketplace commission VAT"})
     commission_estimated = 0
     commission_rate = None
+    commission_estimate_suppressed = False
     logistics += sum(x.amount for x in expenses if x.category == "Marketplace logistics")
     return_logistics = sum(x.amount for x in expenses if x.category == "Marketplace return logistics")
     advertising += sum(x.amount for x in expenses if x.category == "Реклама")
@@ -709,7 +721,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                 returned=status in {'RETURNED','ARRIVED_BACKWARD'}
                 if status=='COMPLETED' or returned:
                     sale_dt=p.get('completed_date') or p.get('order_creation_date')
-                    sale_day=marketplace_pipeline._day(sale_dt)
+                    sale_day=marketplace_pipeline._day(sale_dt, 'Asia/Almaty')
                     qty=int(p.get('quantity') or 0)
                     try:
                         sale_amount=marketplace_pipeline._cents(p.get('total_price'),by_id[account_id],'KZT',db,sale_dt)
@@ -722,7 +734,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                                 raw_kaspi_commission_bases[key]=raw_kaspi_commission_bases.get(key,0)+sale_amount
                         if returned:
                             return_dt=p.get('returned_date') or p.get('return_date') or p.get('completed_date') or p.get('order_creation_date')
-                            return_day=marketplace_pipeline._day(return_dt)
+                            return_day=marketplace_pipeline._day(return_dt, 'Asia/Almaty')
                             if start<=return_day<=end:
                                 api_returns += sale_amount
                                 api_return_units += qty
@@ -733,17 +745,18 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
         except (marketplace_pipeline.Pending, ValueError, TypeError, KeyError):
             continue
     if channel == "Kaspi":
-        commission_estimated, commission_rate = _kaspi_commission_estimate(
+        commission_estimated, commission_rate, commission_estimate_suppressed = _kaspi_commission_estimate(
             sales, expenses, raw_kaspi_commission_bases
         )
         commission += commission_estimated
-    profit = None if pending else revenue-cogs-commission-logistics-return_logistics-advertising-other
+    pending_return_inspection_units = sum(x.quantity for x in period_returns if x.inventory_status in {"requested", "approved", "in_transit", "received", "inspection"})
+    profit = None if pending or pending_return_inspection_units else revenue-cogs-commission-logistics-return_logistics-advertising-other
     kaspi_estimated_proceeds = api_revenue - commission - logistics - return_logistics if channel == "Kaspi" else None
     return {'channel':channel,'start':str(start),'end':str(end),'revenue':revenue,'units':units,'api_gross_revenue':api_gross_revenue,'api_revenue':api_revenue,'api_units':api_units,'api_returns':api_returns,'api_return_units':api_return_units,'api_unconverted':api_unconverted,
-        'pending_sales':pending,'pending_reasons':{'COGS_PENDING':pending} if pending else {},'financial_complete':not pending and not api_unconverted,
-        'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
+        'pending_sales':pending,'pending_return_inspection_units':pending_return_inspection_units,'pending_reasons':{'COGS_PENDING':pending} if pending else {},'financial_complete':not pending and not api_unconverted and not pending_return_inspection_units,
+        'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'commission_estimate_suppressed':commission_estimate_suppressed,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
-        'margin':round(profit/revenue*100,2) if revenue and profit is not None else None}
+        'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':not sync_in_progress and not api_unconverted}
 
 
 @app.post("/api/wildberries/weekly-excel-preview")
@@ -1405,6 +1418,45 @@ def post(kind: str, payload: dict, u=Depends(current_user), db=Depends(get_db)):
     obj = canonical.post_event(db, u, {"purchases":"purchase", "sales":"sale", "returns":"return", "expenses":"expense", "cash":"payment", "adjustments":"stock"}[kind], schema.model_validate(payload), reject_duplicates=True)
     db.commit()
     return dump(obj)
+
+
+@app.post("/api/returns/{return_id}/status")
+def update_return_status(return_id: int, payload: dict, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "inventory", True)
+    ret = db.get(Return, return_id)
+    if not ret:
+        raise HTTPException(404, "Возврат не найден")
+    scope(u, ret.company_id)
+    sale = db.get(Sale, ret.sale_id)
+    if not sale:
+        raise HTTPException(409, "Исходная продажа не найдена")
+    f.lock_product(db, sale.product_id)
+    ret = db.scalar(select(Return).where(Return.id == return_id).with_for_update())
+    change = s.ReturnStatusIn.model_validate(payload)
+    transitions = {
+        "requested": {"approved"},
+        "approved": {"in_transit"},
+        "in_transit": {"received"},
+        "received": {"inspection"},
+        "inspection": {"restocked", "defective"},
+        "defective": {"written_off"},
+        "restocked": set(),
+        "written_off": set(),
+    }
+    if change.status != ret.inventory_status:
+        if change.status not in transitions.get(ret.inventory_status, set()):
+            raise HTTPException(409, "Недопустимый переход статуса возврата")
+        if change.status in {"defective", "written_off"} and len(change.reason.strip()) < 3:
+            raise HTTPException(422, "Для брака и списания укажите причину")
+        before = ret.inventory_status
+        ret.inventory_status = change.status
+        audit(db, u, "inventory_status", "returns", ret.id, {
+            "from": before, "to": change.status, "reason": change.reason.strip(),
+        })
+    if change.status == "restocked":
+        f.restock_return_inventory(db, u, ret)
+    db.commit()
+    return dump(ret)
 
 
 @app.get("/api/accounting/summary")
