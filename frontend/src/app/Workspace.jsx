@@ -63,6 +63,21 @@ function Login({ onAuth }) {
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const generateProductDraft = async () => {
+    setAiBusy(true); setError(""); setAiQuestions([]);
+    try {
+      const draft = await api("/products/ai-draft", {method:"POST", body:{facts:aiFacts}});
+      if (draft.name) set("name", draft.name);
+      if (draft.description) set("description", draft.description);
+      if (draft.specifications && Object.keys(draft.specifications).length) {
+        let current = {};
+        try { current = JSON.parse(values.specifications || "{}"); } catch { current = {}; }
+        set("specifications", JSON.stringify({...current, ...draft.specifications}, null, 2));
+      }
+      setAiQuestions(draft.questions || []);
+    } catch(e) { setError(e.message); }
+    finally { setAiBusy(false); }
+  };
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -2179,6 +2194,9 @@ function EditModal({ kind, item, ctx, close }) {
     ]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
+    [aiFacts, setAiFacts] = useState(""),
+    [aiBusy, setAiBusy] = useState(false),
+    [aiQuestions, setAiQuestions] = useState([]),
     [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""});
   const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
   const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? ""));
@@ -2447,6 +2465,13 @@ function EditModal({ kind, item, ctx, close }) {
             <X />
           </button>
         </div>
+        {kind === "products" && !editing && <section className="product-ai-draft wide" aria-label="Создание товара с помощью AI">
+          <div><span className="eyebrow">AI PRODUCT STUDIO</span><h3>Заполнить черновик с AI</h3><p className="muted">Вставьте подтверждённые сведения с упаковки или от поставщика. AI предложит название, описание и характеристики; цену, себестоимость и количество заполните сами.</p></div>
+          <label>Сведения о товаре<textarea rows={3} value={aiFacts} onChange={e=>setAiFacts(e.target.value)} placeholder="Например: модель, бренд, цвет, материал и размеры с упаковки"/></label>
+          <button type="button" className="secondary" onClick={generateProductDraft} disabled={aiBusy || aiFacts.trim().length < 8}>{aiBusy ? "Готовлю черновик…" : "Составить черновик с AI"}</button>
+          {aiQuestions.length > 0 && <div className="product-ai-questions"><b>Проверьте и уточните перед сохранением</b><ul>{aiQuestions.map((q,i)=><li key={i}>{q}</li>)}</ul></div>}
+          <small>AI только заполняет поля формы. Товар сохраняется после нажатия «Сохранить».</small>
+        </section>}
         <div className="form-grid">
           {fields.map((f) => (
             <label
