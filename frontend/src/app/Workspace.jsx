@@ -1673,7 +1673,7 @@ function MarketplaceInbox({ channel, ctx }) {
   const ordersCreated = useLoad(channel === "Kaspi" ? "/kaspi/orders-created?" + ordersCreatedParams : null, `${ctx.refresh}:${summaryReload}`);
   useEffect(()=>{
     if (channel !== "Kaspi" || !accountKey || !canSyncKaspi) return;
-    const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}`;
+    const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}:${ctx.refresh}`;
     if (kaspiAutoSyncRef.current.has(key)) return;
     kaspiAutoSyncRef.current.add(key);
     let cancelled = false;
