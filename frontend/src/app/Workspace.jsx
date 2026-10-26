@@ -3186,7 +3186,7 @@ function prepareKaspiReportRows(rows, headers, accountId) {
     }
     return null;
   };
-  const orderCol = find(["номер заказа","код заказа","id заказа","order id","order_id","заказ"]);
+  const orderCol = find(["номер заказа","№ заказа","код заказа","id заказа","order id","order_id","заказ"]);
   const statusCol = find(["статус заказа","статус","состояние заказа","order status"]);
   const operationCol = find(["тип операции","операция","вид операции","тип транзакции","operation","transaction type"]);
   const skuCol = find(["артикул продавца","артикул","sku","vendor code","код товара"]);
