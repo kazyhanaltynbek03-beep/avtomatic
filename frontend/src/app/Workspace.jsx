@@ -750,10 +750,12 @@ function ReportPage({ page, ctx }) {
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
     page === "forecast" ? null : reportPath,
     ctx.refresh,
+    { cacheScope: ctx.auth.user.id },
   );
   const { data: dash, error: dashError, loading: dashLoading } = useLoad(
     usesDashboard ? summaryPath : null,
     ctx.refresh,
+    { cacheScope: ctx.auth.user.id },
   );
   const { data: systemAlerts, error: systemAlertsError } = useLoad(alertsPath, ctx.refresh);
   const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
