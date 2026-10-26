@@ -4,7 +4,7 @@ from openpyxl import load_workbook, Workbook
 from fastapi import HTTPException
 from sqlalchemy import select
 from . import schemas as s, finance as f, canonical
-from .models import Product, ImportRun, Sale, Account, MarketplaceProductMapping
+from .models import Product, ImportRun, Sale, Account, MarketplaceProductMapping, MarketplaceRecord
 from .security import require, audit
 
 KINDS = {
@@ -97,7 +97,7 @@ FIELDS = {
 }
 FIELDS["b2b"] = FIELDS["reports"] = FIELDS["sales"]
 FIELDS["marketplace_reports"] = [
-    "event_type", "external_id", "date", "company_id", "account_id", "sku",
+    "event_type", "external_id", "date", "company_id", "account_id", "order_id", "sku",
     "quantity", "unit_price", "discount", "commission", "logistics", "advertising", "paid",
     "sale_reference", "refund", "stock_delta", "unit_cost", "reason", "amount"
 ]
@@ -127,6 +127,32 @@ def _mapped(row, mapping):
 def _money(value):
     return int((Decimal(str(value or 0).replace("\u00a0", "").replace("\u202f", "").replace(" ", "").replace(",", ".")) * 100).quantize(Decimal("1")))
 
+def _kaspi_report_external(db, account, order_id, sku, expected_amount):
+    """Join an archive row to the stable Kaspi API entry identity when available."""
+    order_id = str(order_id or "").strip()
+    if account.channel != "Kaspi" or not order_id:
+        return None
+    records = db.scalars(select(MarketplaceRecord).where(
+        MarketplaceRecord.account_id == account.id,
+        MarketplaceRecord.source == "kaspi",
+    )).all()
+    matches = [
+        row for row in records
+        if (row.payload or {}).get("record_type") == "order_entry"
+        and str((row.payload or {}).get("order_id") or "") == order_id
+        and str((row.payload or {}).get("sku") or "").strip() == str(sku or "").strip()
+    ]
+    if expected_amount is not None:
+        exact = [row for row in matches
+                 if _money((row.payload or {}).get("total_price")) == expected_amount]
+        if exact:
+            matches = exact
+    if len(matches) > 1:
+        raise HTTPException(422, f"Kaspi: неоднозначная позиция заказа {order_id}, SKU {sku}; проверьте дубли в отчёте")
+    if matches:
+        return matches[0].external_id
+    return f"archive:{order_id}:{sku}"
+
 def normalize_marketplace(db, user, row, mapping):
     r = _mapped(row, mapping)
     event = marketplace_event(r.get("event_type"))
@@ -151,10 +177,14 @@ def normalize_marketplace(db, user, row, mapping):
         # A marketplace order is not a revenue or cash event. It is retained in
         # the import run/audit only until a confirmed SALE is supplied.
         return event, {"external_id": external, "account_id": account_id, "company_id": company_id}
+    order_id = str(r.get("order_id") or "").strip()
+    expected_line_amount = max(0, _money(r.get("unit_price")) * int(r.get("quantity") or 0) - _money(r.get("discount")))
+    kaspi_external = _kaspi_report_external(db, account, order_id, sku, expected_line_amount) if order_id else None
     if event == "sale":
+        sale_external = kaspi_external or external
         payload = {
             "company_id": company_id, "account_id": account_id, "product_id": product.id,
-            "reference": f"{account.channel}:{account_id}:{external}", "date": dt,
+            "reference": f"{account.channel}:{account_id}:{sale_external}", "date": dt,
             "quantity": int(r.get("quantity") or 0), "unit_price": _money(r.get("unit_price")),
             "discount": _money(r.get("discount")),
             # Costs and cash are separate source events; never infer them from a SALE.
@@ -162,12 +192,14 @@ def normalize_marketplace(db, user, row, mapping):
         }
         return event, s.SaleIn.model_validate(payload)
     if event == "return":
-        sale_ref = str(r.get("sale_reference") or "").strip()
+        sale_external = kaspi_external or ""
+        sale_ref = (f"{account.channel}:{account_id}:{sale_external}" if sale_external
+                    else str(r.get("sale_reference") or "").strip())
         sale = db.scalar(select(Sale).where(Sale.reference == sale_ref))
         if not sale or sale.company_id != company_id or sale.account_id != account_id or sale.product_id != product.id:
             raise HTTPException(422, "Исходная продажа для возврата не найдена")
         return event, s.ReturnIn.model_validate({
-            "sale_id": sale.id, "reference": f"{account.channel}:return:{account_id}:{external}",
+            "sale_id": sale.id, "reference": f"{account.channel}:return:{account_id}:return:{sale_external or external}",
             "date": dt, "quantity": int(r.get("quantity") or 0), "refund": _money(r.get("refund")),
         })
     if event == "payment":
@@ -427,6 +459,10 @@ def preview(db, user, kind, rows, mapping, defaults=None):
         raise HTTPException(422, "Неизвестный тип импорта")
     require(user, KINDS[kind][0], True)
     rows, mapping = prepare_rows(db, user, kind, rows, mapping, defaults)
+    if kind == "marketplace_reports":
+        event_field = mapping.get("event_type")
+        order = {"sale": 0, "commission": 1, "logistics": 1, "return_logistics": 1, "return": 2}
+        rows.sort(key=lambda row: order.get(str(row.get(event_field) or "").lower(), 1))
     if not rows:
         raise HTTPException(422, "Нет строк для импорта")
     fp = hashlib.sha256(
