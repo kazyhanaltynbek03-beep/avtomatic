@@ -1848,9 +1848,9 @@ def get_report(
     end: date,
     company_id: int | None = None,
     account_id: int | None = None,
-    active_only: bool = False,
     u=Depends(current_user),
     db=Depends(get_db),
+    active_only: bool = False,
 ):
     require(u, "analytics")
     return f.report(db, u, start, end, company_id, account_id, active_only)
