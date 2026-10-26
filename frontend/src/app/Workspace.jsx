@@ -1642,6 +1642,7 @@ function MarketplaceInbox({ channel, ctx }) {
       .then(()=>setSummaryReload(v=>v+1));
   },[channel,accountKey,ctx.start,ctx.end,kaspiReportMode,canSyncKaspi]);
   const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress && !summary.data?.sync_errors?.length;
+  const activeSyncErrors = kaspiReportMode === "created" ? created.sync_errors : m.sync_errors;
   useEffect(()=>{
     if (!activeSync) return;
     const timer=window.setInterval(()=>setSummaryReload(v=>v+1),5000);
@@ -1676,7 +1677,7 @@ function MarketplaceInbox({ channel, ctx }) {
   const incomplete = m.financial_complete === false;
   const fxPending = Number(m.api_unconverted || 0);
   const marketplaceKpis = [
-    [channel === "Wildberries" ? "Оборот продаж WB" : channel === "Kaspi" ? "Выручка API за вычетом возвратов" : "Продажи API", channel === "Kaspi" ? (m.api_revenue == null ? "Нет подтверждённых данных" : m.api_revenue) : (m.api_revenue ?? m.revenue), fxPending ? `${fxPending} операций ожидают курс` : (channel === "Wildberries" ? "Отдельный отчёт продаж за выбранный период" : channel === "Kaspi" ? "Выручка по дате выдачи минус возвраты по дате возврата" : "Подтверждённая выручка непосредственно из API")],
+    [channel === "Wildberries" ? "Оборот продаж WB" : channel === "Kaspi" ? "Выручка API за вычетом возвратов" : "Продажи API", channel === "Kaspi" ? (m.api_revenue == null ? "Нет подтверждённых данных" : m.api_revenue) : (m.api_revenue ?? m.revenue), fxPending ? (channel === "Kaspi" ? `${fxPending} записей API пропущено: проверьте дату или сумму` : `${fxPending} операций ожидают курс`) : (channel === "Wildberries" ? "Отдельный отчёт продаж за выбранный период" : channel === "Kaspi" ? "Выручка по дате выдачи минус возвраты по дате возврата" : "Подтверждённая выручка непосредственно из API")],
     ...(channel === "Kaspi" ? [["Возвраты API", m.api_returns == null ? "—" : m.api_returns, `${m.api_return_units == null ? "—" : m.api_return_units} шт. за выбранный период`]] : []),
     ["Продано", m.api_units == null ? "—" : `${m.api_units} шт`, "Количество продаж за выбранный период за вычетом возвращённых единиц"],
     ...(channel === "Wildberries" ? [["К перечислению по отчёту", (m.settlement_rows > 0 ? m.settlement_accrued : "Нет данных отчёта"), m.settlement_unconverted ? `${m.settlement_unconverted} строк ожидают курс` : (m.settlement_rows > 0 ? "Начислено по финансовому отчёту; не банковская выплата" : "Загрузите недельный отчёт WB; ноль не означает отсутствие начислений")]] : []),
@@ -1696,7 +1697,7 @@ function MarketplaceInbox({ channel, ctx }) {
 
       <span className="muted">Последняя попытка: {(kaspiReportMode==="created"?created.last_sync:m.last_sync)?new Date(kaspiReportMode==="created"?created.last_sync:m.last_sync).toLocaleString("ru-RU"):"нет данных"}</span>
     </div>}
-    {channel === "Kaspi" && (m.sync_errors?.length || created.sync_errors?.length) ? <p className="error-box" role="alert">Синхронизация не подтверждена. Показаны сохранённые данные, если они есть. {(kaspiReportMode==="created"?created.sync_errors:m.sync_errors)?.join("; ")}</p> : null}
+    {channel === "Kaspi" && activeSyncErrors?.length ? <p className="error-box" role="alert">Синхронизация не подтверждена. Показаны сохранённые данные, если они есть. {activeSyncErrors.join("; ")}</p> : null}
     {channel === "Kaspi" && kaspiReportMode === "created" ? <>
       {ordersCreated.loading ? <Spinner/> : ordersCreated.error ? <ErrorBox error={ordersCreated.error}/> : <>
         <p className="muted">Созданные заказы за период. Сумма заказов не является выручкой или суммой к перечислению. {created.sync_status==="running"?"Обновляются данные API…":!created.api_data_available?"Нет подтверждённого ответа API для этого периода.":""}</p>
