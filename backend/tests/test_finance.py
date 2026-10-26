@@ -63,14 +63,14 @@ def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch)
 
     today = date(2026, 10, 24)
     monkeypatch.setattr(main, "business_today", lambda: today)
-    original_report = main.f.report
+    original_headline = main.f.report_headline
     periods = []
 
-    def counted_report(db, user, start, end, company_id=None, account_id=None, active_only=False):
-        periods.append((start, end, company_id, active_only))
-        return original_report(db, user, start, end, company_id, account_id, active_only)
+    def counted_headline(db, user, start, end, company_id=None):
+        periods.append((start, end, company_id))
+        return original_headline(db, user, start, end, company_id)
 
-    monkeypatch.setattr(main.f, "report", counted_report)
+    monkeypatch.setattr(main.f, "report_headline", counted_headline)
     response = client.get(
         "/api/dashboard/summary",
         params={"start": "2026-10-01", "end": "2026-10-24"},
@@ -78,7 +78,8 @@ def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch)
 
     assert response.status_code == 200, response.text
     assert periods == [
-        (date(2026, 10, 1), today, None, True),
+        (date(2026, 10, 1), today, None),
+        (today, today, None),
     ]
 
 
