@@ -949,11 +949,11 @@ function ReportPage({ page, ctx }) {
       </>
     );
   const headline = [
-    ["Оборот сегодня", dash.today.revenue, "На " + dash.as_of],
-    ["Прибыль сегодня", dash.today.net_profit, "Чистая прибыль"],
-    ["Оборот месяца", dash.month.revenue, "С начала месяца"],
-    ["Валовая прибыль месяца", dash.month.gross_profit, "С начала месяца"],
-    ["Чистая прибыль месяца", dash.month.net_profit, "С начала месяца"],
+    ["Оборот сегодня", dash?.today?.revenue, "На " + (dash?.as_of || "—")],
+    ["Прибыль сегодня", dash?.today?.net_profit, "Чистая прибыль"],
+    ["Оборот месяца", dash?.month?.revenue, "С начала месяца"],
+    ["Валовая прибыль месяца", dash?.month?.gross_profit, "С начала месяца"],
+    ["Чистая прибыль месяца", dash?.month?.net_profit, "С начала месяца"],
   ];
   const kpis = [
     ["Оборот", r.revenue, "За вычетом возвратов", Wallet],
@@ -969,9 +969,14 @@ function ReportPage({ page, ctx }) {
   return (
     <>
       <CostPendingNotice report={r} ctx={ctx} />
+      {!dash && (
+        <p className="panel-note amber" role="status">
+          {dashError ? "Краткая сводка не загрузилась. Основной отчёт доступен ниже." : "Загружается краткая сводка…"}
+        </p>
+      )}
       <div className="dashboard-headline">
         {headline.map(([title, value, note]) => (
-          <div className="headline-card" key={title}><span>{title}</span><strong>{money(value)}</strong><small>{note}</small></div>
+          <div className="headline-card" key={title}><span>{title}</span><strong>{value == null ? "—" : money(value)}</strong><small>{note}</small></div>
         ))}
       </div>
       <div className="kpis">
