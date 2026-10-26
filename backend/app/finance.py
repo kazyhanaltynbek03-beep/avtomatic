@@ -699,7 +699,7 @@ def adjust(db, user, p):
     return {"reference": ref, "movement_ids": [m.id for m in movements]}
 
 
-def report(db, user, start, end, company_id=None, account_id=None):
+def report(db, user, start, end, company_id=None, account_id=None, active_only=False):
     if end < start:
         fail("Конец периода раньше начала")
     if company_id:
@@ -720,11 +720,13 @@ def report(db, user, start, end, company_id=None, account_id=None):
                 q = q.where(model.date >= start)
         return list(db.scalars(q))
 
-    # Consolidated reports follow currently active marketplace connections.
-    # Archived accounts remain in PostgreSQL and can still be audited by
-    # requesting their account_id explicitly.
+    # Historical reports retain disconnected stores. The business overview can
+    # opt into active-only scope, while explicit account reports remain auditable.
     account_query = scope_query(select(Account), Account, user)
-    account_query = account_query.where(Account.id == account_id) if account_id else account_query.where(Account.active.is_(True))
+    if account_id:
+        account_query = account_query.where(Account.id == account_id)
+    elif active_only:
+        account_query = account_query.where(Account.active.is_(True))
     accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     sales = [s for s in rows(Sale) if s.account_id in account_ids]
@@ -1061,7 +1063,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
     }
 
 
-def report_details(db, user, start, end, metric, company_id=None, account_id=None):
+def report_details(db, user, start, end, metric, company_id=None, account_id=None, active_only=False):
     """Explain a reported amount with deterministic source rows.
 
     This is deliberately not an AI function: every number comes from posted ERP
@@ -1070,7 +1072,7 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
     valid = {"revenue", "cogs", "gross_profit", "commission", "logistics", "advertising", "expenses", "net_profit", "cash", "cash_flow", "stock_value", "b2b_debt", "refunds_payable"}
     if metric not in valid:
         fail("Неизвестный показатель отчёта")
-    summary = report(db, user, start, end, company_id, account_id)
+    summary = report(db, user, start, end, company_id, account_id, active_only)
     if summary[metric] is None:
         return {'metric':metric,'start':str(start),'end':str(end),'expected':None,'explained':None,
                 'difference':None,'rows':[],'reason_code':'COGS_PENDING'}
@@ -1086,7 +1088,10 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
         return list(db.scalars(q))
 
     account_query = scope_query(select(Account), Account, user)
-    account_query = account_query.where(Account.id == account_id) if account_id else account_query.where(Account.active.is_(True))
+    if account_id:
+        account_query = account_query.where(Account.id == account_id)
+    elif active_only:
+        account_query = account_query.where(Account.active.is_(True))
     accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     sales = [sale for sale in scoped(Sale) if sale.account_id in account_ids]
