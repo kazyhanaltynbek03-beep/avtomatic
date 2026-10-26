@@ -422,6 +422,7 @@ export default function App() {
               "alerts",
               "accounting",
               "expenses",
+              "cash",
               ...channels.slice(0, 3),
             ].includes(page) && (
               <div className="periods">
@@ -464,6 +465,7 @@ export default function App() {
               "alerts",
               "accounting",
               "expenses",
+              "cash",
               ...channels.slice(0, 3),
             ].includes(page) && (
               <div className="dates">
@@ -1499,7 +1501,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
   }, [syncing, syncStartedAt, data.status, data.updated_at, data.attempt_at]);
   useEffect(() => {
     if (!syncing && data.status !== "загружается") return undefined;
-    const timer = window.setInterval(() => setReportRefresh((v) => v + 1), 5000);
+    const timer = window.setInterval(() => setReportRefresh((v) => v + 1), 10000);
     return () => window.clearInterval(timer);
   }, [syncing, data.status]);
   useEffect(() => {
@@ -1650,7 +1652,7 @@ function MarketplaceInbox({ channel, ctx }) {
     const yesterday=new Date(`${localToday}T00:00:00Z`); yesterday.setUTCDate(yesterday.getUTCDate()-1);
     const yesterdayKey=yesterday.toISOString().slice(0,10);
     if(channel!=="Kaspi" || kaspiReportMode!=="issued" || !canSyncKaspi || ctx.start!==ctx.end || ![localToday,yesterdayKey].includes(ctx.end)) return;
-    const interval=ctx.end===localToday?60000:300000;
+    const interval=ctx.end===localToday?5*60*1000:10*60*1000;
     const timer=window.setInterval(()=>{
       Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})))
         .then(()=>setSummaryReload(v=>v+1));
@@ -1753,9 +1755,13 @@ function DataPage({ page, ctx }) {
   });
   if (ctx.company) params.set("company_id", ctx.company);
   if (channels.includes(page)) params.set("channel", page);
+  if (["sales", "expenses", "cash", "purchases"].includes(entity)) {
+    params.set("start", ctx.start);
+    params.set("end", ctx.end);
+  }
   if (entity === "products") { params.set("start", ctx.start || today().slice(0, 8) + "01"); params.set("end", ctx.end || today()); }
   const state = useLoad("/data/" + entity + "?" + params, ctx.refresh);
-  useEffect(() => setOffset(0), [search, ctx.company]);
+  useEffect(() => setOffset(0), [search, ctx.company, ctx.start, ctx.end]);
   const cap = flat.find((x) => x[0] === page)?.[3];
   const writable =
     can(ctx.auth, cap, true) &&
