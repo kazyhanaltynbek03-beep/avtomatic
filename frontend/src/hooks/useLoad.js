@@ -4,7 +4,7 @@ import { api } from "../services/api";
 const reportCache = new Map();
 const REPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 
-export function useLoad(path, refresh) {
+export function useLoad(path, refresh, options = {}) {
   const [state, setState] = useState(() => ({ loading: Boolean(path) }));
 
   useEffect(() => {
@@ -13,8 +13,11 @@ export function useLoad(path, refresh) {
       setState({ data: null });
       return () => { live = false; };
     }
-    const cacheableReport = path.startsWith("/report?") || path.startsWith("/dashboard/summary?");
-    const cacheKey = cacheableReport ? `${path}\u001f${String(refresh ?? "")}` : null;
+    const cacheableReport = (path.startsWith("/report?") || path.startsWith("/dashboard/summary?")) &&
+      options.cacheScope != null;
+    const cacheKey = cacheableReport
+      ? `${String(options.cacheScope)}\u001f${path}\u001f${String(refresh ?? "")}`
+      : null;
     const cached = cacheKey ? reportCache.get(cacheKey) : null;
     if (cached && Date.now() - cached.savedAt < REPORT_CACHE_TTL_MS) {
       setState({ data: cached.data });
@@ -29,7 +32,7 @@ export function useLoad(path, refresh) {
       })
       .catch((error) => { if (live) setState({ error: error.message }); });
     return () => { live = false; controller.abort(); };
-  }, [path, refresh]);
+  }, [path, refresh, options.cacheScope]);
 
   return state;
 }
