@@ -176,7 +176,7 @@ class KaspiConnector(Connector):
                         if state.get("start_ms") else max(history_start, now - timedelta(days=7)))
         page = max(0, int(state.get("page") or 0))
         offset = max(0, int(state.get("offset") or 0))
-        window_end = (until if status_only else min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until))
+        window_end = min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until)
         params = {"page[number]": page, "page[size]": 100 if status_only else (10 if period_mode else 100),
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
@@ -325,14 +325,14 @@ class KaspiConnector(Connector):
                     next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
                         "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0,
                         "extra_ids":extra_ids,"extra_offset":extra_offset}
-                elif not status_only and window_end < until:
-                    # Kaspi accepts date-range filters but may reject wide windows.
-                    # Split the selected range into one-week API windows without
-                    # requesting anything outside the user's selected dates.
-                    next_state = {"_qor_kaspi_cursor":1,"scope":"period",
+                elif window_end < until:
+                    # Keep every Kaspi date filter within one week, including the
+                    # status-only history scan used for issue-date reports.
+                    next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,
                         "start_ms":int((window_end+timedelta(milliseconds=1)).timestamp()*1000),
                         "until_ms":int(until.timestamp()*1000),"page":0,"offset":0,
-                        "extra_ids":extra_ids,"extra_offset":extra_offset}
+                        "extra_ids":extra_ids,"extra_offset":extra_offset,
+                        "known_order_ids":state.get("known_order_ids") or []}
                 elif extra_offset < len(extra_ids):
                     next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,
                         "start_ms":int(window_start.timestamp()*1000),"until_ms":int(until.timestamp()*1000),
