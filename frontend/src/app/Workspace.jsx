@@ -1122,11 +1122,11 @@ function ReportPage({ page, ctx }) {
           ["Деньги", r.cash, true],
           ["B2B задолженность", r.b2b_debt, true],
           ["Cash Flow", r.cash_flow, true],
-          ["Kaspi оборот", dash.selected.channels.Kaspi || 0, true],
-          ["WB оборот", dash.selected.channels.WB || 0, true],
-          ["Ozon оборот", dash.selected.channels.Ozon || 0, true],
-          ["Offline оборот", dash.selected.channels.Offline || 0, true],
-          ["B2B оборот", dash.selected.channels.B2B || 0, true],
+          ["Kaspi оборот", dash?.selected?.channels?.Kaspi || 0, true],
+          ["WB оборот", dash?.selected?.channels?.WB || 0, true],
+          ["Ozon оборот", dash?.selected?.channels?.Ozon || 0, true],
+          ["Offline оборот", dash?.selected?.channels?.Offline || 0, true],
+          ["B2B оборот", dash?.selected?.channels?.B2B || 0, true],
         ].map(([k, v, m]) => (
           <div key={k}>
             <span>{k}</span>
