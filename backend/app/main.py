@@ -2640,8 +2640,58 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                 "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
                 "page":0,"offset":0,"extra_ids":extra_order_ids,"extra_offset":0}, separators=(",", ":"))
             pages = records = inserted_total = updated_total = 0
+            cached_children_by_order = {}
+            if status_only:
+                # Cache child rows once. For each order-code status refresh, update
+                # their status/date fields and re-project them without re-fetching
+                # entries, product details, and merchant mappings from Kaspi.
+                for cached in db.scalars(select(MarketplaceRecord).where(
+                    MarketplaceRecord.account_id == acc.id,
+                    MarketplaceRecord.source == "kaspi",
+                )).all():
+                    child = cached.payload or {}
+                    if child.get("record_type") in {"order_entry", "delivery_charge", "return_delivery_charge"}:
+                        cached_children_by_order.setdefault(str(child.get("order_id") or ""), []).append(child)
             while cursor:
                 result = worker.fetch(cursor)
+                if status_only:
+                    present = {str(row.get("external_id") or "") for row in result.records}
+                    propagated = []
+                    for order in result.records:
+                        op = order or {}
+                        if op.get("record_type") != "order":
+                            continue
+                        oid = str(op.get("order_id") or "")
+                        attrs = op.get("raw_attributes") or {}
+                        for prior in cached_children_by_order.get(oid, []):
+                            child = dict(prior)
+                            child["order_status"] = op.get("status")
+                            child["order_state"] = op.get("state")
+                            child["completed_date"] = op.get("completion_date")
+                            child["returned_date"] = op.get("returned_date")
+                            if child.get("record_type") == "delivery_charge":
+                                child["completed_date"] = op.get("completion_date")
+                                if op.get("delivery_cost_for_seller") is not None:
+                                    child["amount"] = op.get("delivery_cost_for_seller")
+                            elif child.get("record_type") == "return_delivery_charge":
+                                if op.get("return_delivery_cost_for_seller") is not None:
+                                    child["amount"] = op.get("return_delivery_cost_for_seller")
+                            if child.get("external_id") not in present:
+                                propagated.append(child)
+                                present.add(child.get("external_id"))
+                        return_cost = op.get("return_delivery_cost_for_seller")
+                        if return_cost not in (None, "", 0, 0.0, "0"):
+                            ext = "return-delivery:" + oid
+                            if ext not in present:
+                                propagated.append({
+                                    "external_id": ext, "record_type": "return_delivery_charge",
+                                    "order_id": oid, "amount": return_cost, "currency": "KZT",
+                                    "order_status": op.get("status"), "returned_date": op.get("returned_date"),
+                                    "order_creation_date": op.get("creation_date"),
+                                    "completion_date": op.get("completion_date"), "raw_attributes": attrs,
+                                })
+                                present.add(ext)
+                    result.records.extend(propagated)
                 inserted, updated = _stage_marketplace_records(db, acc, result)
                 record_ids = [str(x.get("external_id")) for x in result.records if x.get("external_id")]
                 projection = marketplace_pipeline.project_account(db, user, acc, external_ids=record_ids)
