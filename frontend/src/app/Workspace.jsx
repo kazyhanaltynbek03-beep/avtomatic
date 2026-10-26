@@ -1651,6 +1651,7 @@ function MarketplaceInbox({ channel, ctx }) {
   const [kaspiReportMode,setKaspiReportMode] = useState("issued");
   const [summaryReload,setSummaryReload] = useState(0);
   const kaspiAutoSyncRef = useRef(new Set());
+  const kaspiLastRefreshRef = useRef(ctx.refresh);
 
   const [showTechnical,setShowTechnical] = useState(false);
   const [offset,setOffset] = useState(0), [status,setStatus] = useState(""),
@@ -1673,13 +1674,15 @@ function MarketplaceInbox({ channel, ctx }) {
   const ordersCreated = useLoad(channel === "Kaspi" ? "/kaspi/orders-created?" + ordersCreatedParams : null, `${ctx.refresh}:${summaryReload}`);
   useEffect(()=>{
     if (channel !== "Kaspi" || !accountKey || !canSyncKaspi) return;
+    const forceSync = ctx.refresh !== kaspiLastRefreshRef.current;
+    kaspiLastRefreshRef.current = ctx.refresh;
     const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}:${ctx.refresh}`;
     if (kaspiAutoSyncRef.current.has(key)) return;
     kaspiAutoSyncRef.current.add(key);
     let cancelled = false;
     let retryTimer;
     const requestSync = () => {
-      const requests = accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}`,{method:"POST",timeoutMs:10000}));
+      const requests = accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}&force=${forceSync}`,{method:"POST",timeoutMs:10000}));
       Promise.allSettled(requests).then(results=>{
         if (cancelled) return;
         // A different Kaspi report may currently own the account sync lock.
