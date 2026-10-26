@@ -2632,26 +2632,31 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             require(user, "accounts", True)
             scope(user, acc.company_id)
             worker = connector(acc, load_saved_credentials(db, acc.id))
-            local_start = datetime.combine(start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
             today_local = datetime.now(ZoneInfo("Asia/Almaty"))
+            sync_start = today_local.date() - timedelta(days=370) if report_mode == "issued" else start
+            local_start = datetime.combine(sync_start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
             local_end = (today_local if end >= today_local.date() else
                          datetime.combine(end + timedelta(days=1), datetime.min.time(), ZoneInfo("Asia/Almaty")))
-            cursor = json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
-                "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
-                "page":0,"offset":0,"extra_ids":extra_order_ids,"extra_offset":0}, separators=(",", ":"))
-            pages = records = inserted_total = updated_total = 0
             cached_children_by_order = {}
+            known_order_ids = []
             if status_only:
-                # Cache child rows once. For each order-code status refresh, update
-                # their status/date fields and re-project them without re-fetching
-                # entries, product details, and merchant mappings from Kaspi.
+                # Pull the compact order list across the full reporting horizon.
+                # Kaspi filters on creationDate, so this is needed to discover
+                # orders created earlier and issued/returned on the selected day.
                 for cached in db.scalars(select(MarketplaceRecord).where(
                     MarketplaceRecord.account_id == acc.id,
                     MarketplaceRecord.source == "kaspi",
                 )).all():
                     child = cached.payload or {}
-                    if child.get("record_type") in {"order_entry", "delivery_charge", "return_delivery_charge"}:
+                    if child.get("record_type") == "order" and child.get("code"):
+                        known_order_ids.append(str(child["code"]))
+                    elif child.get("record_type") in {"order_entry", "delivery_charge", "return_delivery_charge"}:
                         cached_children_by_order.setdefault(str(child.get("order_id") or ""), []).append(child)
+            cursor = json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
+                "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
+                "page":0,"offset":0,"extra_ids":([] if status_only else extra_order_ids),"extra_offset":0,
+                "known_order_ids":known_order_ids}, separators=(",", ":"))
+            pages = records = inserted_total = updated_total = 0
             while cursor:
                 result = worker.fetch(cursor)
                 if status_only:
@@ -2769,8 +2774,8 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     completed_status_stale = force or cached_at is None or age is None or age >= 6 * 60 * 60
     is_historical = bounded_end < local_today
     cache_ttl = 5 * 60 if start == bounded_end == local_today else (10 * 60 if bounded_end == local_today - timedelta(days=1) else 3600)
-    cache_fresh = cached_at is not None and (is_historical or age is not None and age < cache_ttl)
-    if cache_fresh and not force and report_mode == "created":
+    cache_fresh = cached_at is not None and age is not None and age < cache_ttl
+    if cache_fresh and not force:
         return {"ok":True,"status":"cached","cached":True,"account_id":acc.id,"start":str(start),"end":str(bounded_end),"report_mode":report_mode}
     records = db.scalars(select(MarketplaceRecord).where(
         MarketplaceRecord.account_id == acc.id,
@@ -2804,7 +2809,7 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
             continue
         if completed_status_stale:
             refresh_ids.add(order_code)
-    status_only = bool(cache_fresh and not force and report_mode == "issued")
+    status_only = report_mode == "issued"
     claimed = db.execute(update(Account).where(Account.id == id,
         or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None)))
         .values(sync_status="running", sync_error="KASPI_PERIOD_SYNC", last_sync=now()))
@@ -2812,7 +2817,7 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
                 "start":str(start),"end":str(bounded_end),"report_mode":report_mode}
     db.commit()
-    tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, sorted(refresh_ids), report_mode, status_only)
+    tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, ([] if status_only else sorted(refresh_ids)), report_mode, status_only)
     return {"ok":True,"status":"running","account_id":acc.id,"start":str(start),"end":str(bounded_end),
             "report_mode":report_mode,"old_orders_to_refresh":len(refresh_ids),"status_only":status_only}
 
