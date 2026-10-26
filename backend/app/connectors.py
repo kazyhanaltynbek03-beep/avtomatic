@@ -223,7 +223,7 @@ class KaspiConnector(Connector):
                 "is_kaspi_delivery": a.get("isKaspiDelivery"),
                 "cancellation_reason": a.get("cancellationReason") or a.get("cancelReason"),
                 "state": a.get("state"), "status": a.get("status"),
-                "creation_date": a.get("creationDate"), "completion_date": a.get("completionDate"), "returned_date": a.get("returnedDate") or a.get("returnDate"), "return_delivery_cost_for_seller": a.get("returnDeliveryCostForSeller"), "raw_attributes": a}
+                "creation_date": a.get("creationDate"), "completion_date": a.get("completionDate"), "returned_date": a.get("returnedDate") or a.get("returnDate") or (a.get("completionDate") if str(a.get("status") or "").upper() == "RETURNED" else None), "return_delivery_cost_for_seller": a.get("returnDeliveryCostForSeller"), "raw_attributes": a}
             relationship = ((item.get("relationships") or {}).get("user") or {}).get("data") or {}
             customer_obj = next((x for x in included
                 if x.get("type") == relationship.get("type") and str(x.get("id")) == str(relationship.get("id"))), {})
@@ -285,7 +285,7 @@ class KaspiConnector(Connector):
                             "merchant_product_attributes": merchant.get('attributes') or {},
                             "order_status": a.get('status'), "order_state": a.get('state'),
                             "order_creation_date": a.get('creationDate'),
-                            "completed_date": a.get('completionDate'), "returned_date": a.get('returnedDate') or a.get('returnDate')}
+                            "completed_date": a.get('completionDate'), "returned_date": a.get('returnedDate') or a.get('returnDate') or (a.get('completionDate') if str(a.get('status') or '').upper() == 'RETURNED' else None)}
                     entry_page += 1
                     count = (ep.get('meta') or {}).get('pageCount')
                     if not entries or (count is not None and entry_page >= int(count)) or (count is None and len(entries)<100):
