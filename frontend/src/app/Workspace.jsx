@@ -1676,6 +1676,8 @@ function MarketplaceInbox({ channel, ctx }) {
       .then(()=>setSummaryReload(v=>v+1));
   },[channel,accountKey,ctx.start,ctx.end,kaspiReportMode,canSyncKaspi]);
   const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress && !summary.data?.sync_errors?.length;
+  const m = summary.data || {};
+  const created = ordersCreated.data || {};
   const activeSyncErrors = kaspiReportMode === "created" ? created.sync_errors : m.sync_errors;
   useEffect(()=>{
     if (!activeSync) return;
@@ -1706,8 +1708,6 @@ function MarketplaceInbox({ channel, ctx }) {
     const r = await api(`/marketplace-records/${selected.id}/mapping`,{method:"POST",body:{product_id:Number(product),external_keys:[key]}});
     ctx.notify(`Проведено ${r.projected}; ожидает обработки ${r.pending_erp}`);setSelected(null);
   });
-  const m = summary.data || {};
-  const created = ordersCreated.data || {};
   const incomplete = m.financial_complete === false;
   const fxPending = Number(m.api_unconverted || 0);
   const marketplaceKpis = [
