@@ -1990,7 +1990,7 @@ aside{border-right:1px solid rgba(255,255,255,.055);box-shadow:14px 0 42px rgba(
 .integration-create-box{grid-column:1/-1;margin-top:4px}.integration-create-box>label{display:block;margin-top:12px}.integration-create-box input{width:100%}
 .marketplace-kpis{padding:0 20px;margin-bottom:18px;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .marketplace-kpis .kpi{min-height:112px;padding:15px 16px}
-.marketplace-kpis .kpi>strong{font-size:22px;margin:10px 0 4px};line-height:1.2;overflow-wrap:anywhere;word-break:normal
+.marketplace-kpis .kpi>strong{font-size:22px;margin:10px 0 4px;line-height:1.2;overflow-wrap:anywhere;word-break:normal}
 .marketplace-technical{border-top:1px solid var(--border);padding-top:18px;margin-top:4px}
 @media(max-width:900px){.marketplace-kpis{grid-template-columns:repeat(2,minmax(0,1fr));padding:0 12px}}
 @media(max-width:480px){.marketplace-kpis{grid-template-columns:1fr 1fr;gap:8px}.marketplace-kpis .kpi{min-height:100px;padding:12px}.marketplace-kpis .kpi>strong{font-size:18px}}
