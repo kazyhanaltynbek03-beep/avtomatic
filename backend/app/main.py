@@ -2704,10 +2704,10 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     if start > local_today:
         raise HTTPException(422, "Начало периода не может быть в будущем")
     bounded_end = min(end, local_today)
-    # Recheck only orders created near the requested report window. Kaspi has no
-    # completion-date filter, so a bounded lookback catches later handovers and returns
-    # without re-reading the entire account history for every daily report.
-    refresh_after = start - timedelta(days=30)
+    # Kaspi has no completion-date filter. Refresh recent orders only so daily
+    # reports can catch new completions and returns without re-reading a month of
+    # orders every time the report is opened.
+    refresh_after = local_today - timedelta(days=7)
     period_key = f"{report_mode}:{start}:{bounded_end}"
     settings = dict(acc.integration_settings or {})
     cache = dict(settings.get("kaspi_period_sync") or {})
@@ -2735,9 +2735,8 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
             created = marketplace_pipeline._day(payload.get("creation_date"), "Asia/Almaty")
         except marketplace_pipeline.Pending:
             continue
-        # Only status-check orders that could affect this report window or its
-        # 30-day completion/return lookback. The API itself filters new orders by
-        # creationDate; this bounded refresh catches orders completed later.
+        # Only status-check recent orders that can affect this report window or
+        # catch a completion/return from the last seven days.
         if created < refresh_after or created > bounded_end:
             continue
         status = str(payload.get("status") or payload.get("order_status") or "").upper()
