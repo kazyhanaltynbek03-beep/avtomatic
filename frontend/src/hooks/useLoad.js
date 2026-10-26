@@ -13,8 +13,11 @@ export function useLoad(path, refresh, options = {}) {
       setState({ data: null });
       return () => { live = false; };
     }
-    const cacheableReport = path.startsWith("/report?") || path.startsWith("/dashboard/summary?");
-    const cacheKey = cacheableReport ? `${path}\u001f${String(refresh ?? "")}` : null;
+    const cacheableReport = (path.startsWith("/report?") || path.startsWith("/dashboard/summary?")) &&
+      options.cacheScope != null;
+    const cacheKey = cacheableReport
+      ? `${String(options.cacheScope)}\u001f${path}\u001f${String(refresh ?? "")}`
+      : null;
     const cached = cacheKey ? reportCache.get(cacheKey) : null;
     if (cached && Date.now() - cached.savedAt < REPORT_CACHE_TTL_MS) {
       setState({ data: cached.data });
