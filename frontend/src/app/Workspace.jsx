@@ -757,8 +757,8 @@ function ReportPage({ page, ctx }) {
   );
   const { data: systemAlerts, error: systemAlertsError } = useLoad(alertsPath, ctx.refresh);
   const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
-  if (usesDashboard && dashLoading) return <Spinner />;
-  if (usesDashboard && dashError) return <ErrorBox error={dashError} />;
+  if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
+  if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
   if (usesDashboard && !loadedReport) {
     const fast = dash?.report || {};
     const headline = [
@@ -1533,7 +1533,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
   }, [syncing, syncStartedAt, data.status, data.updated_at, data.attempt_at]);
   useEffect(() => {
     if (!syncing && data.status !== "загружается") return undefined;
-    const timer = window.setInterval(() => setReportRefresh((v) => v + 1), 10000);
+    const timer = window.setInterval(() => setReportRefresh((v) => v + 1), 20000);
     return () => window.clearInterval(timer);
   }, [syncing, data.status]);
   useEffect(() => {
@@ -1677,7 +1677,7 @@ function MarketplaceInbox({ channel, ctx }) {
   const activeSyncErrors = kaspiReportMode === "created" ? created.sync_errors : m.sync_errors;
   useEffect(()=>{
     if (!activeSync) return;
-    const timer=window.setInterval(()=>setSummaryReload(v=>v+1),5000);
+    const timer=window.setInterval(()=>setSummaryReload(v=>v+1),20000);
     return ()=>window.clearInterval(timer);
   },[activeSync]);
   useEffect(()=>{
