@@ -911,7 +911,7 @@ function ReportPage({ page, ctx }) {
             refs={ctx.refs}
           />
         </div>
-            {detailMetric && <ReportDetails ctx={ctx} detail={detailMetric} onClose={() => setDetailMetric(null)} />}
+            {detailMetric && <ReportDetails ctx={ctx} detail={detailMetric} onClose={() => setDetailMetric(null)} activeOnly={usesDashboard} />}
       </>
     );
   const headline = [
@@ -1188,8 +1188,8 @@ function ReportPage({ page, ctx }) {
     </>
   );
 }
-function ReportDetails({ ctx, detail, onClose }) {
-  const path = "/report/details?start=" + ctx.start + "&end=" + ctx.end + "&metric=" + detail.metric + (ctx.company ? "&company_id=" + ctx.company : "");
+function ReportDetails({ ctx, detail, onClose, activeOnly = false }) {
+  const path = "/report/details?start=" + ctx.start + "&end=" + ctx.end + "&metric=" + detail.metric + (ctx.company ? "&company_id=" + ctx.company : "") + (activeOnly ? "&active_only=true" : "");
   const { data, error, loading } = useLoad(path, ctx.refresh);
   return (
     <div className="modal-backdrop report-detail-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

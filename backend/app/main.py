@@ -1900,12 +1900,22 @@ def dashboard_summary(
     def report_for(period_start, period_end):
         key = (period_start, period_end, company_id)
         if key not in report_cache:
-            report_cache[key] = f.report(db, u, period_start, period_end, company_id)
+            report_cache[key] = f.report(db, u, period_start, period_end, company_id, active_only=True)
         return report_cache[key]
 
     selected = report_for(start, end)
-    today_report = report_for(today, today)
     month_report = report_for(today.replace(day=1), today)
+    # Today is already part of the current-month report. Reuse its daily totals
+    # instead of running a third full financial-ledger calculation per page load.
+    today_row = next(
+        (row for row in month_report.get("daily", []) if row.get("date") == str(today)),
+        {},
+    )
+    today_report = {
+        "revenue": today_row.get("revenue", 0),
+        "net_profit": today_row.get("profit") if month_report.get("net_profit_complete") else None,
+        "units": today_row.get("units", 0),
+    }
 
     def channels(report):
         found = {str(x.get("channel", "")): x for x in report.get("channel_summary", [])}
@@ -1954,11 +1964,12 @@ def get_report_details(
     metric: str,
     company_id: int | None = None,
     account_id: int | None = None,
+    active_only: bool = False,
     u=Depends(current_user),
     db=Depends(get_db),
 ):
     require(u, "analytics")
-    return f.report_details(db, u, start, end, metric, company_id, account_id)
+    return f.report_details(db, u, start, end, metric, company_id, account_id, active_only)
 
 
 @app.get("/api/stock")

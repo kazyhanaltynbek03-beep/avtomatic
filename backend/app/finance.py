@@ -699,7 +699,7 @@ def adjust(db, user, p):
     return {"reference": ref, "movement_ids": [m.id for m in movements]}
 
 
-def report(db, user, start, end, company_id=None, account_id=None):
+def report(db, user, start, end, company_id=None, account_id=None, active_only=False):
     if end < start:
         fail("Конец периода раньше начала")
     if company_id:
@@ -720,9 +720,14 @@ def report(db, user, start, end, company_id=None, account_id=None):
                 q = q.where(model.date >= start)
         return list(db.scalars(q))
 
-    # An archived/disconnected marketplace account still owns historical
-    # financial records. Keep those in reports; active only controls sync/UI.
-    accounts = {a.id: a for a in db.scalars(scope_query(select(Account), Account, user))}
+    # Historical reports retain disconnected stores. The business overview can
+    # opt into active-only scope, while explicit account reports remain auditable.
+    account_query = scope_query(select(Account), Account, user)
+    if account_id:
+        account_query = account_query.where(Account.id == account_id)
+    elif active_only:
+        account_query = account_query.where(Account.active.is_(True))
+    accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     sales = [s for s in rows(Sale) if s.account_id in account_ids]
     allsales = {s.id: s for s in rows(Sale, False)}
@@ -845,7 +850,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
     channel_totals = defaultdict(lambda: {"revenue": 0, "cogs": 0, "costs": 0, "quantity": 0, "commission": 0, "logistics": 0, "advertising": 0, "returns": 0, "return_units": 0, "pending_cogs": 0})
     products = defaultdict(lambda: {"revenue": 0, "cogs": 0, "costs": 0, "quantity": 0, "pending_cogs": 0})
     categories = defaultdict(lambda: {"revenue": 0, "cogs": 0, "costs": 0, "quantity": 0, "pending_cogs": 0})
-    daily = defaultdict(lambda: {"revenue": 0, "profit": 0})
+    daily = defaultdict(lambda: {"revenue": 0, "profit": 0, "units": 0})
     catalog = {p.id: p for p in db.scalars(select(Product))}
     for s in sales:
         key = accounts[s.account_id].name
@@ -879,6 +884,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
         cat["quantity"] += s.quantity
         cat["pending_cogs"] += int(s.id in pending_cost_ids)
         daily[str(s.date)]["revenue"] += s.revenue
+        daily[str(s.date)]["units"] += s.quantity
         daily[str(s.date)]["profit"] += (
             s.revenue - sale_cogs.get(s.id, s.cogs) - s.commission - s.logistics - s.advertising
         )
@@ -909,6 +915,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
         cat["cogs"] -= return_cost
         cat["quantity"] -= r.quantity
         daily[str(r.date)]["revenue"] -= r.revenue
+        daily[str(r.date)]["units"] -= r.quantity
         daily[str(r.date)]["profit"] -= r.revenue - return_cost
     for e in expenses:
         daily[str(e.date)]["profit"] -= e.amount
@@ -1056,7 +1063,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
     }
 
 
-def report_details(db, user, start, end, metric, company_id=None, account_id=None):
+def report_details(db, user, start, end, metric, company_id=None, account_id=None, active_only=False):
     """Explain a reported amount with deterministic source rows.
 
     This is deliberately not an AI function: every number comes from posted ERP
@@ -1065,7 +1072,7 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
     valid = {"revenue", "cogs", "gross_profit", "commission", "logistics", "advertising", "expenses", "net_profit", "cash", "cash_flow", "stock_value", "b2b_debt", "refunds_payable"}
     if metric not in valid:
         fail("Неизвестный показатель отчёта")
-    summary = report(db, user, start, end, company_id, account_id)
+    summary = report(db, user, start, end, company_id, account_id, active_only)
     if summary[metric] is None:
         return {'metric':metric,'start':str(start),'end':str(end),'expected':None,'explained':None,
                 'difference':None,'rows':[],'reason_code':'COGS_PENDING'}
@@ -1080,15 +1087,17 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
                 q = q.where(model.date >= start)
         return list(db.scalars(q))
 
-    sales = scoped(Sale)
-    returns = scoped(Return)
-    expenses = scoped(Expense)
-    all_sales = {s.id: s for s in scoped(Sale, False)}
-    accounts = {a.id: a for a in db.scalars(scope_query(select(Account), Account, user))}
+    account_query = scope_query(select(Account), Account, user)
     if account_id:
-        sales = [s for s in sales if s.account_id == account_id]
-        returns = [r for r in returns if all_sales.get(r.sale_id) and all_sales[r.sale_id].account_id == account_id]
-        expenses = [e for e in expenses if e.account_id == account_id]
+        account_query = account_query.where(Account.id == account_id)
+    elif active_only:
+        account_query = account_query.where(Account.active.is_(True))
+    accounts = {a.id: a for a in db.scalars(account_query)}
+    account_ids = set(accounts)
+    sales = [sale for sale in scoped(Sale) if sale.account_id in account_ids]
+    all_sales = {sale.id: sale for sale in scoped(Sale, False) if sale.account_id in account_ids}
+    returns = [ret for ret in scoped(Return) if ret.sale_id in all_sales]
+    expenses = [expense for expense in scoped(Expense) if expense.account_id is None or expense.account_id in account_ids]
 
     def item(d, typ, ref, desc, amount, source_id=None):
         return {"date": str(d) if d else None, "type": typ, "reference": ref or "—", "description": desc or "", "amount": amount, "source_id": source_id}

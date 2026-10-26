@@ -35,6 +35,12 @@ def test_disconnected_store_remains_in_historical_reports(client):
     after = report(client)
     assert after["revenue"] == 5000
     assert next(row for row in after["channels"] if row["name"] == "Old WB")["revenue"] == 3000
+    dashboard = client.get(
+        "/api/dashboard/summary",
+        params={"start": "2026-10-01", "end": "2026-10-31"},
+    ).json()["report"]
+    assert dashboard["revenue"] == 2000
+    assert all(row["name"] != "Old WB" for row in dashboard["channels"])
     sales = client.get("/api/data/sales").json()["items"]
     assert [row["reference"] for row in sales] == ["ACTIVE-STORE"]
     with SessionLocal() as db:
@@ -51,9 +57,9 @@ def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch)
     original_report = main.f.report
     periods = []
 
-    def counted_report(db, user, start, end, company_id=None, account_id=None):
-        periods.append((start, end, company_id))
-        return original_report(db, user, start, end, company_id, account_id)
+    def counted_report(db, user, start, end, company_id=None, account_id=None, active_only=False):
+        periods.append((start, end, company_id, active_only))
+        return original_report(db, user, start, end, company_id, account_id, active_only)
 
     monkeypatch.setattr(main.f, "report", counted_report)
     response = client.get(
@@ -63,8 +69,7 @@ def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch)
 
     assert response.status_code == 200, response.text
     assert periods == [
-        (date(2026, 10, 1), today, None),
-        (today, today, None),
+        (date(2026, 10, 1), today, None, True),
     ]
 
 
