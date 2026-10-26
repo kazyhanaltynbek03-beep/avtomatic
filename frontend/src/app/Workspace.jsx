@@ -63,8 +63,11 @@ function Login({ onAuth }) {
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const submitLock = useRef(false);
   const submit = async (e) => {
     e.preventDefault();
+    if (submitLock.current) return;
+    submitLock.current = true;
     setBusy(true);
     setError("");
     try {
@@ -77,6 +80,7 @@ function Login({ onAuth }) {
     } catch (e) {
       setError(e.message);
     } finally {
+      submitLock.current = false;
       setBusy(false);
     }
   };
@@ -1386,8 +1390,12 @@ function ProductOperationModal({ operation, company, onClose, onSaved }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const submitLock = useRef(false);
   const submit = async e => {
-    e.preventDefault(); setBusy(true); setError("");
+    e.preventDefault();
+    if (submitLock.current) return;
+    submitLock.current = true;
+    setBusy(true); setError("");
     try {
       if (operation.kind === "count") {
         const counted = Number(value);
@@ -1405,7 +1413,7 @@ function ProductOperationModal({ operation, company, onClose, onSaved }) {
         onSaved("Цена сохранена");
       }
     } catch(e) { setError(e.message); }
-    finally { setBusy(false); }
+    finally { submitLock.current = false; setBusy(false); }
   };
   const close = () => { if (!busy) onClose(); };
   return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal product-operation-modal" role="dialog" aria-modal="true" onSubmit={submit}>
@@ -1737,6 +1745,7 @@ function DataPage({ page, ctx }) {
     [catalogCategory, setCatalogCategory] = useState(""),
     [catalogSort, setCatalogSort] = useState("name"),
     [kaspiAction, setKaspiAction] = useState({order_id:"",code:"",status:"ACCEPTED_BY_MERCHANT",cancellation_reason:"BUYER_CANCELLATION_BY_MERCHANT",cancellation_comment:"",number_of_space:"1",security_code:""});
+  const mutationLock = useRef(false);
   const params = new URLSearchParams({
     limit: "30",
     offset: String(offset),
@@ -1759,12 +1768,15 @@ function DataPage({ page, ctx }) {
       )
     )
       return;
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    setBusy(true);
     try {
       await api("/data/" + entity + "/" + row.id, { method: "DELETE" });
       ctx.notify(entity === "accounts" ? "Магазин отключён; история сохранена" : "Запись удалена");
     } catch (e) {
       setError(e.message);
-    }
+    } finally { mutationLock.current = false; setBusy(false); }
   };
   const saveProductPrice = async (product, price) => {
     const normalized = Math.round(Number(String(price).replace(",", ".")) * 100);
@@ -1808,11 +1820,13 @@ function DataPage({ page, ctx }) {
         : catalogSort === "price" ? (a.price || 0)-(b.price || 0)
           : String(a.name || "").localeCompare(String(b.name || ""), "ru"));
   const setReturnStatus = async (row, status) => {
+    if (mutationLock.current) return;
     let reason;
     if (status === "defective" || status === "written_off") {
       reason = globalThis.prompt(status === "defective" ? "Причина брака" : "Причина списания");
       if (!reason || !reason.trim()) return;
     }
+    mutationLock.current = true;
     setBusy(true);
     setError("");
     try {
@@ -1821,6 +1835,7 @@ function DataPage({ page, ctx }) {
     } catch (e) {
       setError(e.message);
     } finally {
+      mutationLock.current = false;
       setBusy(false);
     }
   };
@@ -2309,6 +2324,7 @@ function EditModal({ kind, item, ctx, close }) {
     [aiQuestions, setAiQuestions] = useState([]),
     [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""});
   const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
+  const submitLock = useRef(false);
   const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {});
   const requestClose = useCallback(() => {
     if (dirty && !globalThis.confirm("Есть несохранённые изменения. Закрыть без сохранения?")) return;
@@ -2371,6 +2387,8 @@ function EditModal({ kind, item, ctx, close }) {
   };
   const submit = async (e) => {
     e.preventDefault();
+    if (submitLock.current) return;
+    submitLock.current = true;
     setBusy(true);
     setError("");
     try {
@@ -2428,6 +2446,7 @@ function EditModal({ kind, item, ctx, close }) {
     } catch (e) {
       setError(e.message);
     } finally {
+      submitLock.current = false;
       setBusy(false);
     }
   };
