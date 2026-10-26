@@ -727,7 +727,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                    'running' if any(x[0] == 'running' for x in display_sync) else
                    'partial' if any(x[0] == 'partial' for x in display_sync) else
                    'done' if any(x[0] == 'done' for x in display_sync) else 'never')
-    sync_errors = [x[1] for x in display_sync if x[1]]
+    sync_errors = [error for status, error in display_sync if error and status != 'running']
     last_sync = max((a.last_sync for a in accounts if a.last_sync), default=None)
     if not ids:
         return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':None,'api_revenue':None,'api_units':None,'api_returns':None,'api_return_units':None,'api_unconverted':0,'api_data_available':False,'sync_status':'not_connected','sync_errors':[],'last_sync':None,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
@@ -970,7 +970,7 @@ def kaspi_orders_created(start: date, end: date, company_id: int | None = None,
     return {"start":str(start),"end":str(end),"items":items[offset:offset+limit],"total":len(items),
             "orders_amount":sum((Decimal(str(x["amount"])) for x in items if x["amount"] not in (None,"")),Decimal("0")) if verified else None,
             "api_data_available":verified,"sync_status":sync_state,
-            "sync_errors":[x[1] for x in display_sync if x[1]],
+            "sync_errors":[error for status,error in display_sync if error and status != "running"],
             "last_sync":max((a.last_sync for a in accounts if a.last_sync),default=None).isoformat() if any(a.last_sync for a in accounts) else None}
 
 
