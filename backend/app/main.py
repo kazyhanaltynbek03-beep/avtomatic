@@ -1904,18 +1904,15 @@ def dashboard_summary(
         return report_cache[key]
 
     selected = report_for(start, end)
-    month_report = report_for(today.replace(day=1), today)
-    # Today is already part of the current-month report. Reuse its daily totals
-    # instead of running a third full financial-ledger calculation per page load.
-    today_row = next(
-        (row for row in month_report.get("daily", []) if row.get("date") == str(today)),
-        {},
+    month_start = today.replace(day=1)
+    month_report = (
+        selected if (start, end) == (month_start, today)
+        else f.report_headline(db, u, month_start, today, company_id)
     )
-    today_report = {
-        "revenue": today_row.get("revenue", 0),
-        "net_profit": today_row.get("profit") if month_report.get("net_profit_complete") else None,
-        "units": today_row.get("units", 0),
-    }
+    today_report = (
+        selected if (start, end) == (today, today)
+        else f.report_headline(db, u, today, today, company_id)
+    )
 
     def channels(report):
         found = {str(x.get("channel", "")): x for x in report.get("channel_summary", [])}

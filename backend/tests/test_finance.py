@@ -15,6 +15,15 @@ def test_dashboard_summary_reuses_selected_finance_report(client):
     report_response = report(client)
     assert summary.json()["report"]["revenue"] == report_response["revenue"]
     assert summary.json()["report"]["net_profit"] == report_response["net_profit"]
+    from app import main
+    today = str(main.business_today())
+    month_report = report(client, "2026-10-01", today)
+    today_report = report(client, today, today)
+    assert summary.json()["month"]["revenue"] == month_report["revenue"]
+    assert summary.json()["month"]["gross_profit"] == month_report["gross_profit"]
+    assert summary.json()["month"]["net_profit"] == month_report["net_profit"]
+    assert summary.json()["today"]["revenue"] == today_report["revenue"]
+    assert summary.json()["today"]["units"] == today_report["units"]
 
 
 def test_disconnected_store_remains_in_historical_reports(client):
