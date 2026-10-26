@@ -181,10 +181,10 @@ class KaspiConnector(Connector):
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
             **({} if period_mode else {"include[orders]": "user"})}
-        if status_only:
-            payload = {"data":[],"meta":{"pageCount":0}}
-        else:
-            _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
+        # Even when refreshing cached statuses, fetch the selected creation-date
+        # window. Kaspi does not offer a completion-date filter, and historical
+        # cache hits must still discover newly issued orders created in that window.
+        _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
         data = payload.get("data") or []
         selected = data[offset:offset+10]
         extras_selected = False
@@ -253,6 +253,11 @@ class KaspiConnector(Connector):
                     "order_creation_date": a.get("creationDate"), "completion_date": a.get("completionDate"),
                     "raw_attributes": a,
                 }
+            # A status-only lookup is one API call per order. The existing entry,
+            # SKU, and logistics rows are refreshed from this order below in the
+            # sync coordinator; avoid N+1 product/entry calls for unchanged lines.
+            if extras_selected:
+                continue
             try:
                 entry_page = 0
                 while True:
@@ -285,7 +290,7 @@ class KaspiConnector(Connector):
                             "merchant_product_attributes": merchant.get('attributes') or {},
                             "order_status": a.get('status'), "order_state": a.get('state'),
                             "order_creation_date": a.get('creationDate'),
-                            "completed_date": a.get('completionDate'), "returned_date": a.get('returnedDate') or a.get('returnDate') or (a.get('completionDate') if str(a.get('status') or '').upper() == 'RETURNED' else None)}
+                            "completed_date": a.get('completionDate'), "returned_date": a.get('returnedDate') or a.get('returnDate')}
                     entry_page += 1
                     count = (ep.get('meta') or {}).get('pageCount')
                     if not entries or (count is not None and entry_page >= int(count)) or (count is None and len(entries)<100):
