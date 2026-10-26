@@ -1900,7 +1900,7 @@ def dashboard_summary(
     def report_for(period_start, period_end):
         key = (period_start, period_end, company_id)
         if key not in report_cache:
-            report_cache[key] = f.report(db, u, period_start, period_end, company_id)
+            report_cache[key] = f.report(db, u, period_start, period_end, company_id, active_only=True)
         return report_cache[key]
 
     selected = report_for(start, end)
@@ -1964,11 +1964,12 @@ def get_report_details(
     metric: str,
     company_id: int | None = None,
     account_id: int | None = None,
+    active_only: bool = False,
     u=Depends(current_user),
     db=Depends(get_db),
 ):
     require(u, "analytics")
-    return f.report_details(db, u, start, end, metric, company_id, account_id)
+    return f.report_details(db, u, start, end, metric, company_id, account_id, active_only)
 
 
 @app.get("/api/stock")
