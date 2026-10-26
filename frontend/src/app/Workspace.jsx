@@ -3191,7 +3191,7 @@ function prepareKaspiReportRows(rows, headers, accountId) {
   const operationCol = find(["тип операции","операция","вид операции","тип транзакции","operation","transaction type"]);
   const skuCol = find(["артикул продавца","артикул","sku","vendor code","код товара"]);
   const lineCol = find(["id позиции","код позиции","номер позиции","order entry id","entry id","line id"]);
-  const dateCol = find(["дата продажи","дата выдачи","дата завершения заказа","дата завершения","дата операции","sale date","completion date","дата заказа","дата","order date"]);
+  const dateCol = find(["дата изменения статуса","дата выдачи","дата продажи","дата завершения заказа","дата завершения","дата операции","sale date","completion date","дата заказа","дата","order date"]);
   const qtyCol = find(["количество","кол во","qty","quantity","саны"]);
   const totalSaleCol = find(["сумма продажи","сумма товара","стоимость товара","сумма по позиции","итого по товару","line total","total price","totalprice","сумма заказа","сумма"]);
   const unitSaleCol = find(["цена за единицу","цена товара","цена продажи","unit price","unit_price","price"]);
@@ -3255,7 +3255,7 @@ function prepareKaspiReportRows(rows, headers, accountId) {
     const deliveryKey = id + ":logistics:" + sellerDelivery;
     if (sellerDelivery > 0 && !seenOrderCharges.has(deliveryKey)) {
       seenOrderCharges.add(deliveryKey);
-      out.push({...base,__qor_event_type:"logistics",__qor_external_id:id+":logistics",__qor_amount:sellerDelivery});
+      out.push({...base,__qor_event_type:returned?"return_logistics":"logistics",__qor_external_id:(returned?"return-delivery:":"delivery:")+id,__qor_amount:sellerDelivery});
     }
     if (buyerDeliveryCol) base.__qor_buyer_delivery = row[buyerDeliveryCol];
   }
