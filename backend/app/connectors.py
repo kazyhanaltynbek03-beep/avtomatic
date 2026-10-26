@@ -177,7 +177,7 @@ class KaspiConnector(Connector):
         page = max(0, int(state.get("page") or 0))
         offset = max(0, int(state.get("offset") or 0))
         window_end = (until if status_only else min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until))
-        params = {"page[number]": page, "page[size]": 10 if period_mode else 100,
+        params = {"page[number]": page, "page[size]": 100 if status_only else (10 if period_mode else 100),
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
             **({} if period_mode else {"include[orders]": "user"})}
@@ -186,7 +186,7 @@ class KaspiConnector(Connector):
         # cache hits must still discover newly issued orders created in that window.
         _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
         data = payload.get("data") or []
-        selected = data[offset:offset+10]
+        selected = data[offset:offset+(100 if status_only else 10)]
         extras_selected = False
         extras_requested = 0
         missing_errors = []
@@ -256,7 +256,7 @@ class KaspiConnector(Connector):
             # A status-only lookup is one API call per order. The existing entry,
             # SKU, and logistics rows are refreshed from this order below in the
             # sync coordinator; avoid N+1 product/entry calls for unchanged lines.
-            if extras_selected or (status_only and str(a.get("code") or "") in set(state.get("extra_ids") or [])):
+            if extras_selected or (status_only and (str(a.get("code") or "") in set(state.get("known_order_ids") or []) or str(a.get("code") or "") in set(state.get("extra_ids") or []))):
                 continue
             try:
                 entry_page = 0
@@ -306,11 +306,11 @@ class KaspiConnector(Connector):
             extra_ids = state.get("extra_ids") or []
             next_state = ({"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
                 "until_ms":int(until.timestamp()*1000),"page":page,"offset":len(data),
-                "extra_ids":extra_ids,"extra_offset":extra_offset} if extra_offset < len(extra_ids) else None)
+                "extra_ids":extra_ids,"extra_offset":extra_offset,"known_order_ids":state.get("known_order_ids") or []} if extra_offset < len(extra_ids) else None)
         elif period_mode and selected and next_offset < len(data):
             next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
                 "until_ms":int(until.timestamp()*1000),"page":page,"offset":next_offset,
-                "extra_ids":state.get("extra_ids") or [],"extra_offset":int(state.get("extra_offset") or 0)}
+                "extra_ids":state.get("extra_ids") or [],"extra_offset":int(state.get("extra_offset") or 0),"known_order_ids":state.get("known_order_ids") or []}
         elif selected and next_offset < len(data):
             next_state = {"_qor_kaspi_cursor":1,"direction":direction,"start_ms":int(window_start.timestamp()*1000),
                           "until_ms":int(until.timestamp()*1000),"page":page,"offset":next_offset}
