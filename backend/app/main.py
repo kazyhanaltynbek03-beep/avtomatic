@@ -2633,7 +2633,7 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             scope(user, acc.company_id)
             worker = connector(acc, load_saved_credentials(db, acc.id))
             today_local = datetime.now(ZoneInfo("Asia/Almaty"))
-            sync_start = today_local.date() - timedelta(days=370) if report_mode == "issued" else start
+            sync_start = max(today_local.date() - timedelta(days=370), start - timedelta(days=30)) if report_mode == "issued" else start
             local_start = datetime.combine(sync_start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
             local_end = (today_local if end >= today_local.date() else
                          datetime.combine(end + timedelta(days=1), datetime.min.time(), ZoneInfo("Asia/Almaty")))
