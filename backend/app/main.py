@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select, func, or_, text, update, cast, String
+from sqlalchemy import select, func, or_, and_, text, update, cast, String
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field, ValidationError
 from .db import get_db, SessionLocal
@@ -2752,7 +2752,14 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         raise HTTPException(409, "Активная API-интеграция Kaspi не найдена")
     if end < start or (end - start).days > 366:
         raise HTTPException(422, "Укажите корректный период не длиннее 367 дней")
-    if sync_status_for_display(acc)[0] == "running":
+    sync_is_running = sync_status_for_display(acc)[0] == "running"
+    abandoned_kaspi_period_sync = (
+        sync_is_running
+        and acc.channel == "Kaspi"
+        and str(acc.sync_error or "").startswith("KASPI_PERIOD_SYNC")
+        and (acc.last_sync is None or acc.last_sync < now()-timedelta(minutes=5))
+    )
+    if sync_is_running and not abandoned_kaspi_period_sync:
         return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
                 "start":str(start),"end":str(end),"report_mode":report_mode}
     local_today = datetime.now(ZoneInfo("Asia/Almaty")).date()
@@ -2810,8 +2817,13 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         if completed_status_stale:
             refresh_ids.add(order_code)
     status_only = report_mode == "issued"
+    stale_period_claim = and_(
+        Account.channel == "Kaspi",
+        Account.sync_error.like("KASPI_PERIOD_SYNC%"),
+        or_(Account.last_sync < now()-timedelta(minutes=5), Account.last_sync.is_(None)),
+    )
     claimed = db.execute(update(Account).where(Account.id == id,
-        or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None)))
+        or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None), stale_period_claim))
         .values(sync_status="running", sync_error="KASPI_PERIOD_SYNC", last_sync=now()))
     if claimed.rowcount != 1:
         return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
