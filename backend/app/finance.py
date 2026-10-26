@@ -69,6 +69,8 @@ def kaspi_commission_estimates(db, user, start, end, company_id, account_id, sal
         q = scope_query(select(MarketplaceRecord), MarketplaceRecord, user).where(
             MarketplaceRecord.account_id.in_(account_ids),
             MarketplaceRecord.source == "kaspi",
+            func.lower(MarketplaceRecord.payload["record_type"].as_string()) == "order_entry",
+            func.upper(MarketplaceRecord.payload["order_status"].as_string()) == "COMPLETED",
         )
         if company_id:
             q = q.where(MarketplaceRecord.company_id == company_id)
@@ -713,7 +715,13 @@ def report_headline(db, user, start, end, company_id=None):
     accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     if not account_ids:
-        return {"revenue": 0, "gross_profit": 0, "net_profit": 0, "margin": None, "units": 0}
+        return {
+            "revenue": 0, "cogs": 0, "gross_profit": 0, "net_profit": 0, "margin": None,
+            "units": 0, "returns": 0, "return_units": 0, "commission": 0,
+            "commission_actual": 0, "commission_estimated": 0, "commission_estimate_suppressed": False,
+            "logistics": 0, "advertising": 0, "expenses": 0, "profit_complete": True,
+            "net_profit_complete": True, "pending_cogs_sales": 0, "channel_summary": [],
+        }
 
     sales_query = scope_query(select(Sale), Sale, user).where(
         Sale.account_id.in_(account_ids), Sale.date >= start, Sale.date <= end
@@ -810,12 +818,39 @@ def report_headline(db, user, start, end, company_id=None):
     gross_profit = revenue - cogs if profit_complete else None
     net_profit = gross_profit - commission - logistics - advertising - operating if net_profit_complete else None
     units = sum(sale.quantity for sale in sales) - sum(ret.quantity for ret in returns)
+    channel_totals = defaultdict(lambda: {"revenue": 0, "quantity": 0, "returns": 0})
+    for sale in sales:
+        channel = accounts[sale.account_id].channel
+        channel_totals[channel]["revenue"] += sale.revenue
+        channel_totals[channel]["quantity"] += sale.quantity
+    sales_by_id = {sale.id: sale for sale in sales}
+    for ret in returns:
+        sale = sales_by_id.get(ret.sale_id)
+        if sale:
+            channel = accounts[sale.account_id].channel
+            channel_totals[channel]["revenue"] -= ret.revenue
+            channel_totals[channel]["quantity"] -= ret.quantity
+            channel_totals[channel]["returns"] += ret.revenue
     return {
         "revenue": revenue,
+        "cogs": cogs if profit_complete else None,
         "gross_profit": gross_profit,
         "net_profit": net_profit,
         "margin": round(net_profit / revenue * 100, 2) if net_profit is not None and revenue else None,
         "units": units,
+        "returns": sum(ret.revenue for ret in returns),
+        "return_units": sum(ret.quantity for ret in returns),
+        "commission": commission,
+        "commission_actual": commission_actual,
+        "commission_estimated": sum(estimates.values()),
+        "commission_estimate_suppressed": _suppressed,
+        "logistics": logistics,
+        "advertising": advertising,
+        "expenses": operating,
+        "profit_complete": profit_complete,
+        "net_profit_complete": net_profit_complete,
+        "pending_cogs_sales": len(pending_cost_ids),
+        "channel_summary": [{"channel": name, **values} for name, values in channel_totals.items()],
     }
 
 
