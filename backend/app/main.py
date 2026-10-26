@@ -2637,23 +2637,30 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             local_start = datetime.combine(sync_start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
             local_end = (today_local if end >= today_local.date() else
                          datetime.combine(end + timedelta(days=1), datetime.min.time(), ZoneInfo("Asia/Almaty")))
+            event_start = datetime.combine(start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
             cached_children_by_order = {}
-            known_order_ids = []
+            known_orders = {}
+            order_ids_with_entries = set()
             if status_only:
-                # Pull the compact order list across the full reporting horizon.
-                # Kaspi filters on creationDate, so this is needed to discover
-                # orders created earlier and issued/returned on the selected day.
+                # Known orders with cached line items need only a status refresh.
                 for cached in db.scalars(select(MarketplaceRecord).where(
                     MarketplaceRecord.account_id == acc.id,
                     MarketplaceRecord.source == "kaspi",
                 )).all():
                     child = cached.payload or {}
-                    if child.get("record_type") == "order" and child.get("code"):
-                        known_order_ids.append(str(child["code"]))
-                    elif child.get("record_type") in {"order_entry", "delivery_charge", "return_delivery_charge"}:
-                        cached_children_by_order.setdefault(str(child.get("order_id") or ""), []).append(child)
+                    record_type = child.get("record_type")
+                    order_id = str(child.get("order_id") or "")
+                    if record_type == "order" and child.get("code"):
+                        known_orders[order_id] = str(child["code"])
+                    elif record_type in {"order_entry", "delivery_charge", "return_delivery_charge"}:
+                        cached_children_by_order.setdefault(order_id, []).append(child)
+                        if record_type == "order_entry":
+                            order_ids_with_entries.add(order_id)
+            known_order_ids = [code for oid, code in known_orders.items() if oid in order_ids_with_entries]
             cursor = json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
                 "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
+                "event_start_ms":int(event_start.timestamp()*1000),
+                "event_end_ms":int(local_end.timestamp()*1000)-1,
                 "page":0,"offset":0,"extra_ids":([] if status_only else extra_order_ids),"extra_offset":0,
                 "known_order_ids":known_order_ids}, separators=(",", ":"))
             pages = records = inserted_total = updated_total = 0
