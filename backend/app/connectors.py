@@ -168,15 +168,24 @@ class KaspiConnector(Connector):
         # the latest week; previously imported rows are upserted by external ID.
         if state and not state.get("direction") and not period_mode:
             state = {}
-        # New syncs start with the latest week so the current dashboard is useful
-        # immediately, then walk backwards through a full reporting year.
+        # Issue-date reports scan recent creation windows first so today's
+        # completions are visible before older history is checked.
         direction = state.get("direction") or "backward"
         until = datetime.fromtimestamp(state["until_ms"] / 1000, timezone.utc) if state.get("until_ms") else now
-        window_start = (datetime.fromtimestamp(state["start_ms"] / 1000, timezone.utc)
-                        if state.get("start_ms") else max(history_start, now - timedelta(days=7)))
+        initial_start_ms = int(state.get("min_start_ms") or state.get("start_ms") or
+                               int(max(history_start, now - timedelta(days=7)).timestamp() * 1000))
+        min_start = datetime.fromtimestamp(initial_start_ms / 1000, timezone.utc)
+        if status_only:
+            # Keep start_ms pinned to the full lookback bound and move until_ms
+            # backwards one week at a time.
+            window_end = until
+            window_start = max(min_start, until - timedelta(days=7) + timedelta(milliseconds=1))
+        else:
+            window_start = (datetime.fromtimestamp(state["start_ms"] / 1000, timezone.utc)
+                            if state.get("start_ms") else max(history_start, now - timedelta(days=7)))
+            window_end = min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until)
         page = max(0, int(state.get("page") or 0))
         offset = max(0, int(state.get("offset") or 0))
-        window_end = min(window_start + timedelta(days=7) - timedelta(milliseconds=1), until)
         params = {"page[number]": page, "page[size]": 100 if status_only else (10 if period_mode else 100),
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
@@ -184,7 +193,17 @@ class KaspiConnector(Connector):
         # Even when refreshing cached statuses, fetch the selected creation-date
         # window. Kaspi does not offer a completion-date filter, and historical
         # cache hits must still discover newly issued orders created in that window.
-        _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
+        try:
+            _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers())
+        except AccessRequired as exc:
+            if period_mode and "HTTP 400" in str(exc):
+                start_text = window_start.astimezone(timezone.utc).isoformat()
+                end_text = window_end.astimezone(timezone.utc).isoformat()
+                raise AccessRequired(
+                    f"Kaspi отклонил запрос списка заказов: окно {start_text} — {end_text}, "
+                    f"страница {page}, размер {params['page[size]']} (HTTP 400)"
+                ) from exc
+            raise
         data = payload.get("data") or []
         selected = data[offset:offset+(100 if status_only else 10)]
         extras_selected = False
@@ -301,16 +320,28 @@ class KaspiConnector(Connector):
                 errors.append('entries:'+oid+': '+str(exc))
         next_state = None
         next_offset = offset + len(selected)
+        period_state = {
+            "_qor_kaspi_cursor": 1, "scope": period_scope,
+            "start_ms": initial_start_ms if status_only else int(window_start.timestamp() * 1000),
+            "until_ms": int(until.timestamp() * 1000),
+            "page": page, "offset": 0,
+            "extra_ids": state.get("extra_ids") or [],
+            "extra_offset": max(0, int(state.get("extra_offset") or 0)),
+            "known_order_ids": state.get("known_order_ids") or [],
+        }
+        if status_only:
+            period_state.update({"direction": "backward", "min_start_ms": initial_start_ms})
+        elif period_mode:
+            period_state["direction"] = "forward"
         if period_mode and extras_selected:
-            extra_offset = max(0, int(state.get("extra_offset") or 0)) + extras_requested
-            extra_ids = state.get("extra_ids") or []
-            next_state = ({"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
-                "until_ms":int(until.timestamp()*1000),"page":page,"offset":len(data),
-                "extra_ids":extra_ids,"extra_offset":extra_offset,"known_order_ids":state.get("known_order_ids") or []} if extra_offset < len(extra_ids) else None)
+            extra_offset = period_state["extra_offset"] + extras_requested
+            if extra_offset < len(period_state["extra_ids"]):
+                period_state["extra_offset"] = extra_offset
+                period_state["offset"] = len(data)
+                next_state = period_state
         elif period_mode and selected and next_offset < len(data):
-            next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
-                "until_ms":int(until.timestamp()*1000),"page":page,"offset":next_offset,
-                "extra_ids":state.get("extra_ids") or [],"extra_offset":int(state.get("extra_offset") or 0),"known_order_ids":state.get("known_order_ids") or []}
+            period_state["offset"] = next_offset
+            next_state = period_state
         elif selected and next_offset < len(data):
             next_state = {"_qor_kaspi_cursor":1,"direction":direction,"start_ms":int(window_start.timestamp()*1000),
                           "until_ms":int(until.timestamp()*1000),"page":page,"offset":next_offset}
@@ -319,26 +350,23 @@ class KaspiConnector(Connector):
             has_more_pages = bool(data) and ((page_count is not None and page + 1 < int(page_count))
                                                or (page_count is None and len(data) >= (10 if period_mode else 100)))
             if period_mode:
-                extra_ids = state.get("extra_ids") or []
-                extra_offset = max(0, int(state.get("extra_offset") or 0))
                 if has_more_pages:
-                    next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
-                        "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0,
-                        "extra_ids":extra_ids,"extra_offset":extra_offset}
-                elif window_end < until:
-                    # Keep every Kaspi date filter within one week, including the
-                    # status-only history scan used for issue-date reports.
-                    next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,
-                        "start_ms":int((window_end+timedelta(milliseconds=1)).timestamp()*1000),
-                        "until_ms":int(until.timestamp()*1000),"page":0,"offset":0,
-                        "extra_ids":extra_ids,"extra_offset":extra_offset,
-                        "known_order_ids":state.get("known_order_ids") or []}
-                elif extra_offset < len(extra_ids):
-                    next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,
-                        "start_ms":int(window_start.timestamp()*1000),"until_ms":int(until.timestamp()*1000),
-                        "page":page,"offset":len(data),"extra_ids":extra_ids,"extra_offset":extra_offset}
-                else:
-                    next_state = None
+                    # Preserve cached IDs on every page to avoid re-fetching
+                    # detailed entries for orders already in the local history.
+                    period_state["page"] = page + 1
+                    next_state = period_state
+                elif status_only and window_start > min_start:
+                    period_state["until_ms"] = int((window_start - timedelta(milliseconds=1)).timestamp() * 1000)
+                    period_state["page"] = 0
+                    next_state = period_state
+                elif not status_only and window_end < until:
+                    period_state["start_ms"] = int((window_end + timedelta(milliseconds=1)).timestamp() * 1000)
+                    period_state["page"] = 0
+                    period_state["offset"] = 0
+                    next_state = period_state
+                elif period_state["extra_offset"] < len(period_state["extra_ids"]):
+                    period_state["offset"] = len(data)
+                    next_state = period_state
             elif has_more_pages:
                 next_state = {"_qor_kaspi_cursor":1,"direction":direction,"start_ms":int(window_start.timestamp()*1000),
                               "until_ms":int(until.timestamp()*1000),"page":page+1,"offset":0}
