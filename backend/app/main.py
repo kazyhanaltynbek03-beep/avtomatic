@@ -1484,6 +1484,10 @@ def listing(
 ):
     q = access_query(db, u, entity, search, company_id, account_id)
     model = MODELS[entity][0]
+    if entity in {"sales", "expenses", "cash", "purchases"} and (start is not None or end is not None):
+        if start is None or end is None or end < start:
+            raise HTTPException(422, "Укажите корректный диапазон дат")
+        q = q.where(model.date >= start, model.date <= end)
     if channel and entity == "sales":
         q = q.where(
             Sale.account_id.in_(select(Account.id).where(Account.channel == channel))
@@ -2711,7 +2715,7 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     age = (now() - cached_at).total_seconds() if cached_at else None
     completed_status_stale = force or cached_at is None or age is None or age >= 6 * 60 * 60
     is_historical = bounded_end < local_today
-    cache_ttl = 60 if start == bounded_end == local_today else (300 if bounded_end == local_today - timedelta(days=1) else 3600)
+    cache_ttl = 5 * 60 if start == bounded_end == local_today else (10 * 60 if bounded_end == local_today - timedelta(days=1) else 3600)
     cache_fresh = cached_at is not None and (is_historical or age is not None and age < cache_ttl)
     if cache_fresh and not force and report_mode == "created":
         return {"ok":True,"status":"cached","cached":True,"account_id":acc.id,"start":str(start),"end":str(bounded_end),"report_mode":report_mode}
