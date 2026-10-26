@@ -272,11 +272,24 @@ class KaspiConnector(Connector):
                     "order_creation_date": a.get("creationDate"), "completion_date": a.get("completionDate"),
                     "raw_attributes": a,
                 }
-            # A status-only lookup is one API call per order. The existing entry,
-            # SKU, and logistics rows are refreshed from this order below in the
-            # sync coordinator; avoid N+1 product/entry calls for unchanged lines.
-            if extras_selected or (status_only and (str(a.get("code") or "") in set(state.get("known_order_ids") or []) or str(a.get("code") or "") in set(state.get("extra_ids") or []))):
+            # Cached orders already have lines. For new orders in a status-only
+            # scan, fetch line details only when the sale/return belongs to the
+            # selected event-date report.
+            if extras_selected or (status_only and (
+                str(a.get("code") or "") in set(state.get("known_order_ids") or [])
+                or str(a.get("code") or "") in set(state.get("extra_ids") or [])
+            )):
                 continue
+            if status_only:
+                event_start_ms = int(state.get("event_start_ms") or 0)
+                event_end_ms = int(state.get("event_end_ms") or 0)
+                event_dates = (a.get("completionDate"), a.get("returnedDate") or a.get("returnDate"))
+                relevant_event = any(
+                    value is not None and event_start_ms <= int(value) <= event_end_ms
+                    for value in event_dates
+                )
+                if not relevant_event:
+                    continue
             try:
                 entry_page = 0
                 while True:
@@ -328,6 +341,8 @@ class KaspiConnector(Connector):
             "extra_ids": state.get("extra_ids") or [],
             "extra_offset": max(0, int(state.get("extra_offset") or 0)),
             "known_order_ids": state.get("known_order_ids") or [],
+            "event_start_ms": state.get("event_start_ms"),
+            "event_end_ms": state.get("event_end_ms"),
         }
         if status_only:
             period_state.update({"direction": "backward", "min_start_ms": initial_start_ms})
