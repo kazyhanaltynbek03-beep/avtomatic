@@ -3315,7 +3315,7 @@ function Imports({ ctx }) {
         setParsed(synthetic);
         setMapping({
           event_type:"__qor_event_type", external_id:"__qor_external_id", date:"__qor_date",
-          sku:"__qor_sku", quantity:"__qor_quantity", unit_price:"__qor_unit_price",
+          order_id:"__qor_order_id", sku:"__qor_sku", quantity:"__qor_quantity", unit_price:"__qor_unit_price",
           discount:"__qor_discount", refund:"__qor_refund", sale_reference:"__qor_sale_reference", amount:"__qor_amount",
         });
       } else {
