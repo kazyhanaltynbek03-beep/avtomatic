@@ -760,7 +760,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
         p=payload or {}; typ=str(p.get('record_type') or '').lower(); src=channel.lower()
         if src == 'kaspi' and typ == 'order_entry':
             status_now = str(p.get('order_status') or '').upper()
-            date_field = (p.get('returned_date') or p.get('return_date')) if status_now == 'RETURNED' else p.get('completed_date')
+            date_field = (p.get('returned_date') or p.get('return_date') or p.get('completed_date')) if status_now == 'RETURNED' else p.get('completed_date')
             try:
                 api_data_available = api_data_available or start <= marketplace_pipeline._day(date_field, 'Asia/Almaty') <= end
             except marketplace_pipeline.Pending:
@@ -803,7 +803,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                                 key=(account_id,sale_day)
                                 raw_kaspi_commission_bases[key]=raw_kaspi_commission_bases.get(key,0)+sale_amount
                         if returned:
-                            return_dt=p.get('returned_date') or p.get('return_date')
+                            return_dt=p.get('returned_date') or p.get('return_date') or p.get('completed_date')
                             return_day=marketplace_pipeline._day(return_dt, 'Asia/Almaty')
                             if start<=return_day<=end:
                                 api_returns += sale_amount
@@ -1848,11 +1848,12 @@ def get_report(
     end: date,
     company_id: int | None = None,
     account_id: int | None = None,
+    active_only: bool = False,
     u=Depends(current_user),
     db=Depends(get_db),
 ):
     require(u, "analytics")
-    return f.report(db, u, start, end, company_id, account_id)
+    return f.report(db, u, start, end, company_id, account_id, active_only)
 
 
 @app.get("/api/reports/executive.xlsx")
@@ -2703,8 +2704,10 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     if start > local_today:
         raise HTTPException(422, "Начало периода не может быть в будущем")
     bounded_end = min(end, local_today)
-    # A short return-status window keeps routine period syncs bounded. Older, still-open orders are always refreshed below.
-    refresh_after = local_today - timedelta(days=7)
+    # Recheck only orders created near the requested report window. Kaspi has no
+    # completion-date filter, so a bounded lookback catches later handovers and returns
+    # without re-reading the entire account history for every daily report.
+    refresh_after = start - timedelta(days=30)
     period_key = f"{report_mode}:{start}:{bounded_end}"
     settings = dict(acc.integration_settings or {})
     cache = dict(settings.get("kaspi_period_sync") or {})
@@ -2728,6 +2731,15 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         payload = row.payload or {}
         if payload.get("record_type") != "order":
             continue
+        try:
+            created = marketplace_pipeline._day(payload.get("creation_date"), "Asia/Almaty")
+        except marketplace_pipeline.Pending:
+            continue
+        # Only status-check orders that could affect this report window or its
+        # 30-day completion/return lookback. The API itself filters new orders by
+        # creationDate; this bounded refresh catches orders completed later.
+        if created < refresh_after or created > bounded_end:
+            continue
         status = str(payload.get("status") or payload.get("order_status") or "").upper()
         if status in {"CANCELLED", "RETURNED"}:
             continue
@@ -2737,11 +2749,7 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         if status != "COMPLETED":
             refresh_ids.add(order_code)
             continue
-        try:
-            created = marketplace_pipeline._day(payload.get("creation_date"), "Asia/Almaty")
-        except marketplace_pipeline.Pending:
-            continue
-        if created >= refresh_after and completed_status_stale:
+        if completed_status_stale:
             refresh_ids.add(order_code)
     status_only = bool(cache_fresh and not force and report_mode == "issued")
     claimed = db.execute(update(Account).where(Account.id == id,
