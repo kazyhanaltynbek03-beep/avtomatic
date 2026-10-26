@@ -17,7 +17,7 @@ def test_dashboard_summary_reuses_selected_finance_report(client):
     assert summary.json()["report"]["net_profit"] == report_response["net_profit"]
 
 
-def test_disconnected_store_is_hidden_from_reports_but_history_is_kept(client):
+def test_disconnected_store_remains_in_historical_reports(client):
     from app.db import SessionLocal
     from app.models import Account
 
@@ -33,7 +33,8 @@ def test_disconnected_store_is_hidden_from_reports_but_history_is_kept(client):
     response = client.delete("/api/accounts/4/credentials")
     assert response.status_code == 200, response.text
     after = report(client)
-    assert after["revenue"] == 2000
+    assert after["revenue"] == 5000
+    assert next(row for row in after["channels"] if row["name"] == "Old WB")["revenue"] == 3000
     sales = client.get("/api/data/sales").json()["items"]
     assert [row["reference"] for row in sales] == ["ACTIVE-STORE"]
     with SessionLocal() as db:

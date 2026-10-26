@@ -3,8 +3,9 @@
 Dated seller costs fill only FIFO-pending marketplace sales. Existing inventory
 FIFO costs remain authoritative and are never replaced by a manual estimate.
 """
+from datetime import date
 from sqlalchemy import select
-from .models import MarketplaceProductCost, MarketplaceProductMapping
+from .models import MarketplaceProductCost, MarketplaceProductMapping, Product
 
 CHANNELS = {"Kaspi", "Wildberries", "Ozon"}
 
@@ -64,7 +65,29 @@ def resolve_cost_overrides(db, sales, returns, accounts):
         costs_by_pair.setdefault((row.account_id, row.external_key), []).append(row)
 
     override_by_sale = {}
+    products = {product.id: product for product in db.scalars(
+        select(Product).where(Product.id.in_(product_ids))
+    )} if product_ids else {}
     for sale in pending_marketplace:
+        product = products.get(sale.product_id)
+        history = (product.specifications or {}).get("purchase_cost_history", []) if product else []
+        dated = []
+        for item in history if isinstance(history, list) else []:
+            try:
+                if item.get("effective_from") and item.get("unit_cost") is not None:
+                    effective = date.fromisoformat(str(item["effective_from"]))
+                    if effective <= sale.date:
+                        dated.append((effective, int(item["unit_cost"])))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        if dated:
+            effective, unit_cost = max(dated, key=lambda item: item[0])
+            if unit_cost <= 0:
+                continue
+            sale_costs[sale.id] = unit_cost * sale.quantity
+            pending.discard(sale.id)
+            override_by_sale[sale.id] = unit_cost
+            continue
         candidates = [
             row
             for key in keys_by_pair.get((sale.account_id, sale.product_id), [])

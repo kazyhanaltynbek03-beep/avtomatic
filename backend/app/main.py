@@ -585,14 +585,34 @@ def marketplace_products(channel: str, company_id: int | None = None, account_id
         else:
             period_qty = sum(x.quantity for x in period_sales); period_revenue = sum(x.revenue for x in period_sales)
             lifetime_qty = sum(x.quantity for x in all_sales); lifetime_revenue = sum(x.revenue for x in all_sales); unconverted = 0
+        sku_specs = product.specifications or {}
+        sku_unit_cost = int(sku_specs.get("purchase_cost") or 0)
+        legacy_cost = marketplace_costs.latest_cost(db, account_ids[0], account_keys.get((pid, account_ids[0]), set()), end or business_today())
+        effective_history = [x for x in (sku_specs.get("purchase_cost_history") or []) if isinstance(x, dict)]
+        cost_day = end or business_today()
+        dated_sku_costs = []
+        for item in effective_history:
+            try:
+                effective = date.fromisoformat(str(item.get("effective_from")))
+                unit_cost = int(item.get("unit_cost"))
+                if effective <= cost_day:
+                    dated_sku_costs.append((effective, unit_cost))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        sku_cost_at_period = max(dated_sku_costs, default=(None, sku_unit_cost), key=lambda item: item[0] or date.min)[1]
+        sku_cost_history_applies = bool(dated_sku_costs)
+        legacy_cost_applies = not sku_cost_history_applies and sku_unit_cost <= 0
         out.append({"id": product.id, "sku": product.sku, "article": product.article, "name": product.name, "brand": product.brand, "category": product.category,
             "image_url": (product.media or [None])[0], "images": product.media or [], "price": product.price, "currency": product.currency,
             "sold_units": period_qty, "revenue": period_revenue, "lifetime_sold_units": lifetime_qty, "lifetime_revenue": lifetime_revenue, "unconverted_sales": unconverted,
             "cogs": cogs, "commission": commission, "logistics": logistics, "advertising": advertising,
             "profit": None if any(x.id in pending_ids for x in period_sales) else sum(x.revenue for x in period_sales)-cogs-commission-logistics-advertising,
             "account_id": account_ids[0],
-            "unit_cost": (lambda row: str(Decimal(row.unit_cost) / 100) if row else None)(marketplace_costs.latest_cost(db, account_ids[0], account_keys.get((pid, account_ids[0]), set()), end or business_today())),
-            "cost_effective_from": (lambda row: str(row.effective_from) if row else None)(marketplace_costs.latest_cost(db, account_ids[0], account_keys.get((pid, account_ids[0]), set()), end or business_today())),
+            # SKU purchase cost is the normal entry point. Legacy account-specific
+            # history remains a read-only fallback for earlier sales.
+            "unit_cost": (sku_cost_at_period if sku_cost_at_period > 0 else None) if sku_cost_history_applies else (legacy_cost.unit_cost if legacy_cost_applies and legacy_cost else (sku_unit_cost or None)),
+            "cost_source": "SKU" if sku_cost_history_applies or sku_unit_cost else ("история кабинета" if legacy_cost_applies and legacy_cost else None),
+            "cost_effective_from": str(max(dated_sku_costs, key=lambda item: item[0])[0]) if dated_sku_costs else (str(legacy_cost.effective_from) if legacy_cost_applies and legacy_cost else None),
             "stock_quantity": sum(int(v.get("quantity") or 0) for k,v in ((product.specifications or {}).get("marketplace_stock") or {}).items() if k.startswith(channel+":")),
             "specifications": product.specifications or {}})
     out.sort(key=lambda x: (x["revenue"], x["sold_units"]), reverse=True)
@@ -808,6 +828,101 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
         'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'commission_estimate_suppressed':commission_estimate_suppressed,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
         'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':not sync_in_progress and not sync_errors and not api_unconverted}
+
+
+@app.get("/api/expenses/summary")
+def expense_summary(start: date, end: date, company_id: int | None = None,
+                    u=Depends(current_user), db=Depends(get_db)):
+    """Summarize posted expenses by marketplace/account and readable category."""
+    require(u, "finance")
+    if end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
+    expense_q = scope_query(select(Expense), Expense, u).where(
+        Expense.date >= start, Expense.date <= end)
+    if company_id is not None:
+        scope(u, company_id)
+        expense_q = expense_q.where(Expense.company_id == company_id)
+    expense_rows = list(db.scalars(expense_q))
+
+    # Inactive/archived integrations keep their historical expense attribution.
+    account_q = scope_query(select(Account), Account, u)
+    if company_id is not None:
+        account_q = account_q.where(Account.company_id == company_id)
+    accounts = {account.id: account for account in db.scalars(account_q)}
+
+    # Commission, logistics and advertising can be posted on a sale instead of
+    # as a separate Expense. Include them here using the same arithmetic as the
+    # profit report, so the expense page and accounting do not disagree.
+    sale_q = scope_query(select(Sale), Sale, u).where(Sale.date >= start, Sale.date <= end,
+        Sale.account_id.in_(accounts.keys() or [-1]))
+    if company_id is not None:
+        sale_q = sale_q.where(Sale.company_id == company_id)
+    sales = list(db.scalars(sale_q))
+
+    category_labels = {
+        "Marketplace commission": "Комиссия маркетплейса",
+        "Marketplace commission VAT": "НДС с комиссии",
+        "Marketplace acquiring": "Эквайринг",
+        "Marketplace logistics": "Логистика",
+        "Marketplace return logistics": "Обратная логистика",
+        "Marketplace storage": "Хранение",
+        "Marketplace acceptance": "Приёмка",
+        "Marketplace penalties": "Штрафы",
+        "Marketplace deductions": "Удержания",
+        "Marketplace other expenses": "Прочие расходы маркетплейса",
+        "Реклама": "Реклама",
+        "Налоги": "Налоги",
+        "Аренда": "Аренда",
+        "Зарплата": "Зарплата",
+    }
+    by_channel = {}
+    by_category = {}
+    def add(account_id, category, amount, source="posted"):
+        amount = int(amount or 0)
+        if not amount:
+            return
+        account = accounts.get(account_id)
+        channel = account.channel if account else "Offline"
+        account_name = account.name if account else "Офлайн / без магазина"
+        channel_label = {"Kaspi": "Kaspi", "Wildberries": "Wildberries", "Ozon": "Ozon",
+                         "Offline": "Офлайн", "B2B": "B2B"}.get(channel, channel)
+        channel_key = (channel, account_id)
+        channel_row = by_channel.setdefault(channel_key, {"channel": channel, "channel_label": channel_label,
+            "account_id": account_id, "account_name": account_name, "total": 0,
+            "posted_total": 0, "estimated_total": 0, "categories": {}})
+        channel_row["total"] += amount
+        channel_row["estimated_total" if source == "estimate" else "posted_total"] += amount
+        label = category_labels.get(category, category or "Прочие расходы")
+        channel_row["categories"][label] = channel_row["categories"].get(label, 0) + amount
+        category_row = by_category.setdefault(label, {"category": label, "total": 0,
+            "posted_total": 0, "estimated_total": 0})
+        category_row["total"] += amount
+        category_row["estimated_total" if source == "estimate" else "posted_total"] += amount
+
+    for row in expense_rows:
+        add(row.account_id, row.category, row.amount)
+    for sale in sales:
+        for category, value in (("Marketplace commission", sale.commission),
+                                ("Marketplace logistics", sale.logistics),
+                                ("Реклама", sale.advertising)):
+            add(sale.account_id, category, value)
+
+    commission_estimated = 0
+    commission_rate = None
+    commission_warning = False
+    if accounts:
+        commission_estimates, commission_rate, commission_warning = f.kaspi_commission_estimates(
+            db, u, start, end, company_id, None, sales, expense_rows, accounts)
+        for (account_id, _day), amount in commission_estimates.items():
+            commission_estimated += amount
+            add(account_id, "Marketplace commission", amount, "estimate")
+    categories = sorted(by_category.values(), key=lambda row: (-row["total"], row["category"]))
+    channels = sorted(by_channel.values(), key=lambda row: (-row["total"], row["channel_label"], row["account_name"]))
+    return {"start": str(start), "end": str(end), "total": sum(row["total"] for row in categories),
+        "posted_total": sum(row.amount for row in expense_rows) + sum(s.commission+s.logistics+s.advertising for s in sales),
+        "commission_estimated": commission_estimated, "commission_rate": commission_rate,
+        "commission_estimate_warning": commission_warning, "channels": channels, "categories": categories,
+        "records": len(expense_rows) + len(sales)}
 
 
 @app.get("/api/kaspi/orders-created")
@@ -1483,7 +1598,7 @@ def validate_master(db, u, entity, p, existing=None):
         ai.niche_score(p.data)
 
 
-def master_values(p, entity):
+def master_values(p, entity, existing=None):
     values = p.model_dump()
     # Product version is an optimistic concurrency token, not an editable field.
     if entity == "products":
@@ -1494,8 +1609,40 @@ def master_values(p, entity):
         custom_fields = values.pop("custom_fields", {})
         marketplace_stock_allocations = values.pop("marketplace_stock_allocations", None)
         specs = dict(values.get("specifications") or {})
+        old_specs = dict((existing.specifications or {}) if existing is not None else {})
+        history = list(old_specs.get("purchase_cost_history") or [])
+        old_cost = int(old_specs.get("purchase_cost") or 0)
+        today = business_today()
+        if existing is None and purchase_cost > 0:
+            history.append({"effective_from": str(today), "unit_cost": int(purchase_cost)})
+        elif existing is not None and int(purchase_cost or 0) == old_cost and old_cost > 0 and not history:
+            # Start tracking an existing SKU from today without rewriting its
+            # untracked historical sales.
+            history.append({"effective_from": str(today), "unit_cost": old_cost})
+        elif existing is not None and int(purchase_cost or 0) != old_cost:
+            # Keep today's already sold units on the previous value. A changed
+            # SKU cost starts on the next Almaty business day; historical batches
+            # and posted sale COGS remain untouched.
+            if old_cost > 0 and not any(
+                isinstance(item, dict) and item.get("effective_from") == str(today)
+                for item in history
+            ):
+                history.append({"effective_from": str(today), "unit_cost": old_cost})
+            if int(purchase_cost or 0) >= 0:
+                # If there was no known previous SKU cost, the first confirmed
+                # value applies today. Replacements take effect tomorrow.
+                effective = str(today + timedelta(days=1) if old_cost > 0 else today)
+                history = [item for item in history if not (
+                    isinstance(item, dict) and item.get("effective_from") == effective
+                )]
+                history.append({"effective_from": effective, "unit_cost": int(purchase_cost)})
+        history = sorted(
+            [item for item in history if isinstance(item, dict) and item.get("effective_from") and item.get("unit_cost") is not None],
+            key=lambda item: str(item["effective_from"]),
+        )
         specs.update({"description": description, "barcode": barcode,
-                      "purchase_cost": purchase_cost, "custom_fields": custom_fields})
+                      "purchase_cost": purchase_cost, "purchase_cost_history": history,
+                      "custom_fields": custom_fields})
         if marketplace_stock_allocations is not None:
             specs["marketplace_stock_allocations"] = marketplace_stock_allocations
         values["specifications"] = specs
@@ -1557,7 +1704,7 @@ def edit_master(
     if entity == "customers" and p.company_id != obj.company_id:
         raise HTTPException(422, "Компания покупателя неизменяема")
     before = dump(obj)
-    for k, v in master_values(p, entity).items():
+    for k, v in master_values(p, entity, obj).items():
         setattr(obj, k, v)
     if entity == "products":
         obj.version += 1
@@ -1841,11 +1988,12 @@ def inventory_count(p: s.StockCountIn, tasks: BackgroundTasks, u=Depends(current
     delta = p.counted_quantity - current
     movement_id = None
     if delta:
-        if delta > 0 and (p.unit_cost is None or p.unit_cost <= 0):
+        unit_cost = p.unit_cost or int((product.specifications or {}).get("purchase_cost") or 0)
+        if delta > 0 and unit_cost <= 0:
             raise HTTPException(422, "При увеличении остатка укажите подтверждённую себестоимость единицы")
         adjustment = s.AdjustIn(
             company_id=p.company_id, product_id=product.id, date=business_today(),
-            quantity=delta, unit_cost=p.unit_cost or 0,
+            quantity=delta, unit_cost=unit_cost if delta > 0 else 0,
             kind="adjustment", reason=p.reason,
             reference=f"count:{p.company_id}:{p.idempotency_key}",
         )
@@ -3312,13 +3460,21 @@ def import_errors(id: int, u=Depends(current_user), db=Depends(get_db)):
 
 @app.get("/api/export/{entity}")
 def export(
-    entity: str, format: str = "csv", u=Depends(current_user), db=Depends(get_db)
+    entity: str, format: str = "csv", start: date | None = None, end: date | None = None,
+    company_id: int | None = None, u=Depends(current_user), db=Depends(get_db)
 ):
     if format not in ("csv", "xlsx"):
         raise HTTPException(422, "Формат csv или xlsx")
     aliases = {"bank": "cash", "reports": "sales", "b2b": "sales", "stock": "movements"}
     resolved = aliases.get(entity, entity)
-    q = access_query(db, u, resolved)
+    if start and end and end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
+    q = access_query(db, u, resolved, company_id=company_id)
+    model = MODELS[resolved][0]
+    if start and hasattr(model, "date"):
+        q = q.where(model.date >= start)
+    if end and hasattr(model, "date"):
+        q = q.where(model.date <= end)
     if entity == "b2b":
         q = q.where(
             Sale.account_id.in_(select(Account.id).where(Account.channel == "B2B"))
@@ -3381,4 +3537,6 @@ if static.exists() and (static / "assets").exists():
     def frontend(path: str):
         if path.startswith("api/"):
             raise HTTPException(404, "API route not found")
+        if path.startswith("public/kaspi-feeds/"):
+            raise HTTPException(404, "Прайс-лист не найден")
         return FileResponse(static / "index.html")

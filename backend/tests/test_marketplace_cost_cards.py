@@ -44,6 +44,6 @@ def test_marketplace_card_cost_recalculates_kaspi_reports(client):
         "start": "2026-10-01", "end": "2026-10-31",
     }).json()
     card = next(item for item in products["items"] if item["id"] == 1)
-    assert card["unit_cost"] == "100"
+    assert card["unit_cost"] == 10000
     assert card["cogs"] == 20000
     assert card["profit"] == 30000

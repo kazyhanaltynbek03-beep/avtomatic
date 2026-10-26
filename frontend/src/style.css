@@ -2080,3 +2080,25 @@ aside{border-right:1px solid rgba(255,255,255,.055);box-shadow:14px 0 42px rgba(
   .kaspi-report-controls>button:nth-of-type(3),.kaspi-report-controls>.muted{grid-column:1}
   .marketplace-kpis{grid-template-columns:1fr}
 }
+
+/* Clear expense totals by marketplace and category, with compact mobile cards. */
+.expense-summary{display:grid;gap:16px;margin-bottom:18px}
+.expense-summary .panel-heading{margin:0}
+.expense-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.expense-summary-grid>div{min-width:0;padding:15px;border:1px solid var(--line,#dce7e1);border-radius:16px;background:var(--surface,#fff)}
+.expense-summary-grid h3{margin:0 0 12px;font-size:15px;color:#24483a}
+.expense-summary-grid .table-scroll{max-width:100%;overflow-x:auto}
+.expense-summary-grid table{min-width:520px}
+.expense-summary-grid th,.expense-summary-grid td{padding:10px 9px}
+.expense-summary .compact-kpis{margin:0}
+.expense-summary .compact-kpis>div{min-width:0}
+.expense-summary .compact-kpis strong{overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+@media(max-width:760px){
+  .expense-summary-grid{grid-template-columns:1fr;gap:11px}
+  .expense-summary-grid>div{padding:12px}
+  .expense-summary-grid table{min-width:460px}
+  .expense-summary .compact-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .expense-summary .compact-kpis>div{padding:12px 10px}
+  .expense-summary .compact-kpis span{font-size:11px}
+  .expense-summary .compact-kpis strong{font-size:17px}
+}

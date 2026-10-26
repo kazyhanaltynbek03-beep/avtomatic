@@ -1,5 +1,6 @@
+from datetime import timedelta
 from app.db import SessionLocal
-from app.models import Batch, Movement, Product
+from app.models import Batch, Movement, Product, business_today
 
 
 def test_product_editor_saves_fields_and_rejects_stale_version(client):
@@ -24,6 +25,32 @@ def test_product_editor_saves_fields_and_rejects_stale_version(client):
         product = db.get(Product, row["id"])
         assert product.name == "Edited Alpha"
         assert product.price == 12500
+        assert product.specifications["purchase_cost_history"] == [
+            {"effective_from": str(business_today()), "unit_cost": 8000}
+        ]
+
+
+def test_sku_cost_change_is_dated_and_preserves_previous_value(client):
+    row = client.get("/api/data/products?limit=10").json()["items"][0]
+    today = business_today()
+    base = {
+        "sku": row["sku"], "name": row["name"], "category": row.get("category", ""),
+        "article": row.get("article", ""), "brand": row.get("brand", ""),
+        "supplier": row.get("supplier", ""), "country": row.get("country", ""),
+        "media": row.get("media", []), "currency": "KZT", "fx_rate": 10000,
+        "weight_g": 0, "volume_cm3": 0, "min_price": 0, "recommended_price": 0,
+        "price": 10000, "min_stock": 5, "active": True, "description": "",
+        "barcode": "", "custom_fields": {}, "specifications": {},
+    }
+    first = client.put(f"/api/data/products/{row['id']}", json={**base, "version": row["version"], "purchase_cost": 8000})
+    assert first.status_code == 200, first.text
+    first_version = first.json()["version"]
+    changed = client.put(f"/api/data/products/{row['id']}", json={**base, "version": first_version, "purchase_cost": 9000})
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["specifications"]["purchase_cost_history"] == [
+        {"effective_from": str(today), "unit_cost": 8000},
+        {"effective_from": str(today + timedelta(days=1)), "unit_cost": 9000},
+    ]
 
 
 def test_inventory_count_is_auditable_and_idempotent(client):

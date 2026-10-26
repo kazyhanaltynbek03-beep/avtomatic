@@ -59,7 +59,6 @@ export const groups = [
       ["expenses", "Расходы", Receipt, "finance"],
       ["cash", "Cash Flow", Wallet, "finance"],
       ["accounting", "Бухгалтерия", FileText, "finance"],
-      ["wb-costs", "Себестоимость товаров", Receipt, "finance"],
     ],
   ],
   [
@@ -362,6 +361,10 @@ export const labels = {
   supplier: "Поставщик",
   date: "Дата",
   total: "Стоимость",
+  posted_total: "Проведено",
+  estimated_total: "Расчётная оценка",
+  channel_label: "Канал",
+  account_name: "Магазин",
   extra_cost: "Доп. затраты",
   product_id: "Товар",
   quantity: "Количество",
@@ -402,6 +405,8 @@ export const labels = {
 export const monetary = new Set([
   "price",
   "total",
+  "posted_total",
+  "estimated_total",
   "extra_cost",
   "total_cost",
   "remaining_cost",

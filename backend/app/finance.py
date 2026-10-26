@@ -720,18 +720,18 @@ def report(db, user, start, end, company_id=None, account_id=None):
                 q = q.where(model.date >= start)
         return list(db.scalars(q))
 
-    accounts = {
-        a.id: a for a in db.scalars(scope_query(select(Account), Account, user).where(Account.active.is_(True)))
-    }
-    active_account_ids = set(accounts)
-    sales = [s for s in rows(Sale) if s.account_id in active_account_ids]
+    # An archived/disconnected marketplace account still owns historical
+    # financial records. Keep those in reports; active only controls sync/UI.
+    accounts = {a.id: a for a in db.scalars(scope_query(select(Account), Account, user))}
+    account_ids = set(accounts)
+    sales = [s for s in rows(Sale) if s.account_id in account_ids]
     allsales = {s.id: s for s in rows(Sale, False)}
-    returns = [r for r in rows(Return) if allsales.get(r.sale_id) and allsales[r.sale_id].account_id in active_account_ids]
+    returns = [r for r in rows(Return) if allsales.get(r.sale_id) and allsales[r.sale_id].account_id in account_ids]
     pending_return_inspection_units = sum(
         r.quantity for r in returns
         if r.inventory_status in {"requested", "approved", "in_transit", "received", "inspection"}
     )
-    expenses = [e for e in rows(Expense) if e.account_id is None or e.account_id in active_account_ids]
+    expenses = [e for e in rows(Expense) if e.account_id is None or e.account_id in account_ids]
     if account_id:
         sales = [s for s in sales if s.account_id == account_id]
         returns = [r for r in returns if allsales[r.sale_id].account_id == account_id]
@@ -748,7 +748,7 @@ def report(db, user, start, end, company_id=None, account_id=None):
         MarketplaceRecord.stage_status != 'ignored_non_financial',
     )
     if company_id: source_q=source_q.where(MarketplaceRecord.company_id==company_id)
-    if active_account_ids: source_q=source_q.where(MarketplaceRecord.account_id.in_(active_account_ids))
+    if account_ids: source_q=source_q.where(MarketplaceRecord.account_id.in_(account_ids))
     else: source_q=source_q.where(MarketplaceRecord.account_id == -1)
     if account_id: source_q=source_q.where(MarketplaceRecord.account_id==account_id)
     for raw in db.scalars(source_q):
