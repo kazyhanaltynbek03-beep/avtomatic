@@ -214,6 +214,8 @@ def _sale_event(db, acc, payload, quantity, amount, dt, external, currency, lega
     legacy_refs = list(legacy_refs or [])
     if acc.channel == 'Wildberries':
         legacy_refs.extend(reference(acc, 'sale:' + str(x)) for x in (payload.get('srid'), payload.get('saleID')) if x)
+    if acc.channel == 'Kaspi' and payload.get('order_id') and product.sku:
+        legacy_refs.append(reference(acc, f"archive:{payload.get('order_id')}:{product.sku}"))
     legacy = db.scalars(select(Sale).where(Sale.account_id == acc.id, Sale.company_id == acc.company_id,
                                          Sale.reference.in_(legacy_refs))).all() if legacy_refs else []
     if len(legacy) > 1: raise Pending('LEGACY_DUPLICATES_REQUIRE_RECONCILIATION')
