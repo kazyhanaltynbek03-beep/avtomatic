@@ -4,7 +4,7 @@ import { api } from "../services/api";
 const reportCache = new Map();
 const REPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 
-export function useLoad(path, refresh) {
+export function useLoad(path, refresh, options = {}) {
   const [state, setState] = useState(() => ({ loading: Boolean(path) }));
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export function useLoad(path, refresh) {
       })
       .catch((error) => { if (live) setState({ error: error.message }); });
     return () => { live = false; controller.abort(); };
-  }, [path, refresh]);
+  }, [path, refresh, options.cacheScope]);
 
   return state;
 }
