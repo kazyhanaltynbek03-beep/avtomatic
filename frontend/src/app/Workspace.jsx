@@ -1676,11 +1676,28 @@ function MarketplaceInbox({ channel, ctx }) {
     const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}`;
     if (kaspiAutoSyncRef.current.has(key)) return;
     kaspiAutoSyncRef.current.add(key);
+    let cancelled = false;
+    let retryTimer;
+    const requestSync = () => {
+      const requests = accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}`,{method:"POST",timeoutMs:10000}));
+      Promise.allSettled(requests).then(results=>{
+        if (cancelled) return;
+        // A different Kaspi report may currently own the account sync lock.
+        // Retry after it finishes so this selected report is actually fetched.
+        const waitingForOtherSync = results.some(result=>result.status==="fulfilled" && result.value?.already_running);
+        if (waitingForOtherSync) {
+          retryTimer = window.setTimeout(requestSync, 20000);
+          return;
+        }
+        setSummaryReload(v=>v+1);
+      });
+    };
     // Let the API cache decide whether this range needs a pull. A page view must
     // never force a historical re-download.
-    Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}`,{method:"POST",timeoutMs:10000})))
-      .then(()=>setSummaryReload(v=>v+1));
-  },[channel,accountKey,ctx.start,ctx.end,kaspiReportMode,canSyncKaspi]);
+    requestSync();
+    return ()=>{ cancelled = true; window.clearTimeout(retryTimer); };
+  },[channel,accountKey,ctx.start,ctx.end,ctx.refresh,kaspiReportMode,canSyncKaspi]);
+
   const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress && !summary.data?.sync_errors?.length;
   const m = summary.data || {};
   const created = ordersCreated.data || {};
