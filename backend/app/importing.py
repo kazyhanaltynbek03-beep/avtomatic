@@ -218,9 +218,14 @@ def normalize_marketplace(db, user, row, mapping):
         if amount <= 0:
             raise HTTPException(422, f"{event}: нужна положительная сумма")
         labels = {"commission": "Marketplace commission", "logistics": "Marketplace logistics", "return_logistics": "Marketplace return logistics", "advertising": "Реклама"}
+        category = labels[event]
+        if account.channel == "Kaspi" and event in {"logistics", "return_logistics"}:
+            reference = f"{account.channel}:expense:{account_id}:{external}:{category}"
+        else:
+            reference = f"{account.channel}:{event}:{account_id}:{external}"
         return event, s.ExpenseIn.model_validate({"company_id": company_id, "account_id": account_id,
-            "reference": f"{account.channel}:{event}:{account_id}:{external}", "date": dt,
-            "category": labels[event], "description": str(r.get("sale_reference") or external), "amount": amount, "paid": False})
+            "reference": reference, "date": dt,
+            "category": category, "description": str(r.get("sale_reference") or external), "amount": amount, "paid": False})
     delta = int(r.get("stock_delta") or 0)
     if delta == 0:
         raise HTTPException(422, "stock_delta не может быть 0")
