@@ -742,7 +742,8 @@ function ReportPage({ page, ctx }) {
   const [detailMetric, setDetailMetric] = useState(null);
   const usesDashboard = page === "dashboard" || page === "analytics";
   const reportPath = "/report?start=" + ctx.start + "&end=" + ctx.end +
-    (ctx.company ? "&company_id=" + ctx.company : "");
+    (ctx.company ? "&company_id=" + ctx.company : "") +
+    (usesDashboard ? "&active_only=true" : "");
   const summaryPath = "/dashboard/summary?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "");
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
