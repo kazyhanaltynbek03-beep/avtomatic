@@ -2707,7 +2707,7 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     # Kaspi has no completion-date filter. Refresh recent orders only so daily
     # reports can catch new completions and returns without re-reading a month of
     # orders every time the report is opened.
-    refresh_after = local_today - timedelta(days=7)
+    refresh_after = local_today - timedelta(days=30)
     period_key = f"{report_mode}:{start}:{bounded_end}"
     settings = dict(acc.integration_settings or {})
     cache = dict(settings.get("kaspi_period_sync") or {})
@@ -2735,12 +2735,16 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
             created = marketplace_pipeline._day(payload.get("creation_date"), "Asia/Almaty")
         except marketplace_pipeline.Pending:
             continue
-        # Only status-check recent orders that can affect this report window or
-        # catch a completion/return from the last seven days.
+        # Status-check the last 30 days so delayed Kaspi returns and issued orders
+        # can be picked up without re-fetching the full account history.
         if created < refresh_after or created > bounded_end:
             continue
         status = str(payload.get("status") or payload.get("order_status") or "").upper()
-        if status in {"CANCELLED", "RETURNED"}:
+        if status == "CANCELLED":
+            continue
+        # A returned order can still be missing its return event date. Recheck it
+        # until Kaspi supplies that date so it can enter the correct daily report.
+        if status == "RETURNED" and (payload.get("returned_date") or payload.get("return_date")):
             continue
         order_code = str(payload.get("code") or "").strip()
         if not order_code:
