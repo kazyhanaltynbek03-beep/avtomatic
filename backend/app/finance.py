@@ -699,6 +699,126 @@ def adjust(db, user, p):
     return {"reference": ref, "movement_ids": [m.id for m in movements]}
 
 
+def report_headline(db, user, start, end, company_id=None):
+    """Calculate the small dashboard KPI set from only the selected date window.
+
+    The full report includes inventory, receivables, historical cash and product
+    breakdowns. Headline cards need only period sales, returns, costs and expenses.
+    """
+    if end < start:
+        fail("Конец периода раньше начала")
+    if company_id:
+        scope(user, company_id)
+    account_query = scope_query(select(Account), Account, user).where(Account.active.is_(True))
+    accounts = {a.id: a for a in db.scalars(account_query)}
+    account_ids = set(accounts)
+    if not account_ids:
+        return {"revenue": 0, "gross_profit": 0, "net_profit": 0, "margin": None, "units": 0}
+
+    sales_query = scope_query(select(Sale), Sale, user).where(
+        Sale.account_id.in_(account_ids), Sale.date >= start, Sale.date <= end
+    )
+    if company_id:
+        sales_query = sales_query.where(Sale.company_id == company_id)
+    sales = list(db.scalars(sales_query))
+
+    returns_query = scope_query(select(Return).join(Sale, Return.sale_id == Sale.id), Return, user).where(
+        Sale.account_id.in_(account_ids), Return.date >= start, Return.date <= end
+    )
+    if company_id:
+        returns_query = returns_query.where(Return.company_id == company_id)
+    returns = list(db.scalars(returns_query))
+    expenses_query = scope_query(select(Expense), Expense, user).where(
+        Expense.date >= start, Expense.date <= end
+    )
+    if company_id:
+        expenses_query = expenses_query.where(Expense.company_id == company_id)
+    expenses = [
+        expense for expense in db.scalars(expenses_query)
+        if expense.account_id is None or expense.account_id in account_ids
+    ]
+
+    from .marketplace_costs import resolve_cost_overrides
+    sale_cogs, return_cogs, pending_cost_ids = resolve_cost_overrides(db, sales, returns, accounts)
+    revenue = sum(sale.revenue for sale in sales) - sum(ret.revenue for ret in returns)
+    restocked_returns = [ret for ret in returns if ret.inventory_status == "restocked"]
+    cogs = sum(sale_cogs.get(sale.id, sale.cogs) for sale in sales) - sum(
+        return_cogs.get(ret.id, ret.cogs) for ret in restocked_returns
+    )
+
+    commission_actual = sum(sale.commission for sale in sales) + sum(
+        expense.amount for expense in expenses
+        if expense.category in {"Marketplace commission", "Marketplace commission VAT"}
+    )
+    estimates, _rate, _suppressed = kaspi_commission_estimates(
+        db, user, start, end, company_id, None, sales, expenses, accounts
+    )
+    commission = commission_actual + sum(estimates.values())
+    logistics = sum(sale.logistics for sale in sales) + sum(
+        expense.amount for expense in expenses if expense.category == "Marketplace logistics"
+    )
+    advertising = sum(sale.advertising for sale in sales) + sum(
+        expense.amount for expense in expenses if expense.category == "Реклама"
+    )
+    operating = sum(
+        expense.amount for expense in expenses
+        if expense.category not in {"Реклама", "Marketplace commission", "Marketplace commission VAT", "Marketplace logistics"}
+    )
+
+    # Pending confirmed source events mean the period is not fully reconciled.
+    from .marketplace_pipeline import _day, Pending
+    source_query = scope_query(select(MarketplaceRecord), MarketplaceRecord, user).where(
+        MarketplaceRecord.account_id.in_(account_ids),
+        MarketplaceRecord.status != "projected",
+        MarketplaceRecord.stage_status != "ignored_non_financial",
+    )
+    if company_id:
+        source_query = source_query.where(MarketplaceRecord.company_id == company_id)
+    pending_source = False
+    for raw in db.scalars(source_query):
+        if raw.reason_code == "DUPLICATE_EVENT":
+            continue
+        payload = raw.payload or {}
+        record_type = payload.get("record_type")
+        operation = str(payload.get("sellerOperName") or payload.get("supplier_oper_name") or payload.get("doc_type_name") or "").lower()
+        confirmed = (
+            record_type == "sale"
+            or (record_type == "realization" and operation in {"продажа", "sale", "возврат", "return"})
+            or (record_type == "posting" and payload.get("status") in {"delivered", "completed"})
+            or (record_type == "order_entry" and payload.get("order_status") == "COMPLETED")
+        )
+        if not confirmed:
+            continue
+        try:
+            day = _day(
+                payload.get("saleDt") or payload.get("sale_dt") or payload.get("date")
+                or payload.get("completed_date") or payload.get("delivered_at")
+                or payload.get("shipment_date") or payload.get("created_at"),
+                "Asia/Almaty" if record_type == "order_entry" else None,
+            )
+        except Pending:
+            day = None
+        if day is None or start <= day <= end:
+            pending_source = True
+            break
+
+    profit_complete = not pending_cost_ids and not pending_source
+    net_profit_complete = profit_complete and not any(
+        ret.inventory_status in {"requested", "approved", "in_transit", "received", "inspection"}
+        for ret in returns
+    )
+    gross_profit = revenue - cogs if profit_complete else None
+    net_profit = gross_profit - commission - logistics - advertising - operating if net_profit_complete else None
+    units = sum(sale.quantity for sale in sales) - sum(ret.quantity for ret in returns)
+    return {
+        "revenue": revenue,
+        "gross_profit": gross_profit,
+        "net_profit": net_profit,
+        "margin": round(net_profit / revenue * 100, 2) if net_profit is not None and revenue else None,
+        "units": units,
+    }
+
+
 def report(db, user, start, end, company_id=None, account_id=None, active_only=False):
     if end < start:
         fail("Конец периода раньше начала")
