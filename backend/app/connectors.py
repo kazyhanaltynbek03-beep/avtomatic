@@ -256,7 +256,7 @@ class KaspiConnector(Connector):
             # A status-only lookup is one API call per order. The existing entry,
             # SKU, and logistics rows are refreshed from this order below in the
             # sync coordinator; avoid N+1 product/entry calls for unchanged lines.
-            if extras_selected:
+            if extras_selected or (status_only and str(a.get("code") or "") in set(state.get("extra_ids") or [])):
                 continue
             try:
                 entry_page = 0
@@ -308,7 +308,7 @@ class KaspiConnector(Connector):
                 "until_ms":int(until.timestamp()*1000),"page":page,"offset":len(data),
                 "extra_ids":extra_ids,"extra_offset":extra_offset} if extra_offset < len(extra_ids) else None)
         elif period_mode and selected and next_offset < len(data):
-            next_state = {"_qor_kaspi_cursor":1,"scope":"period","start_ms":int(window_start.timestamp()*1000),
+            next_state = {"_qor_kaspi_cursor":1,"scope":period_scope,"start_ms":int(window_start.timestamp()*1000),
                 "until_ms":int(until.timestamp()*1000),"page":page,"offset":next_offset,
                 "extra_ids":state.get("extra_ids") or [],"extra_offset":int(state.get("extra_offset") or 0)}
         elif selected and next_offset < len(data):
