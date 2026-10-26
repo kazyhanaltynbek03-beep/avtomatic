@@ -69,6 +69,8 @@ def kaspi_commission_estimates(db, user, start, end, company_id, account_id, sal
         q = scope_query(select(MarketplaceRecord), MarketplaceRecord, user).where(
             MarketplaceRecord.account_id.in_(account_ids),
             MarketplaceRecord.source == "kaspi",
+            func.lower(MarketplaceRecord.payload["record_type"].as_string()) == "order_entry",
+            func.upper(MarketplaceRecord.payload["order_status"].as_string()) == "COMPLETED",
         )
         if company_id:
             q = q.where(MarketplaceRecord.company_id == company_id)
@@ -713,7 +715,13 @@ def report_headline(db, user, start, end, company_id=None):
     accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     if not account_ids:
-        return {"revenue": 0, "gross_profit": 0, "net_profit": 0, "margin": None, "units": 0}
+        return {
+            "revenue": 0, "cogs": 0, "gross_profit": 0, "net_profit": 0, "margin": None,
+            "units": 0, "returns": 0, "return_units": 0, "commission": 0,
+            "commission_actual": 0, "commission_estimated": 0, "commission_estimate_suppressed": False,
+            "logistics": 0, "advertising": 0, "expenses": 0, "profit_complete": True,
+            "net_profit_complete": True, "pending_cogs_sales": 0, "channel_summary": [],
+        }
 
     sales_query = scope_query(select(Sale), Sale, user).where(
         Sale.account_id.in_(account_ids), Sale.date >= start, Sale.date <= end
@@ -810,12 +818,106 @@ def report_headline(db, user, start, end, company_id=None):
     gross_profit = revenue - cogs if profit_complete else None
     net_profit = gross_profit - commission - logistics - advertising - operating if net_profit_complete else None
     units = sum(sale.quantity for sale in sales) - sum(ret.quantity for ret in returns)
+    channel_totals = defaultdict(lambda: {"revenue": 0, "quantity": 0, "returns": 0})
+    for sale in sales:
+        channel = accounts[sale.account_id].channel
+        channel_totals[channel]["revenue"] += sale.revenue
+        channel_totals[channel]["quantity"] += sale.quantity
+    account_totals = defaultdict(lambda: {"revenue": 0, "quantity": 0, "returns": 0})
+    for sale in sales:
+        name = accounts[sale.account_id].name
+        account_totals[name]["revenue"] += sale.revenue
+        account_totals[name]["quantity"] += sale.quantity
+    sales_by_id = {sale.id: sale for sale in sales}
+    for ret in returns:
+        sale = sales_by_id.get(ret.sale_id)
+        if sale:
+            channel = accounts[sale.account_id].channel
+            channel_totals[channel]["revenue"] -= ret.revenue
+            channel_totals[channel]["quantity"] -= ret.quantity
+            channel_totals[channel]["returns"] += ret.revenue
+            name = accounts[sale.account_id].name
+            account_totals[name]["revenue"] -= ret.revenue
+            account_totals[name]["quantity"] -= ret.quantity
+            account_totals[name]["returns"] += ret.revenue
+
+    # The overview contract also includes all-time assets and receivables.
+    # Aggregate those from the same scoped ledger without constructing the full
+    # product, inventory, cash-flow and receivable breakdowns.
+    all_sales_query = scope_query(select(Sale), Sale, user).where(
+        Sale.account_id.in_(account_ids), Sale.date <= end
+    )
+    if company_id:
+        all_sales_query = all_sales_query.where(Sale.company_id == company_id)
+    all_sales = list(db.scalars(all_sales_query))
+    all_sales_by_id = {sale.id: sale for sale in all_sales}
+    all_returns_query = scope_query(select(Return), Return, user).where(Return.date <= end)
+    if company_id:
+        all_returns_query = all_returns_query.where(Return.company_id == company_id)
+    all_returns = [
+        ret for ret in db.scalars(all_returns_query)
+        if ret.sale_id in all_sales_by_id
+    ]
+    cash_query = scope_query(select(CashEntry), CashEntry, user).where(CashEntry.date <= end)
+    if company_id:
+        cash_query = cash_query.where(CashEntry.company_id == company_id)
+    cash_rows = list(db.scalars(cash_query))
+    return_by_sale = defaultdict(int)
+    paid_by_sale = defaultdict(int)
+    for ret in all_returns:
+        return_by_sale[ret.sale_id] += ret.revenue
+    for entry in cash_rows:
+        if entry.sale_id:
+            paid_by_sale[entry.sale_id] += entry.amount
+    b2b_debt = 0
+    refunds_payable = 0
+    for sale in all_sales:
+        net = sale.revenue - return_by_sale[sale.id]
+        paid = paid_by_sale[sale.id]
+        due = max(0, net - paid)
+        if accounts[sale.account_id].channel == "B2B":
+            b2b_debt += due
+        refunds_payable += max(0, paid - net)
+    cash_period = [entry for entry in cash_rows if start <= entry.date <= end]
+    cash_opening = sum(entry.amount for entry in cash_rows if entry.date < start)
+    cash_inflow = sum(entry.amount for entry in cash_period if entry.amount > 0)
+    cash_outflow = -sum(entry.amount for entry in cash_period if entry.amount < 0)
+    movement_query = scope_query(select(Movement), Movement, user).where(Movement.date <= end)
+    if company_id:
+        movement_query = movement_query.where(Movement.company_id == company_id)
+    stock_value = sum(movement.cost for movement in db.scalars(movement_query))
+    cash_flow = sum(entry.amount for entry in cash_period)
+
     return {
         "revenue": revenue,
+        "cogs": cogs if profit_complete else None,
         "gross_profit": gross_profit,
         "net_profit": net_profit,
         "margin": round(net_profit / revenue * 100, 2) if net_profit is not None and revenue else None,
         "units": units,
+        "returns": sum(ret.revenue for ret in returns),
+        "return_units": sum(ret.quantity for ret in returns),
+        "commission": commission,
+        "commission_actual": commission_actual,
+        "commission_estimated": sum(estimates.values()),
+        "commission_estimate_suppressed": _suppressed,
+        "logistics": logistics,
+        "advertising": advertising,
+        "expenses": operating,
+        "profit_complete": profit_complete,
+        "net_profit_complete": net_profit_complete,
+        "pending_cogs_sales": len(pending_cost_ids),
+        "channel_summary": [{"channel": name, **values} for name, values in channel_totals.items()],
+        "channels": [{"name": name, "revenue": values["revenue"], "quantity": values["quantity"], "returns": values["returns"]} for name, values in account_totals.items()],
+        "stock_value": stock_value,
+        "cash": sum(entry.amount for entry in cash_rows),
+        "cash_flow": cash_flow,
+        "cash_opening": cash_opening,
+        "cash_inflow": cash_inflow,
+        "cash_outflow": cash_outflow,
+        "cash_closing": cash_opening + cash_inflow - cash_outflow,
+        "b2b_debt": b2b_debt,
+        "refunds_payable": refunds_payable,
     }
 
 

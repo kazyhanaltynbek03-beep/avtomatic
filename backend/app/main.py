@@ -1893,17 +1893,9 @@ def dashboard_summary(
     """
     require(u, "analytics")
     today = business_today()
-    # The default month view asks for the same report as the monthly headline.
-    # Reuse identical ranges so a large marketplace ledger is scanned only once.
-    report_cache = {}
-
-    def report_for(period_start, period_end):
-        key = (period_start, period_end, company_id)
-        if key not in report_cache:
-            report_cache[key] = f.report(db, u, period_start, period_end, company_id, active_only=True)
-        return report_cache[key]
-
-    selected = report_for(start, end)
+    # The selected report is loaded separately for charts and drilldowns. This
+    # endpoint returns only date-scoped KPI data so the overview can paint quickly.
+    selected = f.report_headline(db, u, start, end, company_id)
     month_start = today.replace(day=1)
     month_report = (
         selected if (start, end) == (month_start, today)
@@ -1943,12 +1935,12 @@ def dashboard_summary(
             "net_profit": selected["net_profit"],
             "margin": selected["margin"],
             "units": selected["units"],
-            "returns": selected["returns"],
-            "advertising": selected["advertising"],
-            "expenses": selected["expenses"],
-            "stock_value": selected["stock_value"],
-            "cash": selected["cash"],
-            "b2b_debt": selected["b2b_debt"],
+            "returns": selected.get("returns"),
+            "advertising": selected.get("advertising"),
+            "expenses": selected.get("expenses"),
+            "stock_value": selected.get("stock_value"),
+            "cash": selected.get("cash"),
+            "b2b_debt": selected.get("b2b_debt"),
             "channels": channels(selected),
         },
     }

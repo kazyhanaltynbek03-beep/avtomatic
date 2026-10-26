@@ -748,7 +748,7 @@ function ReportPage({ page, ctx }) {
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") : null;
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
-    usesDashboard || page === "forecast" ? null : reportPath,
+    page === "forecast" ? null : reportPath,
     ctx.refresh,
   );
   const { data: dash, error: dashError, loading: dashLoading } = useLoad(
@@ -756,9 +756,41 @@ function ReportPage({ page, ctx }) {
     ctx.refresh,
   );
   const { data: systemAlerts, error: systemAlertsError } = useLoad(alertsPath, ctx.refresh);
-  const r = usesDashboard ? dash?.report : loadedReport;
-  if ((usesDashboard && dashLoading) || (!usesDashboard && page !== "forecast" && reportLoading)) return <Spinner />;
+  const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
+  if (usesDashboard && dashLoading) return <Spinner />;
   if (usesDashboard && dashError) return <ErrorBox error={dashError} />;
+  if (usesDashboard && !loadedReport) {
+    const fast = dash?.report || {};
+    const headline = [
+      ["Оборот сегодня", dash?.today?.revenue, "На " + (dash?.as_of || "")],
+      ["Прибыль сегодня", dash?.today?.net_profit, "Чистая прибыль"],
+      ["Оборот месяца", dash?.month?.revenue, "С начала месяца"],
+      ["Валовая прибыль месяца", dash?.month?.gross_profit, "С начала месяца"],
+      ["Чистая прибыль месяца", dash?.month?.net_profit, "С начала месяца"],
+    ];
+    const kpis = [
+      ["Оборот", fast.revenue, "За вычетом возвратов"],
+      ["Валовая прибыль", fast.gross_profit, "Выручка − себестоимость"],
+      ["Чистая прибыль", fast.net_profit, "После учтённых расходов"],
+      ["Маржинальность", fast.margin == null ? "—" : decimal(fast.margin) + "%", "Чистая прибыль / выручка"],
+    ];
+    return (
+      <>
+        <div className="dashboard-headline">
+          {headline.map(([title, value, note]) => <div className="headline-card" key={title}><span>{title}</span><strong>{money(value)}</strong><small>{note}</small></div>)}
+        </div>
+        <div className="kpis">
+          {kpis.map(([title, value, note], i) => <div className={"kpi " + (i === 2 ? "featured" : "")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}
+        </div>
+        <div className="panel report-loading-inline">
+          <strong>Основные показатели готовы.</strong>
+          <p>{reportError ? "Не удалось загрузить детализацию отчёта." : "Загружаются графики, склад и расшифровка операций."}</p>
+          {reportError && <ErrorBox error={reportError} />}
+        </div>
+      </>
+    );
+  }
+  if ((!usesDashboard && page !== "forecast" && reportLoading)) return <Spinner />;
   if (!usesDashboard && page !== "forecast" && reportError) return <ErrorBox error={reportError} />;
   if (page === "alerts")
     return (
