@@ -1797,12 +1797,15 @@ def match_synced_marketplace_cards(product_id: int, company_id: int | None = Que
             ambiguous.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
                 "card_count": len(candidates), "products": [{"name": c["name"], "keys": sorted(c["keys"])} for c in candidates.values()]})
             continue
-        added, new_keys = 0, []
+        added, already_linked, new_keys = 0, 0, []
         for candidate in candidates.values():
+            before_candidate, candidate_already_linked = added, False
             for key in candidate["keys"]:
                 existing = db.scalar(select(MarketplaceProductMapping).where(
                     MarketplaceProductMapping.account_id == account.id, MarketplaceProductMapping.external_key == key))
-                if existing: continue
+                if existing:
+                    if existing.product_id == product.id: candidate_already_linked = True
+                    continue
                 try:
                     with db.begin_nested():
                         db.add(MarketplaceProductMapping(company_id=account.company_id, account_id=account.id,
@@ -1813,15 +1816,17 @@ def match_synced_marketplace_cards(product_id: int, company_id: int | None = Que
                 except IntegrityError:
                     # A concurrent click can win the unique-key race; retries remain safe.
                     continue
-        if added:
+            if candidate_already_linked and added == before_candidate: already_linked += 1
+        if added or already_linked:
             linked += added
-            audit(db, u, "mapping", "products", product.id, {
-                "account_id": account.id, "channel": account.channel,
-                "external_keys": new_keys, "source": "exact_sku_barcode_match"})
+            if new_keys:
+                audit(db, u, "mapping", "products", product.id, {
+                    "account_id": account.id, "channel": account.channel,
+                    "external_keys": new_keys, "source": "exact_sku_barcode_match"})
             results.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
-                "card_count": len(candidates), "mapping_count": added})
+                "card_count": len(candidates), "mapping_count": added, "already_linked_count": already_linked})
     db.commit()
-    return {"linked": linked, "accounts": results, "ambiguous": ambiguous,
+    return {"linked": linked, "already_linked": sum(x["already_linked_count"] for x in results), "accounts": results, "ambiguous": ambiguous,
         "message": "Поиск выполнен только по уже синхронизированным данным"}
 
 
