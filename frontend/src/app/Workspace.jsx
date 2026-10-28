@@ -156,6 +156,7 @@ export default function App() {
     [end, setEnd] = useState(today()),
     [modal, setModal] = useState(null),
     [settings, setSettings] = useState({});
+  const [marketplaceStoreByChannel, setMarketplaceStoreByChannel] = useState({Kaspi:"", Wildberries:""});
   const noticeTimer = useRef(null);
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -256,9 +257,21 @@ export default function App() {
       setEnd(b.toISOString().slice(0, 10));
     }
   };
+  const current = flat.find((x) => x[0] === page) || flat[0];
+  const marketplaceChannel = ["Kaspi", "Wildberries"].includes(page) ? page : "";
+  const marketplaceAccounts = marketplaceChannel
+    ? (refs.accounts || []).filter(a => a.active !== false && a.channel === marketplaceChannel && (!company || String(a.company_id) === String(company)))
+    : [];
+  const marketplaceAccountIds = marketplaceAccounts.map(a => String(a.id)).join(",");
+  const marketplaceAccountId = marketplaceChannel ? (marketplaceStoreByChannel[marketplaceChannel] || "") : "";
+  useEffect(() => {
+    if (!marketplaceChannel || !marketplaceAccountId) return;
+    if (!marketplaceAccountIds.split(",").includes(String(marketplaceAccountId))) {
+      setMarketplaceStoreByChannel(current => ({...current, [marketplaceChannel]: ""}));
+    }
+  }, [marketplaceChannel, marketplaceAccountIds, marketplaceAccountId]);
   if (auth === undefined) return <Spinner />;
   if (!auth) return <Login onAuth={setAuth} />;
-  const current = flat.find((x) => x[0] === page) || flat[0];
   const ctx = {
     auth,
     refs,
@@ -266,6 +279,7 @@ export default function App() {
     start,
     end,
     refresh,
+    marketplaceAccountId,
     notify,
     navigate,
     open: (kind, item) => setModal({ kind, item }),
@@ -462,6 +476,14 @@ export default function App() {
               <RefreshCw size={17} />
             </button>
           </div>
+          {marketplaceChannel && <div className="marketplace-store-toolbar">
+            <label htmlFor="marketplace-store-select">Магазин {marketplaceChannel}
+              <select id="marketplace-store-select" aria-label={`Магазин ${marketplaceChannel}`} value={marketplaceAccountId} disabled={!marketplaceAccounts.length} onChange={e=>setMarketplaceStoreByChannel(current=>({...current,[marketplaceChannel]:e.target.value}))}>
+                {marketplaceAccounts.length ? <><option value="">Все магазины {marketplaceChannel}</option>{marketplaceAccounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</> : <option value="">Нет подключённых магазинов</option>}
+              </select>
+            </label>
+            <span>{marketplaceAccountId ? `Показаны данные магазина «${marketplaceAccounts.find(a=>String(a.id)===String(marketplaceAccountId))?.name || ""}».` : marketplaceAccounts.length ? `Показаны данные всех подключённых магазинов ${marketplaceChannel}.` : `Подключите магазин ${marketplaceChannel} в разделе «Интеграции».`}</span>
+          </div>}
           {range === "Период" &&
             [
               "dashboard",
@@ -1704,18 +1726,14 @@ function MarketplaceInbox({ channel, ctx }) {
   const kaspiLastRefreshRef = useRef(ctx.refresh);
 
   const [showTechnical,setShowTechnical] = useState(false);
-  const [selectedAccountId,setSelectedAccountId] = useState("");
+  const selectedAccountId = ctx.marketplaceAccountId || "";
   const [offset,setOffset] = useState(0), [status,setStatus] = useState(""),
     [selected,setSelected] = useState(null), [product,setProduct] = useState(""),
     [key,setKey] = useState(""), [error,setError] = useState(""), [busy,setBusy] = useState(false),
     [currency,setCurrency] = useState("RUB"), [rate,setRate] = useState(""), [rateDate,setRateDate] = useState(today());
   const accounts = (ctx.refs.accounts || []).filter(a=>a.active !== false && a.channel===channel && (!ctx.company || String(a.company_id)===String(ctx.company)));
-  const channelAccountIds = accounts.map(a=>String(a.id)).join(",");
   const selectedAccount = accounts.find(a=>String(a.id)===String(selectedAccountId));
   const scopedAccounts = selectedAccount ? [selectedAccount] : accounts;
-  useEffect(()=>{
-    if (selectedAccountId && !channelAccountIds.split(",").includes(String(selectedAccountId))) setSelectedAccountId("");
-  },[selectedAccountId,channelAccountIds]);
   const params = new URLSearchParams({limit:"30", offset:String(offset), channel});
   if (ctx.company) params.set("company_id", ctx.company);
   if (selectedAccount) params.set("account_id", String(selectedAccount.id));
@@ -1809,7 +1827,6 @@ function MarketplaceInbox({ channel, ctx }) {
   ];
   return <div className="panel">
     <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
-    {accounts.length > 1 && <div className="row-actions marketplace-account-picker"><label>{channel} · магазин<select aria-label={`${channel}: магазин`} value={selectedAccountId} onChange={e=>setSelectedAccountId(e.target.value)}><option value="">Все магазины {channel}</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><span className="muted">Сводка, товары и API-записи: {selectedAccount ? selectedAccount.name : `все магазины ${channel}`}.</span></div>}
     {channel === "Kaspi" && <div className="row-actions kaspi-report-controls" role="group" aria-label="Режим отчёта Kaspi">
       <button type="button" className={kaspiReportMode==="issued"?"primary":""} aria-pressed={kaspiReportMode==="issued"} onClick={()=>setKaspiReportMode("issued")}>Продажи по дате выдачи</button>
       <button type="button" className={kaspiReportMode==="created"?"primary":""} aria-pressed={kaspiReportMode==="created"} onClick={()=>setKaspiReportMode("created")}>Заказы по дате создания</button>
