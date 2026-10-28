@@ -13,7 +13,10 @@ def test_erp_alerts_report_unmapped_marketplace_records_and_failed_sync(client):
         db.commit()
     response=client.get("/api/alerts?start=2026-10-01&end=2026-10-24")
     assert response.status_code==200,response.text
-    items=response.json()["items"]
+    payload=response.json()
+    items=payload["items"]
+    assert isinstance(payload["stock_alerts"],list)
+    assert isinstance(payload["receivables"],list)
     mapping=next(x for x in items if x["type"]=="unmapped_products")
     sync=next(x for x in items if x["type"]=="marketplace_sync")
     assert mapping["account_id"]==1 and mapping["count"]==1

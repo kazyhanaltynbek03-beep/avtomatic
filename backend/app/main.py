@@ -2516,7 +2516,8 @@ def alerts(
                     "type":"marketplace_sync","title":f"{account.name}: синхронизация {account.sync_status}",
                     "account_id":account.id,"channel":account.channel,
                     "action":(account.sync_error or "Откройте интеграцию и проверьте состояние подключения.")[:300]})
-    return {"items":items, "count":len(items), "period":[str(start),str(end)], "comparison_period":[str(prev_start),str(prev_end)],
+    return {"items":items, "count":len(items), "stock_alerts":current.get("stock_alerts", []),
+            "receivables":current.get("receivables", []), "period":[str(start),str(end)], "comparison_period":[str(prev_start),str(prev_end)],
             "method":"Детерминированные правила ERP; без LLM. Рыночные сигналы добавляются только при наличии подтверждённого источника."}
 
 
