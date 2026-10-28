@@ -16,8 +16,10 @@ const labels = {
 const showDate = (value) => value ? new Date(`${value}T12:00:00+06:00`).toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty" }) : "Не подтверждено";
 const returnAmount = (value) => value == null ? "Не подтверждено" : `−${money(value)}`;
 
-function Metric({ title, value, caption, tone = "" }) {
-  return <article className={`returns-metric ${tone}`}><span>{title}</span><strong>{value}</strong>{caption && <small>{caption}</small>}</article>;
+function Metric({ title, value, caption, tone = "", onClick, active = false }) {
+  return <button type="button" className={`returns-metric ${tone} ${active ? "selected" : ""}`} onClick={onClick} aria-pressed={active}>
+    <span>{title}</span><strong>{value}</strong>{caption && <small>{caption}</small>}
+  </button>;
 }
 
 function ReturnDetails({ item }) {
@@ -59,6 +61,8 @@ function ReturnRow({ item }) {
 
 export default function MarketplaceReturns({ ctx }) {
   const [marketplace, setMarketplace] = useState("all");
+  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [selectedMetric, setSelectedMetric] = useState("");
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [busyAccount, setBusyAccount] = useState(null);
@@ -75,8 +79,14 @@ export default function MarketplaceReturns({ ctx }) {
   const params = useMemo(() => {
     const p = new URLSearchParams({ marketplace, offset: String(offset), limit: "30", start: ctx.start, end: ctx.end, search });
     if (ctx.company) p.set("company_id", ctx.company);
+    if (selectedAccountId) p.set("account_id", selectedAccountId);
+    if (selectedMetric === "requests") p.set("return_status", "requested");
+    if (selectedMetric === "confirmed" || selectedMetric === "confirmed_amount") p.set("financial_status", "confirmed");
+    if (selectedMetric === "pending") p.set("financial_status", "unconfirmed");
+    if (selectedMetric === "rejected") p.set("return_status", "rejected");
+    if (selectedMetric === "unknown") p.set("unknown_only", "true");
     return p.toString();
-  }, [marketplace, offset, ctx.start, ctx.end, ctx.company, search]);
+  }, [marketplace, offset, ctx.start, ctx.end, ctx.company, search, selectedAccountId, selectedMetric]);
   const { data, error, loading } = useLoad(`/marketplace-returns?${params}`, `${ctx.refresh}:${pollTick}`);
   const { data: syncData } = useLoad(`/marketplace-returns/sync-status${ctx.company ? `?company_id=${ctx.company}` : ""}`, `${ctx.refresh}:${pollTick}`);
   const records = data?.items || [];
@@ -85,7 +95,8 @@ export default function MarketplaceReturns({ ctx }) {
   const active = stores.filter((x) => x.active && x.mode === "api");
   const progressByAccount = Object.fromEntries((syncData?.items || []).map((x) => [x.account_id, x]));
 
-  useEffect(() => { setOffset(0); }, [marketplace, search, ctx.company, ctx.start, ctx.end]);
+  useEffect(() => { setOffset(0); }, [marketplace, search, ctx.company, ctx.start, ctx.end, selectedAccountId, selectedMetric]);
+  useEffect(() => { setSelectedAccountId(""); setSelectedMetric(""); }, [marketplace]);
   useEffect(() => {
     if (!(syncData?.items || []).some((x) => x.status === "running")) return undefined;
     const timer = window.setInterval(() => setPollTick((n) => n + 1), 2500);
@@ -129,6 +140,7 @@ export default function MarketplaceReturns({ ctx }) {
     finally { lock.current = false; setStatementBusy(false); }
   };
   const channelStores = marketplace === "all" ? active : active.filter((x) => x.marketplace === marketplace);
+  const scopedStores = channelStores;
   const wbOrKaspiStores = channelStores.filter((x) => ["Kaspi", "Wildberries"].includes(x.marketplace));
   const pageCount = Math.ceil((data?.total || 0) / 30);
   const currentPage = Math.floor(offset / 30) + 1;
@@ -158,16 +170,20 @@ export default function MarketplaceReturns({ ctx }) {
     <div className="returns-market-tabs" role="tablist" aria-label="Маркетплейс">
       {[ ["all", "Все"], ["Kaspi", "Kaspi"], ["Wildberries", "Wildberries"], ["Ozon", "Ozon"] ].map(([key, label]) => <button type="button" role="tab" aria-selected={marketplace === key} className={marketplace === key ? "active" : ""} key={key} onClick={() => setMarketplace(key)}>{label}</button>)}
     </div>
+    {scopedStores.length > 0 && <div className="returns-store-tabs" role="group" aria-label="Магазин">
+      <button type="button" className={!selectedAccountId ? "active" : ""} aria-pressed={!selectedAccountId} onClick={() => setSelectedAccountId("")}>Все магазины</button>
+      {scopedStores.map((store) => <button type="button" key={store.account_id} className={String(selectedAccountId) === String(store.account_id) ? "active" : ""} aria-pressed={String(selectedAccountId) === String(store.account_id)} onClick={() => setSelectedAccountId(String(store.account_id))}>{store.store}</button>)}
+    </div>}
     {marketplace !== "all" && !stores.some((x) => x.marketplace === marketplace && x.active) && <div className="returns-empty-integration"><CircleAlert size={18}/><span>Интеграция {marketplace} не подключена. Данные возвратов не подставляются.</span></div>}
     {marketplace === "Ozon" && stores.some((x) => x.marketplace === "Ozon" && x.active) && <div className="returns-empty-integration"><CircleAlert size={18}/><span>Интеграция Ozon подключена, но обнаружение возвратов ещё не настроено.</span></div>}
     <div className="returns-filter-row"><label className="returns-search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Заказ, артикул, SKU, товар или магазин" aria-label="Поиск возвратов"/><button type="button" onClick={() => setSearch("")} aria-label="Очистить поиск">×</button></label><span className="returns-period-note">Период относится к дате заявки или подтверждённой финансовой операции.</span></div>
     <div className="returns-metrics-grid">
-      <Metric title="Заявки на возврат" value={summary.requests || 0} caption="Не равны возврату денег"/>
-      <Metric title="Подтверждённые возвраты" value={summary.confirmed_count || 0} caption="Финансовый источник подтвердил" tone="green"/>
-      <Metric title="Сумма подтверждённых возвратов" value={summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"} caption="KZT · изолировано от отчётов"/>
-      <Metric title="На проверке" value={summary.pending_count || 0} caption="Дата или сумма могут отсутствовать" tone="amber"/>
-      <Metric title="Отклонённые" value={summary.rejected_count || 0}/>
-      <Metric title="Не подтверждены дата или сумма" value={summary.unknown_count || 0} caption="Без подстановки даты синхронизации" tone="amber"/>
+      <Metric title="Заявки на возврат" value={summary.requests || 0} caption="Не равны возврату денег" active={selectedMetric === "requests"} onClick={() => setSelectedMetric(selectedMetric === "requests" ? "" : "requests")}/>
+      <Metric title="Подтверждённые возвраты" value={summary.confirmed_count || 0} caption="Финансовый источник подтвердил" tone="green" active={selectedMetric === "confirmed"} onClick={() => setSelectedMetric(selectedMetric === "confirmed" ? "" : "confirmed")}/>
+      <Metric title="Сумма подтверждённых возвратов" value={summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"} caption="KZT · изолировано от отчётов" active={selectedMetric === "confirmed_amount"} onClick={() => setSelectedMetric(selectedMetric === "confirmed_amount" ? "" : "confirmed_amount")}/>
+      <Metric title="На проверке" value={summary.pending_count || 0} caption="Дата или сумма могут отсутствовать" tone="amber" active={selectedMetric === "pending"} onClick={() => setSelectedMetric(selectedMetric === "pending" ? "" : "pending")}/>
+      <Metric title="Отклонённые" value={summary.rejected_count || 0} active={selectedMetric === "rejected"} onClick={() => setSelectedMetric(selectedMetric === "rejected" ? "" : "rejected")}/>
+      <Metric title="Не подтверждены дата или сумма" value={summary.unknown_count || 0} caption="Без подстановки даты синхронизации" tone="amber" active={selectedMetric === "unknown"} onClick={() => setSelectedMetric(selectedMetric === "unknown" ? "" : "unknown")}/>
     </div>
     <section className="returns-reconciliation"><div className="returns-reconciliation-title"><PackageCheck size={18}/><strong>Финансовая сверка возвратов</strong><span>Тестовый режим</span></div><div className="returns-reconciliation-grid"><div><small>Текущая сумма отчёта</small><strong>Требует выбора финансового источника</strong></div><div><small>Подтверждённые возвраты за период</small><strong>{summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"}</strong></div><div><small>Уже учтено / ещё не учтено</small><strong>{summary.accounted_amount || summary.not_accounted_amount ? `${money(summary.accounted_amount)} / ${money(summary.not_accounted_amount)}` : "Сверка не выполнена"}</strong></div><div><small>Отдельный скорректированный итог</small><strong>Не рассчитывается автоматически</strong></div></div><p>Автовычитание отключено: возврат не уменьшается повторно, если он уже есть в отчёте. Выручка, прибыль, выплата и денежный поток сверяются отдельно.</p></section>
     {loading && !data ? <Spinner/> : error ? <ErrorBox error={error}/> : records.length ? <>
