@@ -1690,7 +1690,7 @@ class ProductMarketplaceIdIn(BaseModel):
 
 @app.post("/api/products/{product_id}/marketplace-mappings")
 def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
-                                u=Depends(current_user), db=Depends(get_db)):
+                                tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)):
     """Attach a seller-specific marketplace identifier to an existing QOR SKU.
 
     This only saves identity mapping. It does not replay staged orders or alter
@@ -1733,6 +1733,10 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
             if not existing or existing.product_id != product.id:
                 raise HTTPException(409, "Этот ID уже привязан к другому товару QOR")
     db.commit()
+    if account.channel == "Wildberries":
+        # If the seller explicitly enabled WB auto-sync, a newly linked card or
+        # size becomes eligible for the same guarded outbound sync as later edits.
+        _schedule_wb_sync_for_product(tasks, product.id, account.company_id)
     return {"ok": True, "product_id": product.id, "account_id": account.id,
             "channel": account.channel, "external_key": external_key}
 
