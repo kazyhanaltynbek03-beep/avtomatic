@@ -304,6 +304,29 @@ header {
   border-radius: 6px;
   flex-shrink: 0;
 }
+.notification-button {
+  position: relative;
+}
+.notification-count {
+  position: absolute;
+  top: -7px;
+  right: -8px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #d94b4b;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
 .icon-button:hover {
   background: #edf2ee;
   color: #244d3c;
