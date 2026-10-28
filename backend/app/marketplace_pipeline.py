@@ -3,6 +3,7 @@ from datetime import datetime, timezone, date
 from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
+import uuid
 from sqlalchemy import select
 from .models import Account, MarketplaceRecord, MarketplaceProductMapping, Product, Sale, Expense, CanonicalEvent
 from . import schemas as s, canonical, exchange_rates, finance as f
@@ -120,39 +121,87 @@ def _media_urls(payload):
     return list(dict.fromkeys(urls))[:12]
 
 def _update_product_metadata(product, payload, acc):
-    name=_product_name(payload, product.sku)
-    if name and (not product.name or product.name==product.sku or product.name.startswith(acc.channel+':')): product.name=name
-    for key in ("brand","brand_name","manufacturer"):
-        if payload.get(key): product.brand=str(payload[key])[:120]; break
-    category=payload.get("subjectName") or payload.get("subject_name") or payload.get("category")
-    if isinstance(category,dict): category=category.get("title") or category.get("name") or category.get("code")
-    if category: product.category=str(category)[:100]
-    media=_media_urls(payload)
-    if media: product.media=list(dict.fromkeys((product.media or [])+media))[:20]
-    price=payload.get("price") or payload.get("current_price") or payload.get("retailPrice")
-    if isinstance(price,dict): price=price.get("price") or price.get("marketing_price") or price.get("old_price")
-    try:
-        if price is not None and Decimal(str(price))>=0: product.price=int((Decimal(str(price))*100).quantize(Decimal("1")))
-    except Exception: pass
-    specs=dict(product.specifications or {})
-    specs.update({"source":acc.channel,"account_id":acc.id,"external_keys":identifiers(payload),"auto_created":specs.get("auto_created",True)})
-    attrs=payload.get("attributes") or payload.get("characteristics") or payload.get("dimensions")
-    if attrs: specs["marketplace_attributes"]=attrs
-    product.specifications=specs
+    """Fill missing descriptive fields without taking ownership away from QOR.
+
+    The QOR Product row is the canonical inventory item. Marketplace payloads
+    may enrich an empty draft, but must not overwrite the SKU, price, cost,
+    stock, or fields a user has already curated.
+    """
+    name = _product_name(payload, product.sku)
+    if name and (not product.name or product.name == product.sku):
+        product.name = name
+
+    for key in ("brand", "brand_name", "manufacturer"):
+        if not product.brand and payload.get(key):
+            product.brand = str(payload[key])[:120]
+            break
+
+    category = payload.get("subjectName") or payload.get("subject_name") or payload.get("category")
+    if isinstance(category, dict):
+        category = category.get("title") or category.get("name") or category.get("code")
+    if category and (not product.category or product.category == "Marketplace"):
+        product.category = str(category)[:100]
+
+    media = _media_urls(payload)
+    if media and not product.media:
+        product.media = media
+
+    specs = dict(product.specifications or {})
+    specs.setdefault("source", acc.channel)
+    specs.setdefault("account_id", acc.id)
+    specs["external_keys"] = list(dict.fromkeys(
+        list(specs.get("external_keys") or []) + identifiers(payload)
+    ))
+    attrs = payload.get("attributes") or payload.get("characteristics") or payload.get("dimensions")
+    if attrs and not specs.get("marketplace_attributes"):
+        specs["marketplace_attributes"] = attrs
+    specs.setdefault("auto_created", False)
+    product.specifications = specs
     return product
 
-def ensure_marketplace_product(db,acc,payload):
-    sku=_seller_sku(payload)
-    keys=identifiers(payload)
-    stable=next((k for k in keys if k.startswith('product:')),None)
-    if not sku and not stable: return None
-    if not sku: sku=(acc.channel+':'+str(acc.id)+':'+stable)[:100]
-    product=Product(sku=sku,name=_product_name(payload,sku),article=_seller_sku(payload),
-        category=payload.get('subject_name') or 'Marketplace',active=True,min_stock=0,
-        specifications={'source':acc.channel,'account_id':acc.id,'external_keys':keys,'auto_created':True})
-    _update_product_metadata(product,payload,acc)
-    db.add(product);db.flush();return product
 
+def _new_qor_sku(db):
+    """Create an internal SKU independent of every marketplace's seller code."""
+    for _ in range(20):
+        sku = "QOR-" + uuid.uuid4().hex[:12].upper()
+        if not db.scalar(select(Product.id).where(Product.sku == sku)):
+            return sku
+    raise RuntimeError("Не удалось создать уникальный внутренний SKU QOR")
+
+
+def ensure_marketplace_product(db, acc, payload):
+    """Create a canonical QOR product from a marketplace item when no mapping exists.
+
+    Marketplace identifiers remain in MarketplaceProductMapping; the visible
+    QOR SKU is generated independently. Inventory and purchase cost stay empty
+    until an authorized user enters them.
+    """
+    seller_sku = _seller_sku(payload)
+    keys = identifiers(payload)
+    stable = next((key for key in keys if key.startswith("product:")), None)
+    if not seller_sku and not stable:
+        return None
+
+    name = _product_name(payload, seller_sku or "Новый товар")
+    product = Product(
+        sku=_new_qor_sku(db),
+        name=name,
+        article=seller_sku,
+        category=payload.get("subject_name") or "Marketplace",
+        price=0,
+        active=True,
+        min_stock=0,
+        specifications={
+            "source": acc.channel,
+            "account_id": acc.id,
+            "external_keys": keys,
+            "auto_created": True,
+        },
+    )
+    _update_product_metadata(product, payload, acc)
+    db.add(product)
+    db.flush()
+    return product
 
 def resolve_product(db, acc, payload):
     keys=identifiers(payload)
