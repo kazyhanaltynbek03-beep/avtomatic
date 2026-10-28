@@ -1797,17 +1797,27 @@ def match_synced_marketplace_cards(product_id: int, company_id: int | None = Que
             ambiguous.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
                 "card_count": len(candidates), "products": [{"name": c["name"], "keys": sorted(c["keys"])} for c in candidates.values()]})
             continue
-        added = 0
+        added, new_keys = 0, []
         for candidate in candidates.values():
             for key in candidate["keys"]:
                 existing = db.scalar(select(MarketplaceProductMapping).where(
                     MarketplaceProductMapping.account_id == account.id, MarketplaceProductMapping.external_key == key))
                 if existing: continue
-                db.add(MarketplaceProductMapping(company_id=account.company_id, account_id=account.id,
-                    channel=account.channel, external_key=key, product_id=product.id))
-                added += 1
+                try:
+                    with db.begin_nested():
+                        db.add(MarketplaceProductMapping(company_id=account.company_id, account_id=account.id,
+                            channel=account.channel, external_key=key, product_id=product.id))
+                        db.flush()
+                    added += 1
+                    new_keys.append(key)
+                except IntegrityError:
+                    # A concurrent click can win the unique-key race; retries remain safe.
+                    continue
         if added:
             linked += added
+            audit(db, u, "mapping", "products", product.id, {
+                "account_id": account.id, "channel": account.channel,
+                "external_keys": new_keys, "source": "exact_sku_barcode_match"})
             results.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
                 "card_count": len(candidates), "mapping_count": added})
     db.commit()
