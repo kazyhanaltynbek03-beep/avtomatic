@@ -2224,3 +2224,31 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .marketplace-record-detail .report-detail-table table{min-width:760px}
 .marketplace-record-detail .report-detail-table td small{display:block;margin-top:4px}
 @media(max-width:700px){.returns-metric{min-height:96px;padding:12px}.returns-metric>strong{font-size:19px}.returns-store-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.returns-store-tabs button{min-width:0;white-space:normal}.marketplace-record-detail .modal-heading{gap:8px}.marketplace-record-detail .report-detail-table{max-height:55vh}}
+
+/* Marketplace report hierarchy: summary first, source details remain available. */
+.wb-report-overview{display:grid;grid-template-columns:minmax(240px,.85fr) minmax(0,1.6fr);gap:14px;margin:16px 0}
+.wb-report-total{display:flex;flex-direction:column;justify-content:center;gap:8px;padding:22px 24px;border-radius:18px;background:linear-gradient(135deg,#103f32,#17634d);color:#fff;min-height:154px}
+.wb-report-total span{font-size:14px;font-weight:600;opacity:.9}
+.wb-report-total strong{font-size:clamp(25px,3vw,36px);line-height:1.15;font-variant-numeric:tabular-nums}
+.wb-report-total small{font-size:12px;line-height:1.45;opacity:.82}
+.wb-report-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.wb-report-summary .marketplace-report-metric{min-height:80px}
+.wb-report-breakdown,.marketplace-report-more{display:grid;gap:10px;margin:12px 0 18px}
+.marketplace-report-details{border:1px solid #e3eae6;border-radius:14px;background:#fff;overflow:hidden}
+.marketplace-report-details>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 17px;cursor:pointer;list-style:none;font-weight:650;color:#203d32}
+.marketplace-report-details>summary::-webkit-details-marker{display:none}
+.marketplace-report-details>summary::after{content:"＋";font-size:18px;color:#648074}
+.marketplace-report-details[open]>summary::after{content:"−"}
+.marketplace-report-details>summary small{margin-left:auto;color:#728079;font-size:12px;font-weight:450}
+.marketplace-report-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:#e9efec;border-top:1px solid #e9efec}
+.marketplace-report-metric{display:flex;flex-direction:column;gap:7px;padding:14px;background:#fff;min-width:0;text-align:left}
+.marketplace-report-metric>span{font-size:13px;line-height:1.4;color:#53645d}
+.marketplace-report-metric>strong{font-size:17px;line-height:1.25;color:#193f32;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.marketplace-report-metric>small{font-size:12px;line-height:1.45;color:#68776f}
+button.marketplace-report-metric{width:100%;border:0;cursor:pointer;font:inherit;color:inherit}
+button.marketplace-report-metric:hover,button.marketplace-report-metric:focus-visible{outline:2px solid #83b99b;outline-offset:-2px;position:relative}
+button.marketplace-report-metric[aria-pressed=true]{background:#f1f8f3}
+.marketplace-report-summary:not(.wb-report-summary){grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0}
+.marketplace-report-summary:not(.wb-report-summary) .kpi{min-width:0}
+@media(max-width:900px){.wb-report-overview{grid-template-columns:1fr}.wb-report-total{min-height:130px}.marketplace-report-summary:not(.wb-report-summary){grid-template-columns:repeat(2,minmax(0,1fr))}.marketplace-report-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.wb-weekly-report{padding:14px}.wb-report-overview{gap:9px;margin:12px 0}.wb-report-total{padding:18px;min-height:125px;border-radius:15px}.wb-report-total strong{font-size:28px}.wb-report-summary{gap:8px}.marketplace-report-summary:not(.wb-report-summary){gap:8px;margin:12px 0}.marketplace-report-summary:not(.wb-report-summary) .kpi{padding:13px;border-radius:13px}.marketplace-report-metric>span{font-size:12px}.marketplace-report-metrics{grid-template-columns:1fr}.marketplace-report-details>summary{padding:14px;font-size:14px}.marketplace-report-details>summary small{font-size:11px}.wb-report-breakdown{gap:8px}}
