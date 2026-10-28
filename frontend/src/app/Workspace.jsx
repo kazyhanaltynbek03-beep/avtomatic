@@ -206,9 +206,9 @@ export default function App() {
     };
   }, [auth, refresh]);
   useEffect(() => {
-    if (!auth || !can(auth, "analytics")) return;
+    if (!auth || page === "alerts" || !can(auth, "analytics")) return;
     let live = true;
-    const params = new URLSearchParams({ start: today(), end: today() });
+    const params = new URLSearchParams({ start, end });
     if (company) params.set("company_id", company);
     api("/alerts?" + params.toString())
       .then((data) => {
@@ -220,7 +220,7 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [auth, company, refresh]);
+  }, [auth, company, end, page, refresh, start]);
   const navigate = (id) => {
     setPage(id);
     location.hash = id;
@@ -297,6 +297,7 @@ export default function App() {
     end,
     refresh,
     marketplaceAccountId,
+    onNotificationCount: setNotificationCount,
     notify,
     navigate,
     open: (kind, item) => setModal({ kind, item }),
@@ -808,6 +809,12 @@ function ReportPage({ page, ctx }) {
     { cacheScope: ctx.auth.user.id },
   );
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
+  const onNotificationCount = ctx.onNotificationCount;
+  useEffect(() => {
+    if (page === "alerts" && systemAlerts && !systemAlertsError) {
+      onNotificationCount(Math.max(0, Number(systemAlerts.count) || 0));
+    }
+  }, [onNotificationCount, page, systemAlerts, systemAlertsError]);
   const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
   if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
   if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
