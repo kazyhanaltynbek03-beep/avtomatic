@@ -134,13 +134,15 @@ def _agent_tool_data(snapshot, name):
     raise HTTPException(403, "Инструмент не разрешён")
 
 
-def _marketplace_cost_catalog(db, user):
+def _marketplace_cost_catalog(db, user, account_id=None):
     query = (select(Account, MarketplaceProductMapping, Product)
         .join(MarketplaceProductMapping, MarketplaceProductMapping.account_id == Account.id)
         .join(Product, Product.id == MarketplaceProductMapping.product_id)
         .where(Account.active.is_(True), Account.channel.in_(("Kaspi", "Wildberries", "Ozon"))))
     if user.role != "Owner":
         query = query.where(Account.company_id.in_(user.company_ids or []))
+    if account_id is not None:
+        query = query.where(Account.id == int(account_id))
     rows = db.execute(query.order_by(Account.name, Product.name).limit(500)).all()
     account_ids=list({account.id for account, _, _ in rows})
     costs={}
@@ -162,9 +164,10 @@ def _marketplace_cost_catalog(db, user):
     return {"items":output,"total":len(output),"note":"Только сопоставленные товары активных магазинов. Cost is KZT per unit; missing values are null."}
 
 
-def _data_quality_summary(db, user, snapshot):
+def _data_quality_summary(db, user, snapshot, account_id=None):
     query=select(Account).where(Account.active.is_(True),Account.channel.in_(("Kaspi","Wildberries","Ozon")))
     if user.role!="Owner": query=query.where(Account.company_id.in_(user.company_ids or []))
+    if account_id is not None: query=query.where(Account.id == int(account_id))
     accounts=db.scalars(query.order_by(Account.name)).all()
     ids=[a.id for a in accounts]
     mapping_counts={}; pending={}
@@ -273,8 +276,8 @@ def assistant(db, user, payload):
             else:
                 if c["name"] not in allowed: raise HTTPException(403, "Инструмент не разрешён этому AI-сотруднику")
                 used.append(c["name"])
-                if c["name"]=="get_marketplace_cost_catalog": out=_marketplace_cost_catalog(db,user)
-                elif c["name"]=="get_data_quality_summary": out=_data_quality_summary(db,user,snapshot)
+                if c["name"]=="get_marketplace_cost_catalog": out=_marketplace_cost_catalog(db,user,payload.get("account_id"))
+                elif c["name"]=="get_data_quality_summary": out=_data_quality_summary(db,user,snapshot,payload.get("account_id"))
                 else: out=_agent_tool_data(snapshot,c["name"])
             history.append({"type":"function_call_output","call_id":c["call_id"],"output":json.dumps(out,default=str,ensure_ascii=False)})
         res = call_response(history, instructions, tools)
