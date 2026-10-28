@@ -4,6 +4,7 @@ import hmac
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Literal
 from datetime import datetime, timedelta, timezone, date
 from zoneinfo import ZoneInfo
 from decimal import Decimal
@@ -23,13 +24,13 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select, func, or_, and_, text, update, cast, String
+from sqlalchemy import select, func, or_, and_, text, update, cast, String, case
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field, ValidationError
 from .db import get_db, SessionLocal
 from .models import *
 from .security import *
-from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs
+from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns
 from .connectors import AccessRequired, connector, load_saved_credentials
 from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
@@ -710,6 +711,301 @@ def _kaspi_commission_estimate(sales, expenses, api_bases, configured_rate=None)
     return estimated, str(rate), suppressed
 
 
+def _return_statement_mapping(headers):
+    aliases = {
+        "external_return_id": ("return_id", "id возврата", "номер возврата", "rrd_id", "rrdid", "идентификатор операции", "operation id"),
+        "external_order_id": ("order_id", "order", "заказ", "номер заказа", "номер исходного заказа", "srid"),
+        "financial_return_date": ("return date", "дата возврата", "дата операции", "rrd_date", "rrddate", "дата выплаты"),
+        "amount": ("refund", "refund amount", "сумма возврата", "сумма операции", "amount", "forpay"),
+        "sku": ("sku", "артикул продавца", "vendorcode", "vendor code", "артикул"),
+        "product_name": ("товар", "название товара", "наименование", "product name"),
+        "quantity": ("количество", "quantity", "шт."),
+        "reason": ("причина", "причина возврата", "reason"),
+        "currency": ("валюта", "currency"),
+    }
+    normalized = {str(h).strip().lower().replace(" ", "_"): h for h in headers}
+    result = {}
+    for field, variants in aliases.items():
+        for header in headers:
+            key = str(header).strip().lower()
+            if key in variants or key.replace(" ", "_") in variants:
+                result[field] = header
+                break
+        if field not in result:
+            for variant in variants:
+                if variant.replace(" ", "_") in normalized:
+                    result[field] = normalized[variant.replace(" ", "_")]
+                    break
+    return result
+
+
+@app.post("/api/marketplace-returns/financial-statement/preview")
+async def preview_return_financial_statement(account_id: int = Form(...), file: UploadFile = File(...),
+                                              u=Depends(current_user), db=Depends(get_db)):
+    require(u, "finance")
+    account = db.get(Account, account_id)
+    if not account:
+        raise HTTPException(404, "Магазин не найден")
+    scope(u, account.company_id)
+    if account.channel not in {"Kaspi", "Wildberries", "Ozon"}:
+        raise HTTPException(422, "Выписку нужно связать с аккаунтом маркетплейса")
+    if account.settlement_currency != "KZT":
+        raise HTTPException(422, "Импорт суммы пока поддерживает только выписку в KZT")
+    raw = await file.read()
+    headers, rows = importing.parse_file(raw, file.filename or "statement.xlsx")
+    return {"headers": headers, "sample": rows[:8], "row_count": len(rows),
+            "suggested_mapping": _return_statement_mapping(headers),
+            "note": "Предпросмотр не меняет данные. Финансовый возврат появится только после явного импорта с датой и суммой."}
+
+
+@app.post("/api/marketplace-returns/financial-statement/import")
+async def import_return_financial_statement(account_id: int = Form(...), mapping: str = Form(...),
+                                            file: UploadFile = File(...), u=Depends(current_user),
+                                            db=Depends(get_db)):
+    require(u, "finance", True)
+    account = db.get(Account, account_id)
+    if not account:
+        raise HTTPException(404, "Магазин не найден")
+    scope(u, account.company_id)
+    if account.channel not in {"Kaspi", "Wildberries", "Ozon"}:
+        raise HTTPException(422, "Выписку нужно связать с аккаунтом маркетплейса")
+    if account.settlement_currency != "KZT":
+        raise HTTPException(422, "Импорт суммы пока поддерживает только выписку в KZT")
+    try:
+        column_map = json.loads(mapping)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Настройте сопоставление колонок")
+    required_fields = {"external_return_id", "external_order_id", "financial_return_date", "amount"}
+    if not isinstance(column_map, dict) or not required_fields.issubset(column_map) or any(not column_map.get(k) for k in required_fields):
+        raise HTTPException(422, "Обязательны колонки: ID возврата, номер заказа, дата финансовой операции и сумма")
+    raw = await file.read()
+    headers, source_rows = importing.parse_file(raw, file.filename or "statement.xlsx")
+    if any(value not in headers for value in column_map.values()):
+        raise HTTPException(422, "Сопоставление содержит колонку, которой нет в файле")
+    from decimal import Decimal, InvalidOperation
+    imported = updated = skipped = 0
+    errors = []
+    for row_number, source_row in enumerate(source_rows, start=2):
+        mapped = {field: source_row.get(column) for field, column in column_map.items()}
+        operation_id = str(mapped.get("external_return_id") or "").strip()
+        order_id = str(mapped.get("external_order_id") or "").strip()
+        day = importing._date(mapped.get("financial_return_date"))
+        try:
+            operation_day = date.fromisoformat(str(day))
+            amount_decimal = Decimal(str(mapped.get("amount") or "").replace("\u00a0", "").replace("\u202f", "").replace(" ", "").replace(",", "."))
+            amount = int((abs(amount_decimal) * 100).quantize(Decimal("1")))
+            quantity = int(str(mapped.get("quantity") or "1").strip())
+        except (ValueError, TypeError, InvalidOperation, OverflowError):
+            errors.append({"row": row_number, "message": "Не удалось прочитать дату, сумму или количество"})
+            continue
+        if not operation_id or not order_id or amount <= 0 or quantity <= 0:
+            errors.append({"row": row_number, "message": "Нужны ID возврата, номер заказа, положительная сумма и количество"})
+            continue
+        row_currency = str(mapped.get("currency") or "KZT").strip().upper()
+        if row_currency not in {"KZT", "₸", "ТЕНГЕ", "ТГ"}:
+            errors.append({"row": row_number, "message": "Поддерживается только выписка в KZT; конвертация валют не выполняется"})
+            continue
+        sku = str(mapped.get("sku") or "").strip()
+        product_name = str(mapped.get("product_name") or "").strip()
+        source = "financial_statement_import"
+        # Prefer linking to a single existing status observation by exact order
+        # and SKU. Ambiguous or absent matches remain independent, auditable rows.
+        existing = db.scalar(select(MarketplaceReturn).where(
+            MarketplaceReturn.account_id == account.id,
+            MarketplaceReturn.raw_data["financial_statement_return_id"].as_string() == operation_id,
+        ))
+        if existing is None:
+            existing = db.scalar(select(MarketplaceReturn).where(
+                MarketplaceReturn.account_id == account.id,
+                MarketplaceReturn.source == source,
+                MarketplaceReturn.external_return_id == operation_id,
+            ))
+        if existing is None:
+            candidate_q = select(MarketplaceReturn).where(
+                MarketplaceReturn.account_id == account.id,
+                MarketplaceReturn.external_order_id == order_id,
+                MarketplaceReturn.financial_status != "confirmed",
+            )
+            if sku: candidate_q = candidate_q.where(MarketplaceReturn.sku == sku)
+            candidates = list(db.scalars(candidate_q.limit(2)))
+            if len(candidates) == 1:
+                existing = candidates[0]
+        product_mapping = db.scalar(select(MarketplaceProductMapping).where(
+            MarketplaceProductMapping.account_id == account.id,
+            MarketplaceProductMapping.external_key.in_([sku, f"sku:{sku}"]),
+        )) if sku else None
+        product = db.get(Product, product_mapping.product_id) if product_mapping else None
+        media = (product.media or []) if product else []
+        if existing is None:
+            existing = MarketplaceReturn(company_id=account.company_id, account_id=account.id,
+                marketplace=account.channel, source=source, external_return_id=operation_id,
+                external_order_id=order_id, detected_date=datetime.now(ZoneInfo("Asia/Almaty")).date(),
+                accounted_status="unverified", return_status="financial_return_confirmed")
+            db.add(existing)
+            db.flush()
+            db.add(MarketplaceReturnAudit(return_id=existing.id, user_id=u.id,
+                action="financial_statement_imported", details={"source_file": (file.filename or "")[:160], "operation_id": operation_id}))
+            imported += 1
+        else:
+            updated += 1
+            db.add(MarketplaceReturnAudit(return_id=existing.id, user_id=u.id,
+                action="financial_statement_matched", details={"source_file": (file.filename or "")[:160], "operation_id": operation_id}))
+        existing.external_order_id = order_id
+        existing.product_id = product.id if product else existing.product_id
+        existing.product_name = product_name or (product.name if product else existing.product_name or "")
+        existing.sku = sku or (product.sku if product else existing.sku or "")
+        existing.image_url = (media[0] if media and isinstance(media[0], str) else existing.image_url or "")
+        existing.quantity = quantity
+        existing.financial_return_date = operation_day
+        existing.amount = amount
+        existing.currency = "KZT"
+        existing.financial_status = "confirmed"
+        existing.last_synced_at = datetime.now(timezone.utc)
+        existing.raw_data = {**(existing.raw_data or {}), "financial_statement": True,
+                             "financial_statement_return_id": operation_id, "file_name": (file.filename or "")[:160]}
+    if errors and imported == 0 and updated == 0:
+        raise HTTPException(422, {"message":"Ни одна строка не импортирована", "errors":errors[:20]})
+    audit(db, u, "import_marketplace_returns", "marketplace_returns", details={
+        "account_id":account.id, "source_file":(file.filename or "")[:160],
+        "imported":imported, "updated":updated, "skipped":skipped, "errors":len(errors),
+    })
+    db.commit()
+    return {"ok":True, "imported":imported, "updated":updated, "skipped":skipped,
+            "errors":errors[:50], "message":"Данные записаны только в журнал возвратов; существующие финансовые отчёты не изменены."}
+
+
+@app.get("/api/marketplace-returns")
+def get_marketplace_returns(
+    marketplace: str = "all", company_id: int | None = None, account_id: int | None = None,
+    start: date | None = None, end: date | None = None, search: str = "",
+    offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
+    u=Depends(current_user), db=Depends(get_db),
+):
+    """Separate return observations. This endpoint never reads or posts to P&L."""
+    require(u, "sales")
+    if marketplace not in {"all", "Kaspi", "Wildberries", "Ozon"}:
+        raise HTTPException(422, "Неизвестный маркетплейс")
+    if start and end and end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
+    if company_id is not None:
+        scope(u, company_id)
+    q = select(MarketplaceReturn, Account, Product).join(
+        Account, MarketplaceReturn.account_id == Account.id
+    ).outerjoin(Product, MarketplaceReturn.product_id == Product.id)
+    if u.role != "Owner":
+        q = q.where(MarketplaceReturn.company_id.in_(u.company_ids or []))
+    if company_id is not None:
+        q = q.where(MarketplaceReturn.company_id == company_id)
+    if account_id is not None:
+        account = db.get(Account, account_id)
+        if not account:
+            raise HTTPException(404, "Магазин не найден")
+        scope(u, account.company_id)
+        q = q.where(MarketplaceReturn.account_id == account_id)
+    if marketplace != "all":
+        q = q.where(MarketplaceReturn.marketplace == marketplace)
+    return_event_day = func.coalesce(MarketplaceReturn.financial_return_date, MarketplaceReturn.request_date)
+    if start:
+        q = q.where(or_(return_event_day >= start, return_event_day.is_(None)))
+    if end:
+        q = q.where(or_(return_event_day <= end, return_event_day.is_(None)))
+    term = search.strip()[:120]
+    if term:
+        needle = f"%{term}%"
+        q = q.where(or_(MarketplaceReturn.external_order_id.ilike(needle),
+                        MarketplaceReturn.sku.ilike(needle), MarketplaceReturn.product_name.ilike(needle),
+                        Account.name.ilike(needle)))
+    rows = db.execute(q.order_by(MarketplaceReturn.detected_date.desc(), MarketplaceReturn.id.desc())
+                      .offset(offset).limit(limit)).all()
+    # Summary values are computed over the complete filtered set, independent of pagination.
+    base = select(MarketplaceReturn).join(Account, MarketplaceReturn.account_id == Account.id)
+    if u.role != "Owner": base = base.where(MarketplaceReturn.company_id.in_(u.company_ids or []))
+    if company_id is not None: base = base.where(MarketplaceReturn.company_id == company_id)
+    if account_id is not None: base = base.where(MarketplaceReturn.account_id == account_id)
+    if marketplace != "all": base = base.where(MarketplaceReturn.marketplace == marketplace)
+    base_event_day = func.coalesce(MarketplaceReturn.financial_return_date, MarketplaceReturn.request_date)
+    if start: base = base.where(or_(base_event_day >= start, base_event_day.is_(None)))
+    if end: base = base.where(or_(base_event_day <= end, base_event_day.is_(None)))
+    if term:
+        needle = f"%{term}%"
+        base = base.where(or_(MarketplaceReturn.external_order_id.ilike(needle), MarketplaceReturn.sku.ilike(needle),
+                              MarketplaceReturn.product_name.ilike(needle), Account.name.ilike(needle)))
+    scoped_returns = base.subquery()
+    agg = db.execute(select(
+        func.count(),
+        func.sum(case((scoped_returns.c.return_status == "requested", 1), else_=0)),
+        func.sum(case((scoped_returns.c.financial_status == "confirmed", 1), else_=0)),
+        func.sum(case(((scoped_returns.c.financial_status == "confirmed") & scoped_returns.c.amount.is_not(None), scoped_returns.c.amount), else_=0)),
+        func.sum(case((scoped_returns.c.return_status == "rejected", 1), else_=0)),
+        func.sum(case((scoped_returns.c.accounted_status == "yes", scoped_returns.c.amount), else_=0)),
+        func.sum(case((scoped_returns.c.accounted_status == "no", scoped_returns.c.amount), else_=0)),
+        func.sum(case((scoped_returns.c.accounted_status == "unverified", 1), else_=0)),
+        func.sum(case(((scoped_returns.c.financial_return_date.is_(None)) | scoped_returns.c.amount.is_(None), 1), else_=0)),
+    ).select_from(scoped_returns)).one()
+    count = agg[0] or 0
+    summary = {
+        "requests": agg[1] or 0,
+        "confirmed_count": agg[2] or 0,
+        "confirmed_amount": agg[3] or 0,
+        "pending_count": count - (agg[2] or 0),
+        "rejected_count": agg[4] or 0,
+        "accounted_amount": agg[5] or 0,
+        "not_accounted_amount": agg[6] or 0,
+        "unverified_accounting_count": agg[7] or 0,
+        "unknown_count": agg[8] or 0,
+        "existing_report_total": None, "adjusted_total": None, "test_mode": True,
+    }
+    integrations_q = select(Account).where(Account.channel.in_(["Kaspi", "Wildberries", "Ozon"]))
+    if u.role != "Owner": integrations_q = integrations_q.where(Account.company_id.in_(u.company_ids or []))
+    if company_id is not None: integrations_q = integrations_q.where(Account.company_id == company_id)
+    if marketplace != "all": integrations_q = integrations_q.where(Account.channel == marketplace)
+    integrations = [{"account_id": a.id, "marketplace": a.channel, "store": a.name,
+                     "active": a.active, "mode": a.mode} for a in db.scalars(integrations_q)]
+    return {"items": [marketplace_returns.serialize_return(r, a, p) for r, a, p in rows],
+            "total": count, "offset": offset, "limit": limit, "summary": summary,
+            "integrations": integrations}
+
+
+@app.post("/api/marketplace-returns/discover")
+def discover_marketplace_returns(payload: dict, tasks: BackgroundTasks,
+                                 u=Depends(current_user), db=Depends(get_db)):
+    """Start an explicit background scan of cached return source rows."""
+    require(u, "accounts", True)
+    try:
+        account_id = int(payload.get("account_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Укажите магазин")
+    account = db.get(Account, account_id)
+    if not account:
+        raise HTTPException(404, "Магазин не найден")
+    scope(u, account.company_id)
+    if account.channel not in {"Kaspi", "Wildberries"}:
+        raise HTTPException(409, "Автоматическое обнаружение для этого маркетплейса пока недоступно")
+    if not account.active or account.mode != "api":
+        raise HTTPException(409, "Для проверки возвратов нужна активная API-интеграция")
+    state = db.scalar(select(MarketplaceReturnSyncState).where(MarketplaceReturnSyncState.account_id == account_id))
+    started_at = state.started_at if state else None
+    if started_at is not None and started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    if state and state.status == "running" and started_at and started_at > now() - timedelta(minutes=20):
+        return {"status": "running", "account_id": account_id, "already_running": True}
+    tasks.add_task(marketplace_returns.run_discovery, account_id)
+    return {"status": "queued", "account_id": account_id}
+
+
+@app.get("/api/marketplace-returns/sync-status")
+def marketplace_returns_sync_status(company_id: int | None = None,
+                                    u=Depends(current_user), db=Depends(get_db)):
+    require(u, "sales")
+    q = select(MarketplaceReturnSyncState, Account).join(Account, Account.id == MarketplaceReturnSyncState.account_id)
+    if u.role != "Owner": q = q.where(Account.company_id.in_(u.company_ids or []))
+    if company_id is not None: scope(u, company_id); q = q.where(Account.company_id == company_id)
+    return {"items": [{"account_id": a.id, "marketplace": a.channel, "store": a.name,
+                       "status": state.status, "scanned": state.scanned, "found": state.found,
+                       "error": state.error, "completed_at": state.completed_at}
+                      for state, a in db.execute(q)]}
+
+
 @app.get("/api/marketplace-summary")
 def marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None, u=Depends(current_user), db=Depends(get_db)):
     """Fast marketplace page summary; bounded to the selected channel and period."""
@@ -1386,6 +1682,61 @@ class MarketplaceMappingIn(BaseModel):
     external_keys: list[str] = Field(min_length=1, max_length=30)
 
 
+class ProductMarketplaceIdIn(BaseModel):
+    account_id: int
+    id_type: Literal["product", "sku", "barcode", "size"]
+    external_id: str = Field(min_length=1, max_length=180)
+
+
+@app.post("/api/products/{product_id}/marketplace-mappings")
+def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
+                                u=Depends(current_user), db=Depends(get_db)):
+    """Attach a seller-specific marketplace identifier to an existing QOR SKU.
+
+    This only saves identity mapping. It does not replay staged orders or alter
+    financial reports; normal, idempotent marketplace projection uses it later.
+    """
+    require(u, "inventory", True)
+    product = db.get(Product, product_id)
+    if not product or not product.active:
+        raise HTTPException(404, "Активный товар QOR не найден")
+    account = db.get(Account, p.account_id)
+    if not account or account.channel not in {"Kaspi", "Wildberries", "Ozon"}:
+        raise HTTPException(404, "Магазин маркетплейса не найден")
+    scope(u, account.company_id)
+    raw_id = p.external_id.strip()
+    if not raw_id or any(ch.isspace() for ch in raw_id):
+        raise HTTPException(422, "Укажите ID без пробелов")
+    external_key = f"{p.id_type}:{raw_id}"
+    existing = db.scalar(select(MarketplaceProductMapping).where(
+        MarketplaceProductMapping.account_id == account.id,
+        MarketplaceProductMapping.external_key == external_key,
+    ))
+    if existing and existing.product_id != product.id:
+        raise HTTPException(409, "Этот ID уже привязан к другому товару QOR")
+    if not existing:
+        try:
+            with db.begin_nested():
+                db.add(MarketplaceProductMapping(company_id=account.company_id,
+                    account_id=account.id, channel=account.channel,
+                    external_key=external_key, product_id=product.id))
+                db.flush()
+                audit(db, u, "mapping", "products", product.id, {
+                    "account_id": account.id, "channel": account.channel,
+                    "external_key": external_key,
+                })
+        except IntegrityError:
+            existing = db.scalar(select(MarketplaceProductMapping).where(
+                MarketplaceProductMapping.account_id == account.id,
+                MarketplaceProductMapping.external_key == external_key,
+            ))
+            if not existing or existing.product_id != product.id:
+                raise HTTPException(409, "Этот ID уже привязан к другому товару QOR")
+    db.commit()
+    return {"ok": True, "product_id": product.id, "account_id": account.id,
+            "channel": account.channel, "external_key": external_key}
+
+
 @app.post("/api/marketplace-records/{id}/mapping")
 def marketplace_mapping(id: int, p: MarketplaceMappingIn, u=Depends(current_user), db=Depends(get_db)):
     require(u, "accounts", True)
@@ -1523,6 +1874,30 @@ def listing(
         if company_id:
             returned_q = returned_q.where(Sale.company_id == company_id)
         returned = dict(db.execute(returned_q).all())
+        channel_sales_q = scope_query(select(
+            Sale.product_id, Account.id, Account.channel, Account.name,
+            func.coalesce(func.sum(Sale.quantity), 0),
+        ).join(Account, Account.id == Sale.account_id), Sale, u)
+        channel_sales_q = channel_sales_q.where(
+            Sale.product_id.in_(product_ids), Sale.date >= from_date,
+            Sale.date <= to_date, Account.active.is_(True),
+        ).group_by(Sale.product_id, Account.id, Account.channel, Account.name)
+        if company_id:
+            channel_sales_q = channel_sales_q.where(Sale.company_id == company_id)
+        channel_sales = {(pid, aid): {"channel": channel, "account_name": name, "sold": int(qty or 0), "returned": 0}
+                         for pid, aid, channel, name, qty in db.execute(channel_sales_q).all()}
+        channel_returns_q = scope_query(select(
+            Sale.product_id, Account.id, Account.channel, Account.name,
+            func.coalesce(func.sum(Return.quantity), 0),
+        ).join(Return, Return.sale_id == Sale.id).join(Account, Account.id == Sale.account_id), Sale, u)
+        channel_returns_q = channel_returns_q.where(
+            Sale.product_id.in_(product_ids), Return.date >= from_date,
+            Return.date <= to_date, Account.active.is_(True),
+        ).group_by(Sale.product_id, Account.id, Account.channel, Account.name)
+        if company_id:
+            channel_returns_q = channel_returns_q.where(Sale.company_id == company_id)
+        for pid, aid, channel, name, qty in db.execute(channel_returns_q).all():
+            channel_sales.setdefault((pid, aid), {"channel": channel, "account_name": name, "sold": 0, "returned": 0})["returned"] = int(qty or 0)
         defective_q = select(Sale.product_id, func.coalesce(func.sum(Return.quantity), 0)).join(Return, Return.sale_id == Sale.id)
         defective_q = scope_query(defective_q, Sale, u).where(
             Sale.product_id.in_(product_ids), Return.inventory_status == "defective"
@@ -1533,36 +1908,88 @@ def listing(
         accounts_q = scope_query(select(Account), Account, u)
         if company_id:
             accounts_q = accounts_q.where(Account.company_id == company_id)
-        sync_times = [a.last_sync for a in db.scalars(accounts_q) if a.last_sync]
+        accessible_accounts = db.scalars(accounts_q).all()
+        accessible_account_ids = {a.id for a in accessible_accounts}
+        active_marketplace_accounts = [a for a in accessible_accounts if a.active and a.channel in {"Kaspi", "Wildberries", "Ozon"}]
+        active_account_ids = {a.id for a in accessible_accounts if a.active}
+        sync_times = [a.last_sync for a in accessible_accounts if a.last_sync]
         latest_sync = max(sync_times) if sync_times else None
+        map_q = scope_query(select(MarketplaceProductMapping), MarketplaceProductMapping, u)
+        if company_id:
+            map_q = map_q.where(MarketplaceProductMapping.company_id == company_id)
+        mapping_rows = db.scalars(map_q.where(MarketplaceProductMapping.product_id.in_(product_ids))).all()
         for row in rows:
             specs = row.get("specifications") or {}
             market_snapshot = specs.get("marketplace_stock") or {}
-            marketplace_units = sum(
-                int(v.get("quantity") or 0) for v in market_snapshot.values()
-                if isinstance(v, dict)
-            )
+            visible_snapshot = {}
+            for key, value in market_snapshot.items():
+                try: snapshot_account_id = int(str(key).rsplit(":", 1)[1])
+                except (IndexError, TypeError, ValueError): continue
+                if snapshot_account_id in active_account_ids and isinstance(value, dict):
+                    visible_snapshot[key] = value
+            marketplace_units = sum(max(0, int(v.get("quantity") or 0)) for v in visible_snapshot.values())
             physical_units = int(physical.get(row["id"], 0) or 0)
             defective_units = int(defective.get(row["id"], 0) or 0)
             in_transit = max(0, int(specs.get("in_transit_quantity") or 0))
             reserved = max(0, int(specs.get("reserved_quantity") or 0))
-            available_units = max(0, physical_units - reserved)
-            total_units = physical_units + marketplace_units + in_transit + defective_units
+            allocations = specs.get("marketplace_stock_allocations") or {}
+            allocated_units = 0
+            for account_key, allocation in allocations.items():
+                try: allocation_account_id = int(account_key)
+                except (TypeError, ValueError): continue
+                if allocation_account_id not in accessible_account_ids: continue
+                if not isinstance(allocation, dict):
+                    try: allocated_units += max(0, int(allocation or 0))
+                    except (TypeError, ValueError): pass
+                    continue
+                try: allocated_units += max(0, int(allocation.get("quantity") or 0))
+                except (TypeError, ValueError): pass
+                for amount in (allocation.get("sizes") or {}).values():
+                    try: allocated_units += max(0, int(amount or 0))
+                    except (TypeError, ValueError): pass
+            available_units = max(0, physical_units - reserved - allocated_units)
+            # Marketplace snapshots mirror listing/account availability; absent a
+            # transfer ledger they cannot be safely added to QOR batches without
+            # risking that the same units are counted twice.
+            total_units = physical_units + in_transit + defective_units
+            product_mappings = [m for m in mapping_rows if m.product_id == row["id"]]
+            mapped_account_ids = {m.account_id for m in product_mappings}
+            linked_count = sum(1 for account in active_marketplace_accounts if account.id in mapped_account_ids)
+            marketplace_count = len(active_marketplace_accounts)
+            coverage_status = "no_marketplaces" if marketplace_count == 0 else (
+                "complete" if linked_count == marketplace_count else ("partial" if linked_count else "unmapped")
+            )
+            relevant_sales = {aid: data for (pid, aid), data in channel_sales.items() if pid == row["id"]}
+            for account in active_marketplace_accounts:
+                if account.id in mapped_account_ids:
+                    relevant_sales.setdefault(account.id, {"channel": account.channel, "account_name": account.name, "sold": 0, "returned": 0})
+            snapshot_review = bool(visible_snapshot)
+            allocation_overdrawn = allocated_units > max(0, physical_units - reserved)
+            if coverage_status == "no_marketplaces":
+                reconciliation_status = "no_marketplaces"
+            else:
+                reconciliation_status = "partial" if coverage_status in {"partial", "unmapped"} or snapshot_review or allocation_overdrawn else "confirmed"
             row["inventory"] = {
                 "total": total_units,
                 "physical": physical_units,
                 "available": available_units,
                 "reserved": reserved,
+                "allocated": allocated_units,
                 "marketplace": marketplace_units,
                 "in_transit": in_transit,
                 "defective": defective_units,
                 "sold": int(sold.get(row["id"], 0) or 0),
                 "returned": int(returned.get(row["id"], 0) or 0),
+                "sales_by_marketplace": [
+                    {"account_id": aid, **data} for aid, data in sorted(relevant_sales.items())
+                ],
+                "mapping_coverage": {"linked": linked_count, "active_accounts": marketplace_count, "status": coverage_status},
+                "reconciliation_status": reconciliation_status,
+                "snapshot_review_required": snapshot_review,
+                "allocation_overdrawn": allocation_overdrawn,
                 "last_sync": latest_sync,
-                "low_stock": physical_units - int(reserved or 0) <= int(row.get("min_stock") or 0),
+                "low_stock": available_units <= int(row.get("min_stock") or 0),
             }
-        map_q = scope_query(select(MarketplaceProductMapping), MarketplaceProductMapping, u)
-        mapping_rows = db.scalars(map_q.where(MarketplaceProductMapping.product_id.in_(product_ids))).all()
         for row in rows:
             row["marketplace_mappings"] = [
                 {"account_id": m.account_id, "channel": m.channel, "external_key": m.external_key}

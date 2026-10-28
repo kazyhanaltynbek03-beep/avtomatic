@@ -286,6 +286,67 @@ class ReturnInventoryAllocation(Record, Base):
     )
 
 
+class MarketplaceReturn(Record, Base):
+    """Isolated marketplace return observations; never participates in ERP P&L."""
+    __tablename__ = "marketplace_returns"
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    marketplace: Mapped[str] = mapped_column(String(20), index=True)
+    source: Mapped[str] = mapped_column(String(40))
+    external_return_id: Mapped[str] = mapped_column(String(200))
+    external_order_id: Mapped[str] = mapped_column(String(160), default="")
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    product_name: Mapped[str] = mapped_column(String(240), default="")
+    sku: Mapped[str] = mapped_column(String(120), default="")
+    image_url: Mapped[str] = mapped_column(Text, default="")
+    quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    order_date: Mapped[DateType | None] = mapped_column(Date, nullable=True)
+    issue_date: Mapped[DateType | None] = mapped_column(Date, nullable=True)
+    request_date: Mapped[DateType | None] = mapped_column(Date, nullable=True)
+    financial_return_date: Mapped[DateType | None] = mapped_column(Date, nullable=True)
+    detected_date: Mapped[DateType] = mapped_column(Date)
+    amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # KZT tiyn; NULL until source confirms it.
+    currency: Mapped[str] = mapped_column(String(3), default="KZT")
+    return_status: Mapped[str] = mapped_column(String(40), default="detected")
+    financial_status: Mapped[str] = mapped_column(String(30), default="unconfirmed")
+    accounted_status: Mapped[str] = mapped_column(String(20), default="unverified")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    guarantee_case: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    defect: Mapped[str] = mapped_column(Text, default="")
+    examination: Mapped[str] = mapped_column(Text, default="")
+    seller_decision: Mapped[str] = mapped_column(Text, default="")
+    marketplace_decision: Mapped[str] = mapped_column(Text, default="")
+    item_condition: Mapped[str] = mapped_column(String(30), default="unknown")
+    raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("account_id", "source", "external_return_id", name="uq_marketplace_return_identity"),
+        CheckConstraint("quantity IS NULL OR quantity > 0"),
+        CheckConstraint("amount IS NULL OR amount >= 0"),
+        CheckConstraint("accounted_status IN ('yes','no','unverified')"),
+    )
+
+
+class MarketplaceReturnAudit(Record, Base):
+    __tablename__ = "marketplace_return_audits"
+    return_id: Mapped[int] = mapped_column(ForeignKey("marketplace_returns.id"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(40))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class MarketplaceReturnSyncState(Record, Base):
+    __tablename__ = "marketplace_return_sync_states"
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="never")
+    cursor: Mapped[str] = mapped_column(String(200), default="")
+    scanned: Mapped[int] = mapped_column(Integer, default=0)
+    found: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Movement(Record, Base):
     __tablename__ = "movements"
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
