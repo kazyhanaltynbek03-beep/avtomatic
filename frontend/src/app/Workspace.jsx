@@ -1455,9 +1455,22 @@ function ProductImage({ product, label = "Фото не добавлено" }) {
   </div>;
 }
 
+function productLinkSummary(product) {
+  const links = product.marketplace_links || [];
+  const active = links.filter(link => link.active);
+  return {
+    links,
+    linked: active.filter(link => link.mapping_status === "linked").length,
+    needsLink: active.filter(link => link.mapping_status === "needs_link").length,
+    errors: active.filter(link => link.sync_attention).length,
+    complete: active.length > 0 && active.every(link => link.mapping_status === "linked"),
+  };
+}
+
 function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selected, onSelect, accounts = [], onSync }) {
   const inventory = product.inventory || {};
   const coverage = inventory.mapping_coverage || {linked:0, active_accounts:0, status:"unmapped"};
+  const links = productLinkSummary(product);
   const sales = inventory.sales_by_marketplace || [];
   const reconciliationLabel = inventory.reconciliation_status === "confirmed"
     ? "Сверено по подтверждённым данным"
@@ -1479,6 +1492,19 @@ function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selec
         <div><span>Продано за период</span><strong>{inventory.sold ?? 0} шт.</strong></div>
         <div><span>Связано магазинов</span><strong>{coverage.linked}/{coverage.active_accounts}</strong></div>
       </div>
+      <details className="catalog-link-details">
+        <summary>
+          <b>Связь с магазинами</b>
+          <span>{links.linked} связано · {links.needsLink} требуют связи{links.errors ? ` · ${links.errors} с ошибкой` : ""}</span>
+        </summary>
+        {links.links.length ? <div className="catalog-link-list">{links.links.map(link=><div className="catalog-link-row" key={link.account_id}>
+          <div><strong>{link.channel} · {link.account_name}</strong><small>{link.mapping_status === "linked" ? `Связано ID: ${link.external_keys.join(", ")}` : link.mapping_status === "inactive" ? "Связь сохранена, интеграция отключена" : "Карточка магазина ещё не связана с этим SKU QOR"}</small></div>
+          <span className={`catalog-link-badge ${link.mapping_status === "linked" ? "is-linked" : link.mapping_status === "inactive" ? "is-inactive" : "is-unlinked"}`}>{link.mapping_status === "linked" ? `Связано · ${link.mapping_count} ID` : link.mapping_status === "inactive" ? "Отключён" : "Требует связи"}</span>
+          {link.sync_attention && <small className="catalog-link-error">{link.sync_status_label}. {link.sync_attention_message}</small>}
+          {link.mapping_status === "needs_link" && <button type="button" className="secondary" onClick={()=>onEdit(link.account_id)}>Связать магазин</button>}
+        </div>)}</div> : <p className="catalog-empty-sales">Нет активных интеграций Kaspi, Wildberries или Ozon.</p>}
+        <small className="catalog-mapping-note">После сохранения связь и распределение остатка хранятся в QOR. Повторно связывать товар после обычной синхронизации не нужно.</small>
+      </details>
       <details className="catalog-details">
         <summary>Остатки и продажи по магазинам</summary>
         <p className="catalog-detail-note">Остаток QOR — физический запас. Количество на площадках сверяется отдельно, чтобы не посчитать один товар дважды.</p>
@@ -1912,6 +1938,7 @@ function DataPage({ page, ctx }) {
     [catalogView, setCatalogView] = useState("cards"),
     [catalogCategory, setCatalogCategory] = useState(""),
     [catalogSort, setCatalogSort] = useState("name"),
+    [catalogLinkFilter, setCatalogLinkFilter] = useState("all"),
     [kaspiAction, setKaspiAction] = useState({order_id:"",code:"",status:"ACCEPTED_BY_MERCHANT",cancellation_reason:"BUYER_CANCELLATION_BY_MERCHANT",cancellation_comment:"",number_of_space:"1",security_code:""});
   const mutationLock = useRef(false);
   const run = async (fn) => { setBusy(true); setError(""); try { await fn(); } catch (e) { setError(e.message); } finally { setBusy(false); } };
@@ -2039,8 +2066,19 @@ function DataPage({ page, ctx }) {
     poll();
     return ()=>{ live=false; window.clearInterval(timer); };
   },[productCatalogJob?.id,productCatalogJob?.status]);
-  const catalogRows = [...(state.data?.items || [])]
+  const catalogPageRows = state.data?.items || [];
+  const catalogLinkCounts = {
+    all: catalogPageRows.length,
+    linked: catalogPageRows.filter(p=>productLinkSummary(p).complete).length,
+    needs_link: catalogPageRows.filter(p=>productLinkSummary(p).needsLink > 0).length,
+    error: catalogPageRows.filter(p=>productLinkSummary(p).errors > 0).length,
+  };
+  const catalogRows = [...catalogPageRows]
     .filter(p => !catalogCategory || p.category === catalogCategory)
+    .filter(p => catalogLinkFilter === "all"
+      || (catalogLinkFilter === "linked" && productLinkSummary(p).complete)
+      || (catalogLinkFilter === "needs_link" && productLinkSummary(p).needsLink > 0)
+      || (catalogLinkFilter === "error" && productLinkSummary(p).errors > 0))
     .sort((a,b) => catalogSort === "stock" ? (a.inventory?.available ?? 0)-(b.inventory?.available ?? 0)
       : catalogSort === "stock_desc" ? (b.inventory?.available ?? 0)-(a.inventory?.available ?? 0)
         : catalogSort === "price" ? (a.price || 0)-(b.price || 0)
@@ -2248,7 +2286,7 @@ function DataPage({ page, ctx }) {
           <div className="row-actions">
             {entity === "products" && <>
               {writable && <button className="secondary" onClick={loadWBProductCatalogs} disabled={busy || ["queued","running"].includes(productCatalogJob?.status)} title="Загрузка карточек WB отдельно от финансовой синхронизации">{["queued","running"].includes(productCatalogJob?.status) ? "Загружаем каталог WB…" : "Загрузить каталог WB"}</button>}
-              {writable && <button className="secondary" onClick={autoMatchProducts} disabled={busy} title="Связывает только однозначные совпадения по точному артикулу продавца">{busy ? "Сопоставляем…" : "Связать по артикулам"}</button>}
+              {writable && <button className="secondary" onClick={autoMatchProducts} disabled={busy} title="Находит новые однозначные совпадения по точному артикулу. Сохранённые связи не создаются повторно.">{busy ? "Проверяем артикулы…" : "Найти связи по артикулам"}</button>}
               <select aria-label="Категория товара" value={catalogCategory} onChange={e=>setCatalogCategory(e.target.value)}><option value="">Все категории</option>{[...new Set((state.data?.items || []).map(p=>p.category).filter(Boolean))].sort().map(x=><option key={x}>{x}</option>)}</select>
               <select aria-label="Сортировка каталога" value={catalogSort} onChange={e=>setCatalogSort(e.target.value)}><option value="name">Название</option><option value="stock">Остаток ↑</option><option value="stock_desc">Остаток ↓</option><option value="price">Цена ↑</option></select>
               <div className="catalog-view-switch" role="group" aria-label="Вид каталога"><button type="button" className={catalogView === "cards" ? "active" : ""} aria-pressed={catalogView === "cards"} onClick={()=>setCatalogView("cards")}>Карточки</button><button type="button" className={catalogView === "table" ? "active" : ""} aria-pressed={catalogView === "table"} onClick={()=>setCatalogView("table")}>Таблица</button></div>
@@ -2285,6 +2323,10 @@ function DataPage({ page, ctx }) {
             )}
           </div>
         </div>
+        {entity === "products" && <div className="product-link-filters" role="group" aria-label="Фильтр связей с магазинами">
+          <span>Связи на этой странице · карточек {catalogLinkCounts.all}</span>
+          {[["all","Все"],["linked","Все магазины связаны"],["needs_link","Требуют связи"],["error","Ошибка синхронизации"]].map(([key,label])=><button type="button" key={key} className={catalogLinkFilter===key?"active":""} aria-pressed={catalogLinkFilter===key} onClick={()=>setCatalogLinkFilter(key)}>{label} <b>{catalogLinkCounts[key]}</b></button>)}
+        </div>}
         {entity === "products" && productCatalogJob && <div className="product-match-summary" role="status"><b>Каталог WB · {productCatalogJob.status === "running" ? "загружается" : productCatalogJob.status === "queued" ? "в очереди" : productCatalogJob.status}</b><span>{Object.values(productCatalogJob.payload?.accounts || {}).map(row=>`${row.account_name || `магазин #${row.account_id || ""}`}: ${row.status}, ${row.records || 0} карточек`).join(" · ")}</span>{productCatalogJob.error && <small>{productCatalogJob.error}</small>}{["partial","failed"].includes(productCatalogJob.status) && productCatalogJob.attempts < 3 && <button type="button" className="secondary" onClick={retryWBProductCatalogs} disabled={busy}>Повторить загрузку</button>}</div>}
         {entity === "products" && productMatchResult && <div className="product-match-summary" role="status">
           <b>{productMatchResult.catalog_refresh ? "Каталог Wildberries сопоставлен" : "Автосопоставление завершено"}</b>
@@ -2307,7 +2349,7 @@ function DataPage({ page, ctx }) {
           <ErrorBox error={state.error} />
         ) : (
           <>
-            {entity === "products" ? (catalogView === "cards" ? <div className="qor-item-grid">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} accounts={ctx.refs.accounts || []} onSync={id=>syncProductWB(product,id)} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={() => ctx.open("products", product)} onDelete={() => remove(product)} onCount={() => countStock(product)} onPrice={() => quickPrice(product)}/>)}</div> : <div className="table-scroll"><table><thead><tr><th></th><th>Фото / товар</th><th>SKU</th><th>Цена</th><th>Подтверждено</th><th>Склад QOR</th><th>Доступно</th><th>Резерв</th><th>Выделено</th><th>На площадках</th><th>В пути</th><th>Брак</th><th>Продано</th><th>Возврат</th><th>Продажи по магазинам</th><th>Действия</th></tr></thead><tbody>{catalogRows.map(p=><tr key={p.id}><td data-label="Выбрать"><input aria-label={`Выбрать ${p.name}`} type="checkbox" checked={selectedProducts.includes(p.id)} onChange={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,p.id])] : v.filter(id=>id!==p.id))}/></td><td data-label="Товар">{p.name}</td><td data-label="SKU">{p.sku}</td><td data-label="Цена">{money(p.price || 0)}</td><td data-label="Подтверждено"><b>{p.inventory?.total ?? 0}</b></td><td data-label="Склад QOR">{p.inventory?.physical ?? 0}</td><td data-label="Доступно">{p.inventory?.available ?? 0}</td><td data-label="Резерв">{p.inventory?.reserved ?? 0}</td><td data-label="Выделено площадкам">{p.inventory?.allocated ?? 0}</td><td data-label="На площадках">{p.inventory?.marketplace ?? 0}</td><td data-label="В пути">{p.inventory?.in_transit ?? 0}</td><td data-label="Брак">{p.inventory?.defective ?? 0}</td><td data-label="Продано">{p.inventory?.sold ?? 0}</td><td data-label="Возврат">{p.inventory?.returned ?? 0}</td><td data-label="Продажи по магазинам">{(p.inventory?.sales_by_marketplace || []).map(x=>`${x.channel} ${x.account_name}: ${x.sold}/${x.returned}`).join("; ") || "Нет подтверждённых данных"}{p.inventory?.reconciliation_status !== "confirmed" ? " · сверка неполная" : ""}</td><td data-label="Действия"><button className="secondary" onClick={()=>ctx.open("products",p)}>Изменить</button> <button className="secondary" onClick={()=>quickPrice(p)}>Цена</button> <button className="secondary" onClick={()=>countStock(p)}>Остаток</button>{[...new Set((p.marketplace_mappings || []).filter(m=>m.channel === "Wildberries").map(m=>m.account_id))].map(id=><button className="secondary" key={id} onClick={()=>syncProductWB(p,id)}>Синхр. WB</button>)}</td></tr>)}</tbody></table></div>) : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
+            {entity === "products" ? (catalogView === "cards" ? <div className="qor-item-grid">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} accounts={ctx.refs.accounts || []} onSync={id=>syncProductWB(product,id)} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={accountId=>ctx.open("products", accountId ? {...product,_marketplaceLinkAccountId:accountId,_openMarketplaceSetup:true} : product)} onDelete={() => remove(product)} onCount={() => countStock(product)} onPrice={() => quickPrice(product)}/>)}</div> : <div className="table-scroll"><table><thead><tr><th></th><th>Фото / товар</th><th>SKU</th><th>Связь с магазинами</th><th>Цена</th><th>Подтверждено</th><th>Склад QOR</th><th>Доступно</th><th>Резерв</th><th>Выделено</th><th>На площадках</th><th>В пути</th><th>Брак</th><th>Продано</th><th>Возврат</th><th>Продажи по магазинам</th><th>Действия</th></tr></thead><tbody>{catalogRows.map(p=><tr key={p.id}><td data-label="Выбрать"><input aria-label={`Выбрать ${p.name}`} type="checkbox" checked={selectedProducts.includes(p.id)} onChange={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,p.id])] : v.filter(id=>id!==p.id))}/></td><td data-label="Товар">{p.name}</td><td data-label="SKU">{p.sku}</td><td data-label="Связь с магазинами">{productLinkSummary(p).links.map(link=>`${link.channel} · ${link.account_name}: ${link.mapping_status === "linked" ? `Связано (${link.mapping_count} ID)` : link.mapping_status === "inactive" ? "отключён" : "требует связи"}${link.sync_attention ? " · ошибка синхронизации" : ""}`).join("; ") || "Нет активных интеграций"}</td><td data-label="Цена">{money(p.price || 0)}</td><td data-label="Подтверждено"><b>{p.inventory?.total ?? 0}</b></td><td data-label="Склад QOR">{p.inventory?.physical ?? 0}</td><td data-label="Доступно">{p.inventory?.available ?? 0}</td><td data-label="Резерв">{p.inventory?.reserved ?? 0}</td><td data-label="Выделено площадкам">{p.inventory?.allocated ?? 0}</td><td data-label="На площадках">{p.inventory?.marketplace ?? 0}</td><td data-label="В пути">{p.inventory?.in_transit ?? 0}</td><td data-label="Брак">{p.inventory?.defective ?? 0}</td><td data-label="Продано">{p.inventory?.sold ?? 0}</td><td data-label="Возврат">{p.inventory?.returned ?? 0}</td><td data-label="Продажи по магазинам">{(p.inventory?.sales_by_marketplace || []).map(x=>`${x.channel} ${x.account_name}: ${x.sold}/${x.returned}`).join("; ") || "Нет подтверждённых данных"}{p.inventory?.reconciliation_status !== "confirmed" ? " · сверка неполная" : ""}</td><td data-label="Действия"><button className="secondary" onClick={()=>ctx.open("products",p)}>Изменить</button> <button className="secondary" onClick={()=>quickPrice(p)}>Цена</button> <button className="secondary" onClick={()=>countStock(p)}>Остаток</button>{[...new Set((p.marketplace_mappings || []).filter(m=>m.channel === "Wildberries").map(m=>m.account_id))].map(id=><button className="secondary" key={id} onClick={()=>syncProductWB(p,id)}>Синхр. WB</button>)}</td></tr>)}</tbody></table></div>) : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
               rows={state.data.items}
               cols={columns[entity] || ["id", "created_at"]}
               refs={ctx.refs}
@@ -2552,15 +2594,16 @@ function EditModal({ kind, item, ctx, close }) {
     [aiBusy, setAiBusy] = useState(false),
     [aiQuestions, setAiQuestions] = useState([]),
     [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""});
-  const [marketplaceIdRows, setMarketplaceIdRows] = useState([
-    {account_id:"", id_type:"product", external_id:""},
-  ]);
+  const initialMarketplaceIdRows = item?._marketplaceLinkAccountId
+    ? [{account_id:String(item._marketplaceLinkAccountId), id_type:"sku", external_id:""}]
+    : [{account_id:"", id_type:"product", external_id:""}];
+  const [marketplaceIdRows, setMarketplaceIdRows] = useState(initialMarketplaceIdRows);
   const [productCompanyId, setProductCompanyId] = useState(String(
     ctx.company || (item?.specifications?._qor_company_ids || [])[0] || ctx.refs.companies?.[0]?.id || ""
   ));
   const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
   const submitLock = useRef(false);
-  const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {});
+  const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {}) || JSON.stringify(marketplaceIdRows) !== JSON.stringify(initialMarketplaceIdRows);
   const requestClose = useCallback(() => {
     if (dirty && !globalThis.confirm("Есть несохранённые изменения. Закрыть без сохранения?")) return;
     close();
@@ -2900,9 +2943,9 @@ function EditModal({ kind, item, ctx, close }) {
           ))}
         </div>
         {kind === "products" && <div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div>}
-        {kind === "products" && <details className="product-marketplace-setup" open={Boolean(editing && (item?.marketplace_mappings || []).length)}>
+        {kind === "products" && <details className="product-marketplace-setup" open={Boolean(item?._openMarketplaceSetup || (editing && (item?.marketplace_mappings || []).length))}>
           <summary>
-            <span><b>Связать Kaspi и Wildberries</b><small>Один раз привяжите карточки магазинов, чтобы объединять продажи и остатки.</small></span>
+            <span><b>Связать Kaspi и Wildberries</b><small>Связь и лимит остатка сохраняются в QOR после сохранения товара. Повторно вводить их после синхронизации не нужно.</small></span>
             <span className="product-marketplace-summary-count">{(item?.marketplace_mappings || []).length ? `Связано: ${(item.marketplace_mappings || []).length}` : "Настроить"}</span>
           </summary>
           <section className="marketplace-sync-settings">

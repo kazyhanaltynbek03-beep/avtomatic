@@ -2112,6 +2112,7 @@ def listing(
         if company_id:
             accounts_q = accounts_q.where(Account.company_id == company_id)
         accessible_accounts = db.scalars(accounts_q).all()
+        accessible_accounts_by_id = {a.id: a for a in accessible_accounts}
         accessible_account_ids = {a.id for a in accessible_accounts}
         active_marketplace_accounts = [a for a in accessible_accounts if a.active and a.channel in {"Kaspi", "Wildberries", "Ozon"}]
         active_account_ids = {a.id for a in accessible_accounts if a.active}
@@ -2198,6 +2199,54 @@ def listing(
                 {"account_id": m.account_id, "channel": m.channel, "external_key": m.external_key}
                 for m in mapping_rows if m.product_id == row["id"]
             ]
+            product_mapping_rows = [m for m in mapping_rows if m.product_id == row["id"]]
+            mapping_by_account = {}
+            for mapping in product_mapping_rows:
+                mapping_by_account.setdefault(mapping.account_id, []).append(mapping.external_key)
+            row["marketplace_links"] = []
+            for account in active_marketplace_accounts:
+                keys = sorted(set(mapping_by_account.get(account.id, [])))
+                status, _sync_error = sync_status_for_display(account)
+                row["marketplace_links"].append({
+                    "account_id": account.id,
+                    "channel": account.channel,
+                    "account_name": account.name,
+                    "active": bool(account.active),
+                    "mapping_status": "linked" if keys else "needs_link",
+                    "mapping_count": len(keys),
+                    "external_keys": keys,
+                    "sync_status": status,
+                    "sync_attention": status in {"failed", "partial"},
+                    "sync_status_label": {
+                        "failed": "Ошибка синхронизации",
+                        "partial": "Синхронизация частичная",
+                        "running": "Синхронизация выполняется",
+                        "done": "Синхронизировано",
+                        "never": "Ожидает первой синхронизации",
+                    }.get(status, "Статус синхронизации не подтверждён"),
+                    "sync_attention_message": (
+                        "Проверьте магазин в разделе «Интеграции»." if status in {"failed", "partial"} else ""
+                    ),
+                })
+            for account_id, keys in mapping_by_account.items():
+                if any(link["account_id"] == account_id for link in row["marketplace_links"]):
+                    continue
+                mapping = next(m for m in product_mapping_rows if m.account_id == account_id)
+                mapped_account = accessible_accounts_by_id.get(account_id)
+                row["marketplace_links"].append({
+                    "account_id": account_id,
+                    "channel": mapping.channel,
+                    "account_name": mapped_account.name if mapped_account else f"магазин {account_id}",
+                    "active": False,
+                    "mapping_status": "inactive",
+                    "mapping_count": len(set(keys)),
+                    "external_keys": sorted(set(keys)),
+                    "sync_status": "inactive",
+                    "sync_attention": False,
+                    "sync_status_label": "Интеграция отключена",
+                    "sync_attention_message": "",
+                })
+            row["marketplace_links"].sort(key=lambda link: (link["channel"], link["account_name"], link["account_id"]))
     return {"items": rows, "total": count}
 
 
