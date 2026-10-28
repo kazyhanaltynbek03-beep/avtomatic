@@ -3,7 +3,6 @@ import {
   Building2,
   Plug,
   Package,
-  ShoppingCart,
   Warehouse,
   ArrowLeftRight,
   Receipt,
@@ -38,7 +37,6 @@ export const groups = [
     "Операции",
     [
       ["products", "Товары / SKU", Package, "catalog"],
-      ["purchases", "Приход товара", ShoppingCart, "inventory"],
       ["stock", "Единый склад", Warehouse, "inventory"],
       ["movements", "Движения склада", ArrowLeftRight, "inventory"],
       ["sales", "Все продажи", Receipt, "sales"],
