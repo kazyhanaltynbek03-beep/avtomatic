@@ -2538,6 +2538,12 @@ def ai_agents(u=Depends(current_user)):
     return {"items": ai.agent_catalog()}
 
 
+@app.get("/api/ai/models")
+def ai_models(u=Depends(current_user)):
+    require(u, "ai")
+    return ai.model_catalog()
+
+
 @app.get("/api/settings")
 def settings(u=Depends(current_user), db=Depends(get_db)):
     obj = db.get(Setting, 1)
