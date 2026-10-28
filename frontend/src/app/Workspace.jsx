@@ -2438,7 +2438,7 @@ function EditModal({ kind, item, ctx, close }) {
   const [marketplaceIdRows, setMarketplaceIdRows] = useState([
     {account_id:"", id_type:"product", external_id:""},
   ]);
-  const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
+\n  const [matchSuggestions, setMatchSuggestions] = useState([]);  const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
   const submitLock = useRef(false);
   const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {});
   const requestClose = useCallback(() => {
@@ -2573,10 +2573,12 @@ function EditModal({ kind, item, ctx, close }) {
   };
   const matchMarketplaceCards = async productId => {
     const companyQuery = ctx.company ? `?company_id=${encodeURIComponent(ctx.company)}` : "";
-    const matched = await api(`/products/${productId}/match-synced-marketplace-cards${companyQuery}`, {method:"POST", body:{}});
+    const matched = await api(`/products/${productId}/match-synced-marketplace-cards${companyQuery}`, {method:"POST", body:{}});\n    setMatchSuggestions(matched.ambiguous || []);
     const shops = (matched.accounts || []).map(x=>`${x.channel} · ${x.account_name}`).join(", ");
-    ctx.notify(matched.linked
-      ? `Карточки связаны по точному артикулу/штрихкоду: ${shops}. Продажи и остатки обновятся при обычной синхронизации.`
+    ctx.notify(matched.linked || matched.already_linked
+      ? matched.linked
+        ? `Карточки связаны по точному артикулу/штрихкоду: ${shops}. Продажи и остатки обновятся при обычной синхронизации.`
+        : `Карточки уже связаны: ${shops}.`
       : matched.message?.includes("Выберите компанию")
         ? "Выберите компанию сверху и повторите сопоставление."
         : matched.ambiguous?.length
@@ -2793,6 +2795,7 @@ function EditModal({ kind, item, ctx, close }) {
         {kind === "products" && <section className="marketplace-sync-settings">
           <h3>Связать существующие карточки</h3>
           <p className="muted">Сначала создайте карточку в Kaspi или Wildberries, затем товар в QOR. При сохранении QOR ищет точное совпадение по артикулу или штрихкоду среди уже загруженных данных магазинов и связывает найденные ID. Если карточка ещё не попала в синхронизацию, её можно указать вручную ниже. QOR ничего не публикует на площадки.</p>\n          <small className="marketplace-account-status">Автопоиск использует только уже полученные API-данные. Карточки Kaspi, отсутствующие в синхронизированных заказах/данных магазина, можно связать вручную после синхронизации.</small>\n          {item?.id && <button type="button" className="secondary" disabled={busy} onClick={async()=>{setBusy(true);try{await matchMarketplaceCards(item.id)}catch(e){setError(e.message)}finally{setBusy(false)}}}>{busy?"Ищем карточки…":"Найти и связать по артикулу / штрихкоду"}</button>}
+          {matchSuggestions.map(shop=><div className="marketplace-allocation" key={shop.account_id}><b>{shop.channel} · {shop.account_name}: найдено несколько карточек</b>{shop.products?.map((candidate,index)=>{const key=candidate.keys?.find(x=>x.startsWith("sku:"))||candidate.keys?.find(x=>x.startsWith("product:"))||candidate.keys?.find(x=>x.startsWith("barcode:"));if(!key)return null;const [idType,...idParts]=key.split(":");return <div key={`${key}:${index}`}><span>{candidate.name} · {key}</span><button type="button" className="secondary" onClick={()=>setMarketplaceIdRows(old=>[...old,{account_id:String(shop.account_id),id_type:idType,external_id:idParts.join(":")}])}>Выбрать эту карточку</button></div>})}<small>После выбора сохраните товар, чтобы подтвердить привязку.</small></div>)}
           {(item?.marketplace_mappings || []).map((mapping, index) => <div className="marketplace-allocation" key={`${mapping.account_id}:${mapping.external_key}:${index}`}><b>{(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.channel || mapping.channel} · {(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.name || `магазин ${mapping.account_id}`}</b><small>{mapping.external_key}</small></div>)}
           {marketplaceIdRows.map((row,index)=><div className="marketplace-allocation" key={index}>
             <label>Магазин<select value={row.account_id} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,account_id:e.target.value}:x))}><option value="">Выберите магазин</option>{(ctx.refs.accounts || []).filter(a=>a.active!==false && ["Kaspi","Wildberries","Ozon"].includes(a.channel) && (!values.company_id || String(a.company_id)===String(values.company_id))).map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select></label>
