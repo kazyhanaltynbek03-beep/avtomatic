@@ -38,10 +38,10 @@ def key():
 
 
 def image_key():
-    api_key = os.getenv("OPENAI_IMAGE_API_KEY")
+    api_key = os.getenv("OPENAI_IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(
-            409, "OPENAI_IMAGE_API_KEY не задан. Claude не создаёт изображения."
+            409, "Для редактирования изображений нужен OPENAI_IMAGE_API_KEY или legacy OPENAI_API_KEY."
         )
     return api_key
 
