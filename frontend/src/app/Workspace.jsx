@@ -1726,10 +1726,28 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     {report.loading ? <Spinner/> : report.error ? <ErrorBox error={report.error}/> : <>
       <p className="muted" role="status">Аккаунт WB #{data.account_id ?? activeAccountId} · Период {data.start || data.week_start} — {data.end || data.week_end}. Проверено: {data.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
       {data.status === "ошибка" && data.error && <ErrorBox error={data.error}/>}
-      <div className="kpis marketplace-kpis wb-weekly-kpis">
-        {[["WB реализовал товар",totals.realization],["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],["Розничная цена со скидкой",totals.retail],["К перечислению",totals.payout],["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],["Маржа, %",cogsComplete?totals.margin_pct:null]].map(([label,value])=><div className="kpi" key={label}><span>{label}</span><strong>{label === "Маржа, %" ? (value == null ? "Не рассчитана" : `${Number(value).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong></div>)}
+      <div className="wb-report-overview">
+        <article className="wb-report-total">
+          <span>Расчёт по схеме клиента</span>
+          <strong>{amount(estimatedClientPayout)}</strong>
+          <small>Ориентир после логистики, штрафов и хранения · не банковское зачисление</small>
+        </article>
+        <div className="wb-report-summary">
+          <div><span>К перечислению по отчёту WB</span><strong>{amount(totals.payout)}</strong></div>
+          <div><span>WB реализовал товар</span><strong>{amount(totals.realization)}</strong></div>
+          <div><span>Возвраты</span><strong>{data.row_count ? amount(-Number(data.returns_amount || 0)) : "Не рассчитана"}</strong></div>
+        </div>
       </div>
-      {estimatedClientPayout != null && <p className="muted">Итого к выплате — расчётный показатель: к перечислению WB − прямая логистика − штрафы − хранение. Дополнительная логистика (rebill) показывается отдельно. Это не подтверждение банковской выплаты.</p>}
+      <div className="wb-report-breakdown">
+        {[
+          {title:"Продажи и начисления", items:[["Розничная цена со скидкой",totals.retail],["WB реализовал товар",totals.realization],["Возвраты WB",data.row_count ? -Number(data.returns_amount || 0) : null],["К перечислению по отчёту WB",totals.payout]]},
+          {title:"Удержания и расходы", items:[["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Прочие расходы",totals.other]]},
+          {title:"Себестоимость и прибыль", items:[["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль",cogsComplete?totals.profit:null],["Маржа",cogsComplete?totals.margin_pct:null]]}
+        ].map(group=><details className="marketplace-report-details" key={group.title}>
+          <summary><span>{group.title}</span><small>{group.items.length} показателей</small></summary>
+          <div className="marketplace-report-metrics">{group.items.map(([label,value])=><div className="marketplace-report-metric" key={label}><span>{label}</span><strong>{label==="Маржа"?(value==null?"Не рассчитана":`${Number(value).toLocaleString("ru-RU",{minimumFractionDigits:2,maximumFractionDigits:2})}%`):amount(value)}</strong></div>)}</div>
+        </details>)}
+      </div>      {estimatedClientPayout != null && <p className="muted">Итого к выплате — расчётный показатель: к перечислению WB − прямая логистика − штрафы − хранение. Дополнительная логистика (rebill) показывается отдельно. Это не подтверждение банковской выплаты.</p>}
       {!cogsComplete && <p className="muted">Себестоимость заполнена/подтверждена для {data.cogs_costed_products || 0} из {data.cogs_products_total || 0} товаров. Расчёт прибыли неполный: возвраты без подтверждённой FIFO-связи требуют проверки.</p>}
       {data.unallocated_operations > 0 && <p className="muted">{data.unallocated_operations} операций WB без артикула сохранены отдельно. Их расходы входят в общий отчёт, но не распределяются между товарами.</p>}
       <div className="table-wrap"><table className="data-table"><thead><tr><th>Артикул WB / SKU</th><th>Наименование</th><th>Валюта</th><th>Продажи</th><th>Возвраты</th>{fields.map(([,label])=><th key={label}>{label}</th>)}<th>Себестоимость</th><th>Прибыль</th></tr></thead><tbody>
@@ -1871,7 +1889,21 @@ function MarketplaceInbox({ channel, ctx }) {
     </> : null}
     {channel === "Kaspi" && m.sync_in_progress && !m.sync_errors?.length && kaspiReportMode === "issued" && <p className="muted" role="status">Обновляем выбранный период Kaspi в фоне. Страница продолжает показывать сохранённые итоги.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
-    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
+    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : (() => {
+      const visible = marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title)));
+      const isPrimary = ([title]) => channel === "Kaspi"
+        ? ["Выручка API за вычетом возвратов","К получению (расчёт)","Продано","Чистая прибыль"].includes(title)
+        : channel === "Wildberries" ? ["Оборот продаж WB","Продано"].includes(title)
+        : ["Продажи API","Продано","Чистая прибыль"].includes(title);
+      const renderMetric = ([title,value,note]) => <article className={"marketplace-report-metric "+(title==="Чистая прибыль"?"is-profit":"")} key={title}><span>{title}</span><strong>{typeof value === "number" ? money(value) : value}</strong>{note && <small>{note}</small>}</article>;
+      return <>
+        <div className="marketplace-report-summary">{visible.filter(isPrimary).map(renderMetric)}</div>
+        {channel !== "Wildberries" && visible.some(item=>!isPrimary(item)) && <details className="marketplace-report-details marketplace-report-more">
+          <summary><span>Расшифровка показателей</span><small>Комиссии, логистика и расходы</small></summary>
+          <div className="marketplace-report-metrics">{visible.filter(item=>!isPrimary(item)).map(renderMetric)}</div>
+        </details>}
+      </>;
+    })())}
     {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={scopedAccounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
     {(channel !== "Wildberries" || wbTab === "products") && <><div className="section-heading"><div><h3>Товары маркетплейса</h3><p className="muted">Продажи и прибыль связаны с товаром QOR по SKU. Себестоимость и остаток меняются в единой карточке «Товары / SKU».</p></div><span className="pill">{marketplaceProducts.data?.total || 0} товаров</span></div>
     {marketplaceProducts.error ? <ErrorBox error={marketplaceProducts.error}/> : marketplaceProducts.loading ? <Spinner/> : <div className="marketplace-product-grid">
