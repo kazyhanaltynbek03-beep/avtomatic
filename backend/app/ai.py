@@ -207,9 +207,15 @@ def call_response(input, instructions, tools=None, tool_choice=None, text_format
     with httpx.Client(timeout=75) as client:
         response = client.post(ANTHROPIC_MESSAGES_API, headers=headers, json=request)
         if response.status_code >= 400:
+            try:
+                provider_error = response.json().get("error") or {}
+            except (ValueError, TypeError):
+                provider_error = {}
+            error_type = str(provider_error.get("type") or "provider_error")[:80]
+            error_message = str(provider_error.get("message") or "неизвестная ошибка")[:300]
             raise HTTPException(
                 502,
-                f"Claude provider error {response.status_code}; проверьте Anthropic API key, модель и лимит",
+                f"Claude provider error {response.status_code} ({error_type}): {error_message}",
             )
         body = response.json()
     output = []
@@ -297,7 +303,6 @@ def _agent_tool_data(snapshot, name):
     if name == "get_product_summary":
         return {**common, "products": snapshot["products"], "stock": snapshot["stock"]}
     raise HTTPException(403, "Инструмент не разрешён")
-
 
 def _marketplace_cost_catalog(db, user, account_id=None):
     query = (select(Account, MarketplaceProductMapping, Product)
@@ -597,8 +602,7 @@ def forecast(snapshot):
             "period_days": observed_days,
             "method": "Прогноз не построен: недостаточная история продаж.",
         }
-    horizon = 30
-    factor = Decimal(horizon) / Decimal(observed_days)
+    horizon = 30    factor = Decimal(horizon) / Decimal(observed_days)
     revenue = int((Decimal(int(snapshot["revenue"])) * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     net_profit = None if snapshot["net_profit"] is None else int((Decimal(int(snapshot["net_profit"])) * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     units = max(0, int(snapshot.get("units", 0)))
