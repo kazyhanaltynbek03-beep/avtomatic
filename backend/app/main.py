@@ -479,7 +479,7 @@ def marketplace_products(channel: str, company_id: int | None = None, account_id
     if channel not in {"Kaspi", "Wildberries", "Ozon"}:
         raise HTTPException(422, "Неподдерживаемый маркетплейс")
     aq = select(Account).where(Account.channel == channel, Account.active.is_(True))
-    if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
+    aq = aq.where(Account.company_id == company_id)
     if company_id is not None:
         scope(u, company_id); aq = aq.where(Account.company_id == company_id)
     accounts = list(db.scalars(aq)); account_ids = [a.id for a in accounts]
@@ -1697,6 +1697,12 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
     financial reports; normal, idempotent marketplace projection uses it later.
     """
     require(u, "inventory", True)
+    if company_id is None:
+        permitted = list(u.company_ids or [])
+        if u.role == "Owner" or len(permitted) != 1:
+            return {"linked": 0, "accounts": [], "ambiguous": [], "message": "Выберите компанию для безопасного сопоставления"}
+        company_id = permitted[0]
+    scope(u, company_id)
     product = db.get(Product, product_id)
     if not product or not product.active:
         raise HTTPException(404, "Активный товар QOR не найден")
@@ -1742,7 +1748,7 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
 
 
 @app.post("/api/products/{product_id}/match-synced-marketplace-cards")
-def match_synced_marketplace_cards(product_id: int, u=Depends(current_user), db=Depends(get_db)):
+def match_synced_marketplace_cards(product_id: int, company_id: int | None = Query(None), u=Depends(current_user), db=Depends(get_db)):
     """Link exact matches from stored records only; never calls APIs or projects finance."""
     require(u, "inventory", True)
     product = db.get(Product, product_id)
