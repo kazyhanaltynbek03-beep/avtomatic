@@ -304,6 +304,7 @@ def _agent_tool_data(snapshot, name):
         return {**common, "products": snapshot["products"], "stock": snapshot["stock"]}
     raise HTTPException(403, "Инструмент не разрешён")
 
+
 def _marketplace_cost_catalog(db, user, account_id=None):
     query = (select(Account, MarketplaceProductMapping, Product)
         .join(MarketplaceProductMapping, MarketplaceProductMapping.account_id == Account.id)
@@ -602,7 +603,8 @@ def forecast(snapshot):
             "period_days": observed_days,
             "method": "Прогноз не построен: недостаточная история продаж.",
         }
-    horizon = 30    factor = Decimal(horizon) / Decimal(observed_days)
+    horizon = 30
+    factor = Decimal(horizon) / Decimal(observed_days)
     revenue = int((Decimal(int(snapshot["revenue"])) * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     net_profit = None if snapshot["net_profit"] is None else int((Decimal(int(snapshot["net_profit"])) * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     units = max(0, int(snapshot.get("units", 0)))
