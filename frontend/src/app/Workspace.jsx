@@ -149,6 +149,7 @@ export default function App() {
     [mobile, setMobile] = useState(false),
     [refresh, setRefresh] = useState(0),
     [notice, setNotice] = useState(""),
+    [notificationCount, setNotificationCount] = useState(0),
     [refs, setRefs] = useState({}),
     [company, setCompany] = useState(""),
     [range, setRange] = useState("Месяц"),
@@ -204,6 +205,22 @@ export default function App() {
       live = false;
     };
   }, [auth, refresh]);
+  useEffect(() => {
+    if (!auth || !can(auth, "analytics")) return;
+    let live = true;
+    const params = new URLSearchParams({ start: today(), end: today() });
+    if (company) params.set("company_id", company);
+    api("/alerts?" + params.toString())
+      .then((data) => {
+        if (live) setNotificationCount(Math.max(0, Number(data?.count) || 0));
+      })
+      .catch(() => {
+        // Keep the last known count if the alert service is temporarily unavailable.
+      });
+    return () => {
+      live = false;
+    };
+  }, [auth, company, refresh]);
   const navigate = (id) => {
     setPage(id);
     location.hash = id;
@@ -365,11 +382,13 @@ export default function App() {
             <span className="currency">KZT · ₸</span>
             {can(auth, "analytics") && (
               <button
-                className="icon-button"
+                className="icon-button notification-button"
                 onClick={() => navigate("alerts")}
-                aria-label="Уведомления"
+                aria-label={notificationCount ? `Уведомления: ${notificationCount}` : "Уведомления"}
+                title={notificationCount ? `${notificationCount} уведомлений` : "Уведомления"}
               >
                 <Bell size={19} />
+                {notificationCount > 0 && <span className="notification-count">{notificationCount > 99 ? "99+" : notificationCount}</span>}
               </button>
             )}
             <div className="avatar small">{auth.user.name[0]}</div>
