@@ -1741,22 +1741,55 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     ? (Math.round(Number(totals.payout) * 100) - Math.round(Number(totals.logistics_total) * 100) - Math.round(Number(totals.penalty) * 100) - Math.round(Number(totals.storage) * 100)) / 100
     : null;
   const cogsComplete = data.cogs_complete === true;
+
+  const wbReportMetrics = [
+    ["WB реализовал товар",totals.realization],
+    ["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],
+    ["Розничная цена со скидкой",totals.retail],
+    ["К перечислению",totals.payout],
+    ["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],
+    ["Вознаграждение с продаж",totals.commission],
+    ["НДС с вознаграждения",totals.commission_vat],
+    ["Эквайринг",totals.acquiring],
+    ["Прямая логистика WB (расчётная)",totals.direct_logistics],
+    ["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],
+    ["Логистика всего",data.row_count ? totals.logistics_total : null],
+    ["Штрафы",totals.penalty],
+    ["Хранение",totals.storage],
+    ["Себестоимость",cogsComplete?totals.cogs:null],
+    ["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],
+    ["Маржа, %",cogsComplete?totals.margin_pct:null]
+  ];
+  const wbMetricButton = ([label,value]) => <button type="button" className="marketplace-report-metric marketplace-kpi-button wb-report-kpi-button" key={label} aria-pressed={detailFocus===label} onClick={()=>{setDetailFocus(detailFocus===label?"":label);setOpPage(0);}}>
+    <span>{label}</span><strong>{label==="Маржа, %"? (value==null?"Не рассчитана":`${Number(value).toLocaleString("ru-RU",{minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong><small>Открыть расшифровку</small>
+  </button>;
+  const wbReportGroups = [
+    {title:"Продажи и начисления", metrics:[wbReportMetrics[2],wbReportMetrics[0],wbReportMetrics[1],wbReportMetrics[3]]},
+    {title:"Удержания и расходы", metrics:wbReportMetrics.slice(5,13)},
+    {title:"Себестоимость и прибыль", metrics:wbReportMetrics.slice(13)}
+  ];
   const periodLabel = period === "weekly" ? "Недельный" : period === "monthly" ? "Месячный" : "Дневной";
   return <section className="panel wb-weekly-report" aria-label={`${periodLabel} финансовый отчёт Wildberries`}>
     <div className="section-heading"><div><h3>{periodLabel} финансовый отчёт</h3><p className="muted">Источник — Finance API WB. Основа расчёта — сумма к перечислению; месячный итог агрегируется из дневных строк WB. Это начисление WB, не подтверждение банковского зачисления.</p></div><span className={`pill wb-weekly-status ${data.status === "готов" ? "ready" : ""}`}>{statusText}</span></div>
     <div className="row-actions wb-weekly-controls">
       {accounts.length > 1 && <label>Аккаунт WB<select value={accountId} onChange={(e)=>setAccountId(e.target.value)}>{accounts.map((a)=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>}
       <label>{period === "daily" ? "День отчёта" : period === "monthly" ? "Месяц отчёта" : "Неделя с понедельника"}<input type={period === "monthly" ? "month" : "date"} max={period === "weekly" ? lastCompletedWeek : undefined} value={period === "monthly" ? week.slice(0,7) : week} onChange={(e)=>{if(period === "monthly"){setWeek(`${e.target.value}-01`);return;}const d=new Date(`${e.target.value}T12:00:00`);if(period === "weekly") d.setDate(d.getDate()-((d.getDay()+6)%7));const monday=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);setWeek(period === "weekly" && monday > lastCompletedWeek ? lastCompletedWeek : monday);}}/></label>
-      <label>Тип отчёта<select value={period} onChange={(e)=>{const next=e.target.value;setPeriod(next);if(next==="weekly")setWeek(mondayOfLastWeek());else if(next==="daily"){const d=new Date();d.setDate(d.getDate()-1);setWeek(inputDate(d));}else{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);setWeek(inputDate(d));}}}><option value="daily">Финансы за день</option><option value="weekly">Финансы за неделю</option><option value="monthly">Итог за месяц</option></select></label>
-      <label>Поиск товара<input type="search" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Артикул или название"/></label>
-      <label>Операции<select value={kind} onChange={(e)=>setKind(e.target.value)}><option value="all">Все</option><option value="sales">Продажи</option><option value="returns">Есть возвраты</option></select></label>
-      <button type="button" disabled={!activeAccountId || syncing} onClick={startReportSync}>{syncing ? "Проверяем WB…" : "Проверить WB сейчас"}</button>
-      <button type="button" className="button primary" disabled={downloadingExcel || !activeAccountId} onClick={downloadExcel}>{downloadingExcel ? "Скачиваем Excel…" : "Скачать Excel"}</button>
-    </div>
-    {syncError && syncError !== report.error && <ErrorBox error={syncError}/>}
-    {excelError && <ErrorBox error={excelError}/>}
-    {report.loading ? <Spinner/> : report.error ? <ErrorBox error={report.error}/> : <>
-      <p className="muted" role="status">Аккаунт WB #{data.account_id ?? activeAccountId} · Период {data.start || data.week_start} — {data.end || data.week_end}. Проверено: {data.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
+      <label>Тип отчёта<select value={period} onChange={(e)=>{const next=e.target.value;setPeriod(next);if(next==="weekly")setWeek(mondayOfLastWeek());else if(next==="daily"){const d=new Date();d.setDate(d.ge<div className="wb-report-overview">
+        <article className="wb-report-total">
+          <span>Расчёт по схеме клиента</span>
+          <strong>{amount(estimatedClientPayout)}</strong>
+          <small>Ориентир после логистики, штрафов и хранения · не банковское зачисление</small>
+        </article>
+        <div className="wb-report-summary">
+          {wbReportMetrics.slice(0,2).map(wbMetricButton)}
+          {wbReportMetrics[3] && wbMetricButton(wbReportMetrics[3])}
+        </div>
+      </div>
+      <div className="wb-report-breakdown">{wbReportGroups.map(group=><details className="marketplace-report-details" key={group.title}>
+        <summary><span>{group.title}</span><small>{group.metrics.length} показателей</small></summary>
+        <div className="marketplace-report-metrics">{group.metrics.map(wbMetricButton)}</div>
+      </details>)}</div>
+      ta.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
       {data.status === "ошибка" && data.error && <ErrorBox error={data.error}/>}
       <div className="kpis marketplace-kpis wb-weekly-kpis">
         {[["WB реализовал товар",totals.realization],["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],["Розничная цена со скидкой",totals.retail],["К перечислению",totals.payout],["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],["Маржа, %",cogsComplete?totals.margin_pct:null]].map(([label,value])=><button type="button" className="kpi marketplace-kpi-button wb-report-kpi-button" key={label} aria-pressed={detailFocus===label} onClick={()=>{setDetailFocus(detailFocus===label?"":label);setOpPage(0);}}><span>{label}</span><strong>{label === "Маржа, %" ? (value == null ? "Не рассчитана" : `${Number(value).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong><small>Открыть расшифровку</small></button>)}
@@ -1905,7 +1938,23 @@ function MarketplaceInbox({ channel, ctx }) {
     </> : null}
     {channel === "Kaspi" && m.sync_in_progress && !m.sync_errors?.length && kaspiReportMode === "issued" && <p className="muted" role="status">Обновляем выбранный период Kaspi в фоне. Страница продолжает показывать сохранённые итоги.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
-    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика продавца","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note,detail])=><button type="button" className={"kpi marketplace-kpi-button "+(title==="Чистая прибыль"?"featured":"")} key={title} onClick={()=>setKpiDetail({...detail,channel,account_id:selectedAccount?.id,store:selectedAccount?.name})} title="Открыть расшифровку по магазину"><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></button>)}</div>)}
+    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : (() => {
+      const visible = marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика продавца","Реклама","Чистая прибыль"].includes(title)));
+      const isPrimary = ([title]) => channel==="Kaspi"
+        ? ["Выручка API за вычетом возвратов","К получению (расчёт)","Продано","Чистая прибыль"].includes(title)
+        : channel==="Wildberries" ? ["Оборот продаж WB","Продано"].includes(title)
+        : ["Продажи API","Продано","Чистая прибыль"].includes(title);
+      const renderMetric = ([title,value,note,detail]) => <button type="button" className={"kpi marketplace-kpi-button "+(title==="Чистая прибыль"?"featured":"")} key={title} onClick={()=>setKpiDetail({...detail,channel,account_id:selectedAccount?.id,store:selectedAccount?.name})} title="Открыть расшифровку по магазину">
+        <div><span>{title}</span></div><strong>{typeof value==="number"?money(value):value}</strong>{note&&<small>{note}</small>}
+      </button>;
+      return <>
+        <div className="marketplace-report-summary">{visible.filter(isPrimary).map(renderMetric)}</div>
+        {visible.some(item=>!isPrimary(item))&&<details className="marketplace-report-details marketplace-report-more">
+          <summary><span>Расшифровка продаж и расходов</span><small>Комиссии, логистика и прибыль</small></summary>
+          <div className="marketplace-report-metrics">{visible.filter(item=>!isPrimary(item)).map(renderMetric)}</div>
+        </details>}
+      </>;
+    })())}
     {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={scopedAccounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
     {(channel !== "Wildberries" || wbTab === "products") && <><div className="section-heading"><div><h3>Товары маркетплейса</h3><p className="muted">Продажи и прибыль связаны с товаром QOR по SKU. Себестоимость и остаток меняются в единой карточке «Товары / SKU».</p></div><span className="pill">{marketplaceProducts.data?.total || 0} товаров</span></div>
     {marketplaceProducts.error ? <ErrorBox error={marketplaceProducts.error}/> : marketplaceProducts.loading ? <Spinner/> : <div className="marketplace-product-grid">
