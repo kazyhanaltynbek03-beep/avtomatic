@@ -181,6 +181,37 @@ def test_marketplace_ids_map_different_platform_ids_to_one_qor_product(client):
         }
 
 
+def test_product_listing_shows_persistent_per_shop_link_and_sync_status(client):
+    from app.models import Account
+
+    with SessionLocal() as db:
+        db.add(Account(id=4, company_id=1, name="WB second shop", channel="Wildberries", mode="manual",
+                       sync_status="failed", sync_error="private raw API diagnostic"))
+        db.commit()
+    assert client.post("/api/products/1/marketplace-mappings", json={
+        "account_id":1, "id_type":"product", "external_id":"K-EXISTING-1",
+    }).status_code == 200
+    assert client.post("/api/products/1/marketplace-mappings", json={
+        "account_id":4, "id_type":"sku", "external_id":"WB-ARTICLE-1",
+    }).status_code == 200
+
+    for _ in range(2):
+        response = client.get("/api/data/products?company_id=1&limit=10")
+        assert response.status_code == 200, response.text
+        product = next(row for row in response.json()["items"] if row["id"] == 1)
+        shops = {row["account_id"]: row for row in product["marketplace_links"]}
+        assert shops[1]["mapping_status"] == "linked"
+        assert shops[1]["mapping_count"] == 1
+        assert shops[1]["external_keys"] == ["product:K-EXISTING-1"]
+        assert shops[4]["mapping_status"] == "linked"
+        assert shops[4]["sync_status"] == "failed"
+        assert shops[4]["sync_attention"] is True
+        assert "private raw API diagnostic" not in str(shops[4])
+        assert product["inventory"]["mapping_coverage"] == {
+            "linked":2, "active_accounts":2, "status":"complete",
+        }
+
+
 def test_marketplace_id_mapping_respects_account_company_scope(client):
     auth = client.post("/api/auth/login", json={
         "email":"warehouse@test.kz", "password":"Test-password-1!",
