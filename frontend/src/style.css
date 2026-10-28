@@ -2198,6 +2198,7 @@ aside{border-right:1px solid rgba(255,255,255,.055);box-shadow:14px 0 42px rgba(
 .cash-help h2,.purchase-help h2{margin:0 0 6px;color:#204638;font-size:16px}
 .cash-help p,.purchase-help p{margin:0;color:#66776e;font-size:13px;line-height:1.55}
 .cashflow-explainer{margin:4px 0 14px;line-height:1.5}
+.product-catalog-toolbar{flex-wrap:wrap;align-items:center}.product-catalog-toolbar>.search{flex:1 1 220px;min-width:0}.product-catalog-toolbar>.row-actions{flex:1 1 100%;min-width:0;flex-wrap:wrap;justify-content:flex-start}
 .table-scroll td{overflow-wrap:anywhere;word-break:break-word}
 @media(max-width:640px){.catalog-view-switch{display:grid;grid-template-columns:1fr 1fr;width:100%}.catalog-view-switch button{min-height:42px}.catalog-primary-facts>div{padding:9px}.cash-help,.purchase-help{padding:14px}.catalog-details{padding:10px}.catalog-details .catalog-stock-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 /* AI automation center: guided workflows remain responsive inside the existing chat. */
