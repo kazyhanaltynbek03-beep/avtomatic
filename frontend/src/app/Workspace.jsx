@@ -204,23 +204,9 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [auth, refresh]);
-  useEffect(() => {
-    if (!auth || page === "alerts" || !can(auth, "analytics")) return;
-    let live = true;
-    const params = new URLSearchParams({ start, end });
-    if (company) params.set("company_id", company);
-    api("/alerts?" + params.toString())
-      .then((data) => {
-        if (live) setNotificationCount(Math.max(0, Number(data?.count) || 0));
-      })
-      .catch(() => {
-        // Keep the last known count if the alert service is temporarily unavailable.
-      });
-    return () => {
-      live = false;
-    };
-  }, [auth, company, end, page, refresh, start]);
+  }, [auth]);
+  // Alerts are loaded on the notifications page. Fetching them in the background
+  // runs two full report calculations and competes with the page the user opened.
   const navigate = (id) => {
     setPage(id);
     location.hash = id;
