@@ -409,6 +409,7 @@ def access_query(db, u, entity, search="", company_id=None, account_id=None):
 def marketplace_records(
     channel: str | None = None,
     company_id: int | None = None,
+    account_id: int | None = None,
     status: str | None = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
@@ -430,6 +431,8 @@ def marketplace_records(
         q = q.where(MarketplaceRecord.company_id == company_id)
     if channel:
         q = q.where(Account.channel == channel)
+    if account_id is not None:
+        q = q.where(MarketplaceRecord.account_id == account_id)
     if status:
         q = q.where(or_(MarketplaceRecord.status.startswith("pending"),MarketplaceRecord.stage_status.in_(["pending_fifo","pending_fx","pending_mapping"])) if status == "pending" else MarketplaceRecord.status == status)
     count = db.scalar(select(func.count()).select_from(q.subquery())) or 0
@@ -1007,7 +1010,8 @@ def marketplace_returns_sync_status(company_id: int | None = None,
 
 
 @app.get("/api/marketplace-summary")
-def marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None, u=Depends(current_user), db=Depends(get_db)):
+def marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None,
+                        account_id: int | None = None, u=Depends(current_user), db=Depends(get_db)):
     """Fast marketplace page summary; bounded to the selected channel and period."""
     require(u, "analytics")
     if end < start:
@@ -1016,7 +1020,13 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     aq = select(Account).where(Account.channel == channel, Account.active.is_(True))
     if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
     if company_id is not None: scope(u, company_id); aq = aq.where(Account.company_id == company_id)
-    accounts = list(db.scalars(aq)); ids = [a.id for a in accounts]; by_id = {a.id:a for a in accounts}
+    accounts = list(db.scalars(aq))
+    if account_id is not None:
+        selected = next((account for account in accounts if account.id == account_id), None)
+        if selected is None:
+            raise HTTPException(404, "Магазин выбранного маркетплейса не найден")
+        accounts = [selected]
+    ids = [a.id for a in accounts]; by_id = {a.id:a for a in accounts}
     display_sync = [sync_status_for_display(a) for a in accounts]
     sync_in_progress = any(status == 'running' for status, _error in display_sync)
     sync_status = ('failed' if any(x[0] == 'failed' for x in display_sync) else
@@ -1223,6 +1233,7 @@ def expense_summary(start: date, end: date, company_id: int | None = None,
 
 @app.get("/api/kaspi/orders-created")
 def kaspi_orders_created(start: date, end: date, company_id: int | None = None,
+                         account_id: int | None = None,
                          limit: int = Query(default=100, ge=1, le=500),
                          offset: int = Query(default=0, ge=0),
                          u=Depends(current_user), db=Depends(get_db)):
@@ -1233,7 +1244,13 @@ def kaspi_orders_created(start: date, end: date, company_id: int | None = None,
     aq = select(Account).where(Account.channel == "Kaspi", Account.active.is_(True))
     if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
     if company_id is not None: scope(u, company_id); aq = aq.where(Account.company_id == company_id)
-    accounts = list(db.scalars(aq)); ids = [a.id for a in accounts]
+    accounts = list(db.scalars(aq))
+    if account_id is not None:
+        selected = next((account for account in accounts if account.id == account_id), None)
+        if selected is None:
+            raise HTTPException(404, "Kaspi-магазин не найден")
+        accounts = [selected]
+    ids = [a.id for a in accounts]
     if not ids:
         return {"start":str(start),"end":str(end),"items":[],"total":0,"orders_amount":None,"api_data_available":False,
                 "sync_status":"not_connected","sync_errors":[],"last_sync":None}
