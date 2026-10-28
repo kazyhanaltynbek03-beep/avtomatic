@@ -35,6 +35,7 @@ import {
   MessageSquare,
   Image as ImageIcon,
   Receipt,
+  Store,
 } from "lucide-react";
 import { api, setCsrf, downloadApiFile } from "../services/api";
 import { money, decimal, today } from "../utils/formatters";
@@ -746,9 +747,9 @@ function ExpenseSummary({ ctx }) {
   </section>;
 }
 function ReportPage({ page, ctx }) {
-  const [detailMetric, setDetailMetric] = useState(null);
+  const [detailMetric, setDetailMetric] = useState(null), [alertRetry, setAlertRetry] = useState(0);
   const usesDashboard = page === "dashboard" || page === "analytics";
-  const reportPath = "/report?start=" + ctx.start + "&end=" + ctx.end +
+  const reportPath = page === "alerts" || page === "forecast" ? null : "/report?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") +
     (usesDashboard ? "&active_only=true" : "");
   const summaryPath = "/dashboard/summary?start=" + ctx.start + "&end=" + ctx.end +
@@ -765,7 +766,7 @@ function ReportPage({ page, ctx }) {
     ctx.refresh,
     { cacheScope: ctx.auth.user.id },
   );
-  const { data: systemAlerts, error: systemAlertsError } = useLoad(alertsPath, ctx.refresh);
+  const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
   if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
   if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
@@ -803,8 +804,10 @@ function ReportPage({ page, ctx }) {
   if ((!usesDashboard && page !== "forecast" && reportLoading)) return <Spinner />;
   if (!usesDashboard && page !== "forecast" && reportError) return <ErrorBox error={reportError} />;
   if (page === "alerts") {
-    const stockAlerts = Array.isArray(r?.stock_alerts) ? r.stock_alerts : [];
-    const receivables = Array.isArray(r?.receivables) ? r.receivables : [];
+    if (systemAlertsLoading && !systemAlerts) return <div className="panel" role="status"><Spinner/><p>Загружаем проверки рабочего пространства…</p></div>;
+    if (systemAlertsError) return <div className="panel"><ErrorBox error={systemAlertsError}/><button className="secondary" onClick={()=>setAlertRetry(value=>value+1)}>Повторить загрузку</button></div>;
+    const stockAlerts = Array.isArray(systemAlerts?.stock_alerts) ? systemAlerts.stock_alerts : [];
+    const receivables = Array.isArray(systemAlerts?.receivables) ? systemAlerts.receivables : [];
     const systemAlertItems = Array.isArray(systemAlerts?.items) ? systemAlerts.items : [];
     return (
       <>
@@ -813,8 +816,7 @@ function ReportPage({ page, ctx }) {
             <h2>Автоматические проверки ERP</h2>
             <span className="badge amber">{systemAlerts?.count ?? "…"}</span>
           </div>
-          {systemAlertsError ? <ErrorBox error={systemAlertsError} /> :
-            systemAlertItems.length ? <div className="alert-list">{systemAlertItems.map((item, index) =>
+          {systemAlertItems.length ? <div className="alert-list">{systemAlertItems.map((item, index) =>
               <div className={`alert-item ${item.severity || "info"}`} key={`${item.type}-${item.account_id || "all"}-${index}`}>
                 <strong>{item.title}</strong>
                 {item.action && <p>{item.action}</p>}
@@ -1326,7 +1328,10 @@ function Stock({ ctx }) {
         <div className="stock-actions">
           {can(ctx.auth, "sales", true) && <button className="primary" onClick={() => {
             const account = (ctx.refs.accounts || []).find(a => a.channel === "Offline" && (!ctx.company || a.company_id == ctx.company));
-            if (!account) { ctx.notify("Для офлайн-продаж сначала добавьте канал Offline в разделе магазинов"); return; }
+            if (!account) {
+              ctx.open("accounts", {company_id:ctx.company || ctx.refs.companies?.[0]?.id || "", name:"Офлайн продажи", channel:"Offline"});
+              return;
+            }
             ctx.open("sales", {account_id:account.id, company_id:ctx.company || account.company_id});
           }}><Plus size={16}/>Записать офлайн-продажу</button>}
           {can(ctx.auth, "inventory", true) && <button className="secondary" onClick={() => ctx.open("adjustments")}><Plus size={16}/>Корректировка</button>}
@@ -2445,6 +2450,7 @@ function EditModal({ kind, item, ctx, close }) {
     if (dirty && !globalThis.confirm("Есть несохранённые изменения. Закрыть без сохранения?")) return;
     close();
   }, [dirty, close]);
+  const creatingOfflineChannel = kind === "accounts" && !editing && values.channel === "Offline";
   useEffect(() => {
     if (!dirty) return undefined;
     const warn = (e) => { e.preventDefault(); e.returnValue = ""; };
@@ -2712,10 +2718,10 @@ function EditModal({ kind, item, ctx, close }) {
         <div className="modal-heading">
           <div>
             <span className="eyebrow">
-              {editing ? "РЕДАКТИРОВАНИЕ" : "НОВАЯ ЗАПИСЬ"}
+              {creatingOfflineChannel ? "НАСТРОЙКА КАНАЛА" : editing ? "РЕДАКТИРОВАНИЕ" : "НОВАЯ ЗАПИСЬ"}
             </span>
             <h2>
-              {flat.find((x) => x[0] === kind)?.[1] ||
+              {creatingOfflineChannel ? "Офлайн-продажи" : flat.find((x) => x[0] === kind)?.[1] ||
                 {
                   returns: "Возврат товара",
                   adjustments: "Корректировка склада",
@@ -2731,6 +2737,7 @@ function EditModal({ kind, item, ctx, close }) {
             <X />
           </button>
         </div>
+        {creatingOfflineChannel && <div className="info-banner"><Store size={18}/><span>Это внутренний канал учёта — API подключать не нужно. Укажите компанию и сохраните канал, затем нажмите «Записать офлайн-продажу» ещё раз, чтобы внести товар, количество, цену и дату.</span></div>}
         {kind === "products" && !editing && <section className="product-ai-draft wide" aria-label="Создание товара с помощью AI">
           <div><span className="eyebrow">AI PRODUCT STUDIO</span><h3>Заполнить черновик с AI</h3><p className="muted">Вставьте подтверждённые сведения с упаковки или от поставщика. AI предложит название, описание и характеристики; цену, себестоимость и остаток заполните сами.</p></div>
           <label>Сведения о товаре<textarea rows={3} value={aiFacts} onChange={e=>setAiFacts(e.target.value)} placeholder="Например: модель, бренд, цвет, материал и размеры с упаковки"/></label>
@@ -2907,7 +2914,7 @@ function EditModal({ kind, item, ctx, close }) {
             Отмена
           </button>
           <button className="primary" disabled={busy}>
-            {busy ? "Сохраняем…" : editing ? "Сохранить" : "Провести"}
+            {busy ? "Сохраняем…" : editing ? "Сохранить" : creatingOfflineChannel ? "Создать канал" : "Провести"}
           </button>
         </div>
       </form>
