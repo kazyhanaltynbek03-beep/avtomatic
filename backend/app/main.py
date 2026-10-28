@@ -884,6 +884,8 @@ async def import_return_financial_statement(account_id: int = Form(...), mapping
 def get_marketplace_returns(
     marketplace: str = "all", company_id: int | None = None, account_id: int | None = None,
     start: date | None = None, end: date | None = None, search: str = "",
+    return_status: str | None = None, financial_status: str | None = None,
+    unknown_only: bool = False,
     offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
     u=Depends(current_user), db=Depends(get_db),
 ):
@@ -910,6 +912,16 @@ def get_marketplace_returns(
         q = q.where(MarketplaceReturn.account_id == account_id)
     if marketplace != "all":
         q = q.where(MarketplaceReturn.marketplace == marketplace)
+    if return_status:
+        if return_status not in {"requested", "returned", "rejected", "financial_operation_reported", "financial_return_confirmed"}:
+            raise HTTPException(422, "Неизвестный статус возврата")
+        q = q.where(MarketplaceReturn.return_status == return_status)
+    if financial_status:
+        if financial_status not in {"confirmed", "unconfirmed"}:
+            raise HTTPException(422, "Неизвестный финансовый статус возврата")
+        q = q.where(MarketplaceReturn.financial_status == financial_status)
+    if unknown_only:
+        q = q.where(or_(MarketplaceReturn.financial_return_date.is_(None), MarketplaceReturn.amount.is_(None)))
     return_event_day = func.coalesce(MarketplaceReturn.financial_return_date, MarketplaceReturn.request_date)
     if start:
         q = q.where(or_(return_event_day >= start, return_event_day.is_(None)))
@@ -929,6 +941,9 @@ def get_marketplace_returns(
     if company_id is not None: base = base.where(MarketplaceReturn.company_id == company_id)
     if account_id is not None: base = base.where(MarketplaceReturn.account_id == account_id)
     if marketplace != "all": base = base.where(MarketplaceReturn.marketplace == marketplace)
+    if return_status: base = base.where(MarketplaceReturn.return_status == return_status)
+    if financial_status: base = base.where(MarketplaceReturn.financial_status == financial_status)
+    if unknown_only: base = base.where(or_(MarketplaceReturn.financial_return_date.is_(None), MarketplaceReturn.amount.is_(None)))
     base_event_day = func.coalesce(MarketplaceReturn.financial_return_date, MarketplaceReturn.request_date)
     if start: base = base.where(or_(base_event_day >= start, base_event_day.is_(None)))
     if end: base = base.where(or_(base_event_day <= end, base_event_day.is_(None)))
@@ -970,6 +985,135 @@ def get_marketplace_returns(
     return {"items": [marketplace_returns.serialize_return(r, a, p) for r, a, p in rows],
             "total": count, "offset": offset, "limit": limit, "summary": summary,
             "integrations": integrations}
+
+
+@app.get("/api/marketplace-record-details")
+def marketplace_record_details(
+    channel: str, metric: str, start: date, end: date,
+    company_id: int | None = None, account_id: int | None = None,
+    u=Depends(current_user), db=Depends(get_db),
+):
+    """Read-only, account-scoped detail rows from already stored marketplace API records."""
+    require(u, "analytics")
+    if channel not in {"Kaspi", "Wildberries"}:
+        raise HTTPException(422, "Подробный API-отчёт доступен для Kaspi и Wildberries")
+    if metric not in {"sales", "returns", "logistics", "settlement"}:
+        raise HTTPException(422, "Неизвестный показатель API-отчёта")
+    if end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
+    aq = select(Account).where(Account.channel == channel, Account.active.is_(True))
+    if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
+    if company_id is not None:
+        scope(u, company_id)
+        aq = aq.where(Account.company_id == company_id)
+    if account_id is not None:
+        aq = aq.where(Account.id == account_id)
+    accounts = {a.id: a for a in db.scalars(aq)}
+    if account_id is not None and account_id not in accounts:
+        raise HTTPException(404, "Магазин выбранного маркетплейса не найден")
+    if not accounts:
+        return {"channel": channel, "metric": metric, "start": str(start), "end": str(end), "items": [],
+                "note": "Нет активных API-магазинов в выбранной компании."}
+
+    source_names = {"kaspi": ["kaspi"], "wildberries": ["wildberries", "wildberries_weekly"]}[channel.lower()]
+    records = db.scalars(select(MarketplaceRecord).where(
+        MarketplaceRecord.account_id.in_(accounts), MarketplaceRecord.source.in_(source_names)
+    ).order_by(MarketplaceRecord.id.desc())).all()
+    kaspi_order_codes = {}
+    if channel == "Kaspi":
+        kaspi_order_codes = {str((r.payload or {}).get("order_id")): str((r.payload or {}).get("code") or "")
+                             for r in records if str((r.payload or {}).get("record_type") or "").lower() == "order"}
+    output = []
+    for rec in records:
+        p = rec.payload or {}
+        kind = str(p.get("record_type") or "").lower()
+        event_date = None
+        status = ""
+        operation = ""
+        reference = rec.external_id or ""
+        product_name = str(p.get("product_name") or p.get("productName") or p.get("name") or p.get("title") or p.get("subjectName") or "")
+        sku = str(p.get("sku") or p.get("supplierArticle") or p.get("vendorCode") or p.get("sa_name") or p.get("nmId") or "")
+        quantity = p.get("quantity")
+        amount = None
+        currency = str(p.get("currency") or p.get("currency_name") or p.get("currencyName") or ("KZT" if channel == "Kaspi" else "RUB")).upper()
+        include = False
+        if channel == "Kaspi":
+            status = str(p.get("order_status") or p.get("status") or "").upper()
+            order_id = str(p.get("order_code") or p.get("code") or kaspi_order_codes.get(str(p.get("order_id") or "")) or p.get("order_id") or "")
+            reference = order_id or reference
+            if kind == "order_entry":
+                returned = status in {"RETURNED", "KASPI_DELIVERY_RETURN_REQUESTED"}
+                if metric == "returns" and returned:
+                    include = True
+                    event_date = p.get("returned_date") or p.get("return_date") or p.get("request_date")
+                    operation = "Заявка на возврат" if status == "KASPI_DELIVERY_RETURN_REQUESTED" else "Возвращённый заказ"
+                    amount = None
+                elif metric == "sales" and status == "COMPLETED":
+                    include = True
+                    event_date = p.get("completed_date") or p.get("completion_date") or p.get("completionDate")
+                    operation = "Продажа по дате выдачи"
+                    amount = p.get("total_price") or p.get("totalPrice")
+                elif metric == "logistics" and kind == "order_entry" and (p.get("delivery_cost_for_seller") is not None or p.get("deliveryCostForSeller") is not None or p.get("deliveryCost") is not None):
+                    include = True
+                    event_date = p.get("completed_date") or p.get("completionDate")
+                    operation = "Доставка по данным заказа API"
+                    amount = p.get("deliveryCostForSeller") or p.get("deliveryCost")
+                    quantity = None
+                elif metric == "settlement":
+                    include = False
+            elif kind in {"delivery_charge", "return_delivery_charge"} and metric == "logistics":
+                include = True
+                event_date = p.get("completed_date") or p.get("completion_date") or p.get("returned_date") or p.get("order_creation_date") or p.get("creation_date")
+                operation = "Обратная доставка" if kind == "return_delivery_charge" else "Доставка"
+                amount = p.get("amount")
+                status = str(p.get("order_status") or status).upper()
+                quantity = None
+        else:
+            operation = " ".join(str(p.get(key) or "") for key in (
+                "docTypeName", "doc_type_name", "supplierOperName", "supplier_oper_name",
+                "sellerOperName", "seller_oper_name")).strip()
+            lower_operation = operation.lower()
+            is_return = ("возврат" in lower_operation or "return" in lower_operation)
+            is_sale = ("продаж" in lower_operation or lower_operation == "sale")
+            event_date = p.get("rrdDate") or p.get("rr_dt") or p.get("rrDate") or p.get("saleDt") or p.get("sale_dt") or p.get("date")
+            reference = str(p.get("rrdId") or p.get("rrd_id") or p.get("srid") or p.get("saleID") or reference)
+            if metric == "returns" and kind in {"realization", ""} and is_return:
+                include = True
+            elif metric == "sales" and ((kind == "sale" and not str(p.get("saleID") or "").upper().startswith("R") and not p.get("isStorno")) or (kind in {"realization", ""} and is_sale)):
+                include = True
+                amount = p.get("priceWithDisc") if kind == "sale" else (p.get("retailAmount") or p.get("retail_amount"))
+            elif metric == "logistics" and kind in {"realization", ""} and any(p.get(key) not in (None, "", 0, "0") for key in ("deliveryService", "deliveryRub", "delivery_rub", "rebillLogisticCost", "rebill_logistic_cost")):
+                include = True
+                amount = p.get("deliveryService") or p.get("deliveryRub") or p.get("delivery_rub") or p.get("rebillLogisticCost") or p.get("rebill_logistic_cost")
+            elif metric == "settlement" and kind in {"realization", ""}:
+                include = True
+                amount = p.get("forPay") or p.get("ppvzForPay") or p.get("ppvz_for_pay")
+        if not include:
+            continue
+        try:
+            day = marketplace_pipeline._day(event_date, "Asia/Almaty" if channel == "Kaspi" else None) if event_date not in (None, "") else None
+        except (ValueError, TypeError, KeyError, marketplace_pipeline.Pending):
+            day = None
+        if day is not None and not start <= day <= end:
+            continue
+        # Kaspi does not expose an actual refund amount/date in this order API.
+        # Keep unknown event dates visible but never imply that order value is refund value.
+        if channel == "Kaspi" and metric == "returns":
+            amount = None
+        output.append({"id": rec.id, "account_id": rec.account_id, "store": accounts[rec.account_id].name,
+            "event_date": str(day) if day else None, "operation": operation or status or kind or "Операция API",
+            "reference": reference, "product_name": product_name or "Товар не сопоставлен", "sku": sku,
+            "quantity": quantity, "status": status or p.get("status") or "—", "amount": amount,
+            "currency": currency, "source": rec.source})
+    output.sort(key=lambda item: (item["event_date"] or "", item["id"]), reverse=True)
+    note = ""
+    if channel == "Kaspi" and metric == "returns":
+        note = "Kaspi API подтверждает статус и состав заказа. Фактическую дату и сумму возврата API не отдаёт; они показаны как неподтверждённые до сверки с выпиской. Возвраты без даты остаются видимыми."
+    elif channel == "Wildberries" and metric == "returns":
+        note = "Возвраты взяты из финансовых строк WB по типу операции. Суммы показаны в исходной валюте отчёта; банковское зачисление здесь не подтверждается."
+    elif metric == "settlement":
+        note = "Начисление по строкам API-отчёта, а не подтверждение банковской выплаты."
+    return {"channel": channel, "metric": metric, "start": str(start), "end": str(end), "items": output, "note": note}
 
 
 @app.post("/api/marketplace-returns/discover")

@@ -1294,7 +1294,7 @@ function ReportPage({ page, ctx }) {
   );
 }
 function ReportDetails({ ctx, detail, onClose, activeOnly = false }) {
-  const path = "/report/details?start=" + ctx.start + "&end=" + ctx.end + "&metric=" + detail.metric + (ctx.company ? "&company_id=" + ctx.company : "") + (activeOnly ? "&active_only=true" : "");
+  const path = "/report/details?start=" + ctx.start + "&end=" + ctx.end + "&metric=" + detail.metric + (ctx.company ? "&company_id=" + ctx.company : "") + (detail.account_id ? "&account_id=" + detail.account_id : "") + (activeOnly ? "&active_only=true" : "");
   const { data, error, loading } = useLoad(path, ctx.refresh);
   return (
     <div className="modal-backdrop report-detail-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -1316,6 +1316,27 @@ function ReportDetails({ ctx, detail, onClose, activeOnly = false }) {
       </section>
     </div>
   );
+}
+
+function MarketplaceRecordDetails({ ctx, detail, onClose }) {
+  const params = new URLSearchParams({channel:detail.channel,metric:detail.metric,start:ctx.start,end:ctx.end});
+  if (ctx.company) params.set("company_id", ctx.company);
+  if (detail.account_id) params.set("account_id", detail.account_id);
+  const {data,error,loading} = useLoad(`/marketplace-record-details?${params}`, ctx.refresh);
+  const items = data?.items || [];
+  const amount = (item) => item.amount == null ? "Не подтверждено API" : `${Number(item.amount).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})} ${item.currency || ""}`;
+  return <div className="modal-backdrop report-detail-backdrop" onMouseDown={(e)=>e.target===e.currentTarget&&onClose()}>
+    <section className="modal report-detail-modal marketplace-record-detail" role="dialog" aria-modal="true" aria-label={detail.title}>
+      <div className="modal-heading"><div><h2>{detail.title}</h2><p>{detail.channel} · {ctx.start} — {ctx.end}{detail.store ? ` · ${detail.store}` : " · все магазины"}</p></div><button className="icon-button" onClick={onClose} aria-label="Закрыть"><X size={20}/></button></div>
+      {loading ? <Spinner/> : error ? <ErrorBox error={error}/> : <>
+        {data?.note && <p className="marketplace-record-note">{data.note}</p>}
+        {items.length ? <div className="report-detail-table"><table className="data-table"><thead><tr><th>Дата</th><th>Магазин</th><th>Операция</th><th>Заказ / ID</th><th>Товар / SKU</th><th>Кол-во</th><th>Статус</th><th>Сумма источника</th></tr></thead><tbody>{items.map((item)=><tr key={`${item.account_id}:${item.id}`}>
+          <td>{item.event_date || "API не передал дату"}</td><td>{item.store}</td><td>{item.operation}</td><td>{item.reference || "—"}</td><td>{item.product_name}{item.sku ? <small className="muted">{item.sku}</small> : null}</td><td>{item.quantity == null ? "—" : `${item.quantity} шт.`}</td><td>{item.status}</td><td>{amount(item)}</td>
+        </tr>)}</tbody></table></div> : <Empty text="За выбранный период API-строки не найдены."/>}
+        <p className="panel-note">Показаны только поля из сохранённых ответов API. Финансовые расчёты ERP здесь не изменяются.</p>
+      </>}
+    </section>
+  </div>;
 }
 
 const ChartIcon = TrendingUp;
@@ -1587,6 +1608,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
   const activeAccountId = accounts.length === 1 ? String(accounts[0].id) : accountId;
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("all");
+  const [detailFocus, setDetailFocus] = useState("");
   const [opPage, setOpPage] = useState(0);
   const [reportRefresh, setReportRefresh] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -1699,6 +1721,16 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     return matches && (kind === "all" || (kind === "returns" ? returns : Number(p.sales_qty || 0) > 0));
   });
   const operations = data.operations || [];
+  const focusedOperations = operations.filter((o) => {
+    const key = detailFocus.toLowerCase();
+    if (key.includes("возврат")) return Boolean(o.is_return);
+    if (key.includes("логистик")) return Number(o.direct_logistics || 0) !== 0 || Number(o.reverse_logistics || 0) !== 0 || /логист/i.test(o.operation || "");
+    if (key.includes("вознаграждение") || key.includes("ндс") || key.includes("эквайринг")) return Number(o.commission || 0) !== 0 || Number(o.commission_vat || 0) !== 0 || Number(o.acquiring || 0) !== 0;
+    if (key.includes("штраф")) return Number(o.penalty || 0) !== 0;
+    if (key.includes("хранение")) return Number(o.storage || 0) !== 0;
+    if (key.includes("перечислению") || key.includes("выплат")) return true;
+    return !o.is_return;
+  });
   const pageCount = Math.ceil(operations.length / 200);
   const fields = [["retail","Розничная цена со скидкой"],["realization","WB реализовал товар"],["payout","К перечислению"],["commission","Вознаграждение с продаж"],["wb_reward","Вознаграждение WB без НДС (справочно)"],["commission_vat","НДС с вознаграждения WB"],["acquiring","Эквайринг"],["direct_logistics","Прямая логистика"],["reverse_logistics","Доп. логистика (входит в общую)"],["penalty","Штрафы"],["storage","Хранение"],["other","Прочие"]];
   const totals = data.totals || {};
@@ -1727,8 +1759,9 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
       <p className="muted" role="status">Аккаунт WB #{data.account_id ?? activeAccountId} · Период {data.start || data.week_start} — {data.end || data.week_end}. Проверено: {data.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
       {data.status === "ошибка" && data.error && <ErrorBox error={data.error}/>}
       <div className="kpis marketplace-kpis wb-weekly-kpis">
-        {[["WB реализовал товар",totals.realization],["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],["Розничная цена со скидкой",totals.retail],["К перечислению",totals.payout],["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],["Маржа, %",cogsComplete?totals.margin_pct:null]].map(([label,value])=><div className="kpi" key={label}><span>{label}</span><strong>{label === "Маржа, %" ? (value == null ? "Не рассчитана" : `${Number(value).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong></div>)}
+        {[["WB реализовал товар",totals.realization],["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],["Розничная цена со скидкой",totals.retail],["К перечислению",totals.payout],["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],["Маржа, %",cogsComplete?totals.margin_pct:null]].map(([label,value])=><button type="button" className="kpi marketplace-kpi-button wb-report-kpi-button" key={label} aria-pressed={detailFocus===label} onClick={()=>{setDetailFocus(detailFocus===label?"":label);setOpPage(0);}}><span>{label}</span><strong>{label === "Маржа, %" ? (value == null ? "Не рассчитана" : `${Number(value).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong><small>Открыть расшифровку</small></button>)}
       </div>
+      {detailFocus && <div className="panel wb-report-detail"><div className="section-heading"><div><h4>{detailFocus} · {data.start} — {data.end}</h4><p className="muted">Магазин: {accounts.find(a=>String(a.id)===String(activeAccountId))?.name || `#${activeAccountId}`}. Строки из сохранённого финансового отчёта WB.</p></div><button type="button" onClick={()=>setDetailFocus("")}>Закрыть</button></div>{/себестоимость|прибыл|маржа/i.test(detailFocus) ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Артикул</th><th>Товар</th><th>Продажи</th><th>Возвраты</th><th>Себестоимость</th><th>Прибыль</th></tr></thead><tbody>{products.map(p=><tr key={`focus-${p.article}-${p.sku}`}><td>{p.article}</td><td>{p.name||"—"}</td><td>{p.sales_qty}</td><td>{p.returns_qty}</td><td>{amount(p.cogs,p.currency)}</td><td>{amount(p.profit,p.currency)}</td></tr>)}</tbody></table></div> : <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Операция</th><th>Артикул</th><th>Сумма операции</th><th>Логистика</th><th>Комиссия / НДС</th><th>Эквайринг</th><th>Начисление к перечислению</th><th>ID источника</th></tr></thead><tbody>{focusedOperations.slice(0,500).map(o=><tr key={`focus-${o.external_id}`}><td>{o.date}</td><td>{o.is_return?"Возврат":o.operation||"—"}</td><td>{o.article||"—"}</td><td>{amount(o.raw_amount,o.currency)}</td><td>{amount(o.direct_logistics,o.currency)} / {amount(o.reverse_logistics,o.currency)}</td><td>{amount(o.commission,o.currency)} / {amount(o.commission_vat,o.currency)}</td><td>{amount(o.acquiring,o.currency)}</td><td>{amount(o.amount,o.currency)}</td><td>{o.external_id}</td></tr>)}{!focusedOperations.length&&<tr><td colSpan="8" className="muted">Нет строк операций этого типа за выбранный период.</td></tr>}</tbody></table></div>}</div>}
       {estimatedClientPayout != null && <p className="muted">Итого к выплате — расчётный показатель: к перечислению WB − прямая логистика − штрафы − хранение. Дополнительная логистика (rebill) показывается отдельно. Это не подтверждение банковской выплаты.</p>}
       {!cogsComplete && <p className="muted">Себестоимость заполнена/подтверждена для {data.cogs_costed_products || 0} из {data.cogs_products_total || 0} товаров. Расчёт прибыли неполный: возвраты без подтверждённой FIFO-связи требуют проверки.</p>}
       {data.unallocated_operations > 0 && <p className="muted">{data.unallocated_operations} операций WB без артикула сохранены отдельно. Их расходы входят в общий отчёт, но не распределяются между товарами.</p>}
@@ -1748,6 +1781,7 @@ function MarketplaceInbox({ channel, ctx }) {
   const [wbTab,setWbTab] = useState("weekly");
   const [kaspiReportMode,setKaspiReportMode] = useState("issued");
   const [summaryReload,setSummaryReload] = useState(0);
+  const [kpiDetail,setKpiDetail] = useState(null);
   const kaspiAutoSyncRef = useRef(new Set());
   const kaspiLastRefreshRef = useRef(ctx.refresh);
 
@@ -1839,17 +1873,17 @@ function MarketplaceInbox({ channel, ctx }) {
   const incomplete = m.financial_complete === false;
   const fxPending = Number(m.api_unconverted || 0);
   const marketplaceKpis = [
-    [channel === "Wildberries" ? "Оборот продаж WB" : channel === "Kaspi" ? "Выручка API за вычетом возвратов" : "Продажи API", channel === "Kaspi" ? (m.api_revenue == null ? "Нет подтверждённых данных" : m.api_revenue) : (m.api_revenue ?? m.revenue), fxPending ? (channel === "Kaspi" ? `${fxPending} записей API пропущено: проверьте дату или сумму` : `${fxPending} операций ожидают курс`) : (channel === "Wildberries" ? "Отдельный отчёт продаж за выбранный период" : channel === "Kaspi" ? "Выручка по дате выдачи минус возвраты по дате возврата" : "Подтверждённая выручка непосредственно из API")],
-    ...(channel === "Kaspi" ? [["Возвраты API", m.api_returns == null ? "—" : m.api_returns, `${m.api_return_units == null ? "—" : m.api_return_units} шт. за выбранный период`]] : []),
-    ["Продано", m.api_units == null ? "—" : `${m.api_units} шт`, "Количество продаж за выбранный период за вычетом возвращённых единиц"],
-    ...(channel === "Wildberries" ? [["К перечислению по отчёту", (m.settlement_rows > 0 ? m.settlement_accrued : "Нет данных отчёта"), m.settlement_unconverted ? `${m.settlement_unconverted} строк ожидают курс` : (m.settlement_rows > 0 ? "Начислено по финансовому отчёту; не банковская выплата" : "Загрузите недельный отчёт WB; ноль не означает отсутствие начислений")]] : []),
-    ["Проведено в ERP", m.revenue, m.pending_sales ? `${m.pending_sales} продаж проведены, но ожидают себестоимость FIFO` : "Финансовые продажи, уже проведённые в ERP"],
-    ["Себестоимость FIFO", incomplete ? "—" : m.cogs, incomplete ? "Будет рассчитана после наличия себестоимости/партий" : "Только проведённые продажи"],
-    ["Комиссия", m.commission, channel === "Kaspi" && Number(m.commission_estimated || 0) > 0 ? `Расчётная ставка ${Math.round(Number(m.commission_rate || 0) * 100)}% по настройке; не фактическая комиссия Kaspi` : "Расход маркетплейса"],
-    ["Логистика продавца", m.logistics, "Стоимость доставки за счёт продавца; доставка покупателя не вычитается"],
-    ...(channel === "Kaspi" ? [["Доставка возврата", m.return_logistics, "Отдельный расход возврата, если он пришёл из API или импорта"], ["К получению (расчёт)", m.kaspi_estimated_proceeds, "Выданные продажи − комиссия Kaspi − доставка продавца − доставка возврата; не банковская выплата"]] : []),
-    ["Реклама", m.advertising, "Расход маркетплейса"],
-    ["Чистая прибыль", incomplete ? "—" : m.net_profit, incomplete ? (fxPending ? "Прибыль ожидает курс/проведение и FIFO — ложное значение не показываем" : "Не показываем ложную прибыль: есть продажи без FIFO") : (m.margin == null ? "Маржа —" : `Маржа ${decimal(m.margin)}%`)],
+    [channel === "Wildberries" ? "Оборот продаж WB" : channel === "Kaspi" ? "Выручка API за вычетом возвратов" : "Продажи API", channel === "Kaspi" ? (m.api_revenue == null ? "Нет подтверждённых данных" : m.api_revenue) : (m.api_revenue ?? m.revenue), fxPending ? (channel === "Kaspi" ? `${fxPending} записей API пропущено: проверьте дату или сумму` : `${fxPending} операций ожидают курс`) : (channel === "Wildberries" ? "Отдельный отчёт продаж за выбранный период" : channel === "Kaspi" ? "Выручка по дате выдачи минус возвраты по дате возврата" : "Подтверждённая выручка непосредственно из API"), {source:"api",metric:"sales",title:"Детализация продаж API"}],
+    ...(channel === "Kaspi" ? [["Возвраты API", m.api_returns == null ? "—" : m.api_returns, `${m.api_return_units == null ? "—" : m.api_return_units} шт. за выбранный период`, {source:"api",metric:"returns",title:"Возвраты Kaspi по данным API"}]] : []),
+    ["Продано", m.api_units == null ? "—" : `${m.api_units} шт`, "Количество продаж за выбранный период за вычетом возвращённых единиц", {source:"api",metric:"sales",title:"Продажи API по товарам и магазинам"}],
+    ...(channel === "Wildberries" ? [["К перечислению по отчёту", (m.settlement_rows > 0 ? m.settlement_accrued : "Нет данных отчёта"), m.settlement_unconverted ? `${m.settlement_unconverted} строк ожидают курс` : (m.settlement_rows > 0 ? "Начислено по финансовому отчёту; не банковская выплата" : "Загрузите недельный отчёт WB; ноль не означает отсутствие начислений"), {source:"api",metric:"settlement",title:"Строки начисления WB"}]] : []),
+    ["Проведено в ERP", m.revenue, m.pending_sales ? `${m.pending_sales} продаж проведены, но ожидают себестоимость FIFO` : "Финансовые продажи, уже проведённые в ERP", {source:"ledger",metric:"revenue",title:"Проведённые продажи ERP"}],
+    ["Себестоимость FIFO", incomplete ? "—" : m.cogs, incomplete ? "Будет рассчитана после наличия себестоимости/партий" : "Только проведённые продажи", {source:"ledger",metric:"cogs",title:"Себестоимость FIFO"}],
+    ["Комиссия", m.commission, channel === "Kaspi" && Number(m.commission_estimated || 0) > 0 ? `Расчётная ставка ${Math.round(Number(m.commission_rate || 0) * 100)}% по настройке; не фактическая комиссия Kaspi` : "Расход маркетплейса", {source:"ledger",metric:"commission",title:"Комиссия по проведённым операциям"}],
+    ["Логистика продавца", m.logistics, "Стоимость доставки за счёт продавца; доставка покупателя не вычитается", {source:"ledger",metric:"logistics",title:"Логистика по проведённым операциям"}],
+    ...(channel === "Kaspi" ? [["Доставка возврата", m.return_logistics, "Отдельный расход возврата, если он пришёл из API или импорта", {source:"ledger",metric:"expenses",title:"Расшифровка расходов, включая доставку возврата"}], ["К получению (расчёт)", m.kaspi_estimated_proceeds, "Выданные продажи − комиссия Kaspi − доставка продавца − доставка возврата; не банковская выплата", {source:"api",metric:"logistics",title:"Данные API для расчётного итога"}]] : []),
+    ["Реклама", m.advertising, "Расход маркетплейса", {source:"ledger",metric:"advertising",title:"Расходы на рекламу"}],
+    ["Чистая прибыль", incomplete ? "—" : m.net_profit, incomplete ? (fxPending ? "Прибыль ожидает курс/проведение и FIFO — ложное значение не показываем" : "Не показываем ложную прибыль: есть продажи без FIFO") : (m.margin == null ? "Маржа —" : `Маржа ${decimal(m.margin)}%`), {source:"ledger",metric:"net_profit",title:"Чистая прибыль по проведённым операциям"}],
   ];
   return <div className="panel">
     <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
@@ -1871,7 +1905,7 @@ function MarketplaceInbox({ channel, ctx }) {
     </> : null}
     {channel === "Kaspi" && m.sync_in_progress && !m.sync_errors?.length && kaspiReportMode === "issued" && <p className="muted" role="status">Обновляем выбранный период Kaspi в фоне. Страница продолжает показывать сохранённые итоги.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
-    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
+    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика продавца","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note,detail])=><button type="button" className={"kpi marketplace-kpi-button "+(title==="Чистая прибыль"?"featured":"")} key={title} onClick={()=>setKpiDetail({...detail,channel,account_id:selectedAccount?.id,store:selectedAccount?.name})} title="Открыть расшифровку по магазину"><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></button>)}</div>)}
     {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={scopedAccounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
     {(channel !== "Wildberries" || wbTab === "products") && <><div className="section-heading"><div><h3>Товары маркетплейса</h3><p className="muted">Продажи и прибыль связаны с товаром QOR по SKU. Себестоимость и остаток меняются в единой карточке «Товары / SKU».</p></div><span className="pill">{marketplaceProducts.data?.total || 0} товаров</span></div>
     {marketplaceProducts.error ? <ErrorBox error={marketplaceProducts.error}/> : marketplaceProducts.loading ? <Spinner/> : <div className="marketplace-product-grid">
@@ -1889,6 +1923,7 @@ function MarketplaceInbox({ channel, ctx }) {
     {selected && <div className="panel"><h3>Привязка товара</h3><label>Идентификатор источника<select value={key} onChange={e=>setKey(e.target.value)}>{selected.external_keys.map(k=><option key={k}>{k}</option>)}</select></label><label>Товар ERP<select value={product} onChange={e=>setProduct(e.target.value)}><option value="">Выберите товар</option>{(ctx.refs.products || []).map(p=><option value={p.id} key={p.id}>{p.sku} · {p.name}</option>)}</select></label><button className="primary" disabled={busy || !product} onClick={bind}>Сохранить привязку</button><button onClick={()=>setSelected(null)}>Закрыть</button></div>}
     <div className="row-actions"><button disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>Предыдущие</button><span>{offset+1}–{Math.min(offset+30,state.data?.total || 0)}</span><button disabled={offset+30 >= (state.data?.total || 0)} onClick={()=>setOffset(offset+30)}>Следующие</button></div>
     </>}
+    {kpiDetail && (kpiDetail.source === "api" ? <MarketplaceRecordDetails ctx={ctx} detail={kpiDetail} onClose={()=>setKpiDetail(null)}/> : <ReportDetails ctx={ctx} detail={{...kpiDetail,account_id:selectedAccount?.id}} onClose={()=>setKpiDetail(null)}/>)}
   </div>;
 }
 
