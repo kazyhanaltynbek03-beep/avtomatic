@@ -1764,7 +1764,7 @@ def match_synced_marketplace_cards(product_id: int, company_id: int | None = Que
         return {"linked": 0, "accounts": [], "ambiguous": [], "message": "Добавьте артикул или штрихкод"}
     aq = select(Account).where(Account.active.is_(True), Account.channel.in_(["Kaspi", "Wildberries"]))
     if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
-    linked, results, ambiguous = 0, [], []
+    linked, results, ambiguous, conflicts = 0, [], [], []
     for account in db.scalars(aq.order_by(Account.id)):
         source = "kaspi" if account.channel == "Kaspi" else "wildberries"
         records = db.scalars(select(MarketplaceRecord).where(
@@ -1805,6 +1805,7 @@ def match_synced_marketplace_cards(product_id: int, company_id: int | None = Que
                     MarketplaceProductMapping.account_id == account.id, MarketplaceProductMapping.external_key == key))
                 if existing:
                     if existing.product_id == product.id: candidate_already_linked = True
+                    else: conflicts.append({"account_id": account.id, "channel": account.channel, "account_name": account.name, "external_key": key})
                     continue
                 try:
                     with db.begin_nested():
@@ -1826,7 +1827,7 @@ def match_synced_marketplace_cards(product_id: int, company_id: int | None = Que
             results.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
                 "card_count": len(candidates), "mapping_count": added, "already_linked_count": already_linked})
     db.commit()
-    return {"linked": linked, "already_linked": sum(x["already_linked_count"] for x in results), "accounts": results, "ambiguous": ambiguous,
+    return {"linked": linked, "already_linked": sum(x["already_linked_count"] for x in results), "accounts": results, "ambiguous": ambiguous, "conflicts": conflicts,
         "message": "Поиск выполнен только по уже синхронизированным данным"}
 
 
