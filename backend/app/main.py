@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .db import get_db, SessionLocal
 from .models import *
 from .security import *
-from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns
+from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns, marketplace_matching
 from .connectors import AccessRequired, connector, load_saved_credentials
 from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
@@ -1705,6 +1705,188 @@ class ProductMarketplaceIdIn(BaseModel):
     external_id: str = Field(min_length=1, max_length=180)
 
 
+class MarketplaceAutoMatchIn(BaseModel):
+    company_id: int | None = Field(default=None, ge=1)
+    product_ids: list[int] | None = Field(default=None, max_length=10000)
+
+
+@app.post("/api/products/marketplace-matching/auto")
+def auto_match_marketplace_products(p: MarketplaceAutoMatchIn, tasks: BackgroundTasks,
+                                    u=Depends(current_user), db=Depends(get_db)):
+    """Link exact, unambiguous seller SKUs to QOR products across accessible shops.
+
+    This is additive and catalogue-only: it never replays orders, changes stock,
+    or writes into the existing financial ledgers.
+    """
+    require(u, "catalog", True)
+    account_q = scope_query(select(Account), Account, u).where(
+        Account.active.is_(True), Account.channel.in_(["Kaspi", "Wildberries"]))
+    if p.company_id is not None:
+        scope(u, p.company_id)
+        account_q = account_q.where(Account.company_id == p.company_id)
+    accounts = list(db.scalars(account_q.order_by(Account.company_id, Account.channel, Account.id)))
+    product_q = select(Product).where(Product.active.is_(True))
+    if p.product_ids is not None:
+        selected_ids = list(dict.fromkeys(p.product_ids))
+        product_q = product_q.where(Product.id.in_(selected_ids)) if selected_ids else product_q.where(Product.id == -1)
+    products = list(db.scalars(product_q.order_by(Product.id)))
+    result = marketplace_matching.match_staged_catalog(db, accounts, products)
+    new_wb_pairs = result.pop("_new_wb_pairs", [])
+    audit(db, u, "marketplace_auto_match", "products", None, {
+        "company_id": p.company_id, "products_scanned": result["products_scanned"],
+        "accounts_scanned": len(accounts), "links_created": result["links_created"],
+        "review_count": result["review_count"],
+    })
+    db.commit()
+    # A single newly added SKU can use the existing opt-in auto-sync path. The
+    # bulk matcher only creates links; it must not enqueue thousands of outbound
+    # stock writes from one button press.
+    if p.product_ids and len(set(p.product_ids)) == 1:
+        for account_id, product_id in new_wb_pairs:
+            account = next((a for a in accounts if a.id == account_id), None)
+            if account:
+                _schedule_wb_sync_for_product(tasks, product_id, account.company_id)
+    return {"ok": True, "accounts_scanned": len(accounts), **result}
+
+
+@app.post("/api/products/marketplace-catalogs/wb/refresh")
+def refresh_wb_product_catalogs(p: MarketplaceAutoMatchIn, tasks: BackgroundTasks,
+                                u=Depends(current_user), db=Depends(get_db)):
+    """Queue a catalog-only WB refresh; do not run financial projection."""
+    require(u, "catalog", True)
+    account_q = scope_query(select(Account), Account, u).where(
+        Account.active.is_(True), Account.channel == "Wildberries", Account.mode == "api")
+    if p.company_id is not None:
+        scope(u, p.company_id)
+        account_q = account_q.where(Account.company_id == p.company_id)
+    accounts = list(db.scalars(account_q.order_by(Account.company_id, Account.id)))
+    if not accounts:
+        raise HTTPException(409, "Нет активных API-магазинов Wildberries для выбранной компании")
+    account_ids = [a.id for a in accounts]
+    for active_job in db.scalars(select(Job).where(Job.kind == "marketplace_catalog_refresh",
+                                                  Job.status.in_(["queued", "running"]))):
+        if set((active_job.payload or {}).get("account_ids") or []) & set(account_ids):
+            if active_job.user_id != u.id:
+                raise HTTPException(409, "Загрузка каталога этих магазинов уже выполняется")
+            return {"ok": True, "job": dump(active_job), "already_running": True}
+    job = Job(company_id=p.company_id if p.company_id else (accounts[0].company_id if len({a.company_id for a in accounts}) == 1 else None),
+              user_id=u.id, kind="marketplace_catalog_refresh", status="queued",
+              payload={"account_ids": account_ids, "accounts": {str(a.id): {"account_id": a.id, "account_name": a.name, "status": "queued", "pages": 0, "records": 0} for a in accounts}},
+              result={"links_created": 0, "review_count": 0, "review": [], "per_account": []})
+    db.add(job)
+    db.flush()
+    audit(db, u, "enqueue_marketplace_catalog_refresh", "jobs", job.id, {"account_ids": account_ids})
+    db.commit()
+    tasks.add_task(_run_wb_product_catalog_refresh, job.id)
+    return {"ok": True, "job": dump(job), "already_running": False}
+
+
+def _run_wb_product_catalog_refresh(job_id):
+    """Fetch WB product cards in resumable pages and auto-link exact articles.
+
+    Catalog pages are staged and committed independently. No sales are projected,
+    and Account.sync_status / sync_cursor remain owned by the financial sync path.
+    """
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if not job or job.kind != "marketplace_catalog_refresh":
+            return
+        job.status = "running"
+        job.started_at = now()
+        job.attempts = int(job.attempts or 0) + 1
+        db.commit()
+        user = db.get(User, job.user_id)
+        payload = dict(job.payload or {})
+        account_ids = list(payload.get("account_ids") or [])
+        progress = dict(payload.get("accounts") or {})
+        aggregate = dict(job.result or {})
+        aggregate.setdefault("per_account", [])
+        aggregate.setdefault("review", [])
+        aggregate.setdefault("links_created", 0)
+        aggregate.setdefault("products_linked", 0)
+        aggregate.setdefault("review_count", 0)
+        any_success = False
+        for account_id in account_ids:
+            account = db.get(Account, account_id)
+            state = dict(progress.get(str(account_id)) or {})
+            if state.get("status") == "done":
+                any_success = True
+                continue
+            try:
+                if not user or not user.active:
+                    raise AccessRequired("Пользователь задания отключён")
+                if not account or not account.active or account.channel != "Wildberries" or account.mode != "api":
+                    raise AccessRequired("Магазин WB отключён или не использует API")
+                if user.role != "Owner" and account.company_id not in (user.company_ids or []):
+                    raise AccessRequired("Нет доступа к компании магазина WB")
+                worker = connector(account, load_saved_credentials(db, account.id))
+                cursor = state.get("cursor") or "{}"
+                state.update({"status": "running", "error": ""})
+                progress[str(account_id)] = state
+                payload["accounts"] = progress
+                job.payload = payload
+                db.commit()
+                pages = int(state.get("pages") or 0)
+                records_count = int(state.get("records") or 0)
+                inserted_count = int(state.get("inserted") or 0)
+                updated_count = int(state.get("updated") or 0)
+                for piece in worker.fetch_section_pages("products", cursor):
+                    inserted_page, updated_page = _stage_marketplace_catalog_records(db, account, piece)
+                    pages += 1
+                    records_count += len(piece.records)
+                    inserted_count += inserted_page
+                    updated_count += updated_page
+                    cursor = piece.next_cursor or cursor
+                    state.update({"status": "running", "pages": pages, "records": records_count,
+                                  "inserted": inserted_count, "updated": updated_count,
+                                  "cursor": cursor, "updated_at": now().isoformat()})
+                    progress[str(account_id)] = state
+                    payload["accounts"] = progress
+                    job.payload = payload
+                    db.commit()
+                products = list(db.scalars(select(Product).where(Product.active.is_(True)).order_by(Product.id)))
+                matched = marketplace_matching.match_staged_catalog(db, [account], products)
+                matched.pop("_new_wb_pairs", None)
+                aggregate["links_created"] += matched["links_created"]
+                aggregate["products_linked"] += matched["products_linked"]
+                aggregate["review_count"] += matched["review_count"]
+                aggregate["review"] = (aggregate["review"] + matched["review"])[:200]
+                account_summary = matched["per_account"][0] if matched["per_account"] else {}
+                aggregate["per_account"].append(account_summary)
+                state.update({"status": "done", "pages": pages, "records": records_count,
+                              "inserted": inserted_count, "updated": updated_count,
+                              "links_created": matched["links_created"], "review_count": matched["review_count"],
+                              "cursor": "", "updated_at": now().isoformat()})
+                progress[str(account_id)] = state
+                payload["accounts"] = progress
+                job.payload = payload
+                job.result = aggregate
+                audit(db, user, "marketplace_catalog_refresh", "accounts", account.id,
+                      {"pages": pages, "records": records_count, "links_created": matched["links_created"],
+                       "review_count": matched["review_count"]})
+                db.commit()
+                any_success = True
+            except Exception as exc:
+                db.rollback()
+                job = db.get(Job, job_id)
+                payload = dict(job.payload or {})
+                progress = dict(payload.get("accounts") or {})
+                state = dict(progress.get(str(account_id)) or {})
+                state.update({"status": "failed", "error": str(exc)[:400], "updated_at": now().isoformat()})
+                progress[str(account_id)] = state
+                payload["accounts"] = progress
+                job.payload = payload
+                db.commit()
+                logger.exception("WB product catalog refresh failed for account %s", account_id)
+        job = db.get(Job, job_id)
+        statuses = [str((value or {}).get("status")) for value in (job.payload or {}).get("accounts", {}).values()]
+        job.status = "partial" if any(status == "failed" for status in statuses) and any_success else (
+            "failed" if all(status == "failed" for status in statuses) else "done")
+        if job.status in {"partial", "failed"}:
+            job.error = "; ".join(f"магазин {aid}: {row.get('error','ошибка')}" for aid, row in (job.payload or {}).get("accounts", {}).items() if row.get("status") == "failed")[:1000]
+        db.commit()
+
+
 @app.post("/api/products/{product_id}/marketplace-mappings")
 def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
                                 tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)):
@@ -2022,6 +2204,18 @@ def listing(
 def validate_master(db, u, entity, p, existing=None):
     if hasattr(p, "company_id"):
         f.get_company(db, u, p.company_id)
+    if entity == "products":
+        scoped_companies = (p.specifications or {}).get("_qor_company_ids", [])
+        if not isinstance(scoped_companies, list) or len(scoped_companies) > 50:
+            raise HTTPException(422, "Некорректная привязка товара к компаниям")
+        for company_id in scoped_companies:
+            try:
+                company_id = int(company_id)
+            except (TypeError, ValueError):
+                raise HTTPException(422, "Некорректная компания товара")
+            if not db.get(Company, company_id):
+                raise HTTPException(422, "Компания товара не найдена")
+            scope(u, company_id)
     if entity == "companies" and u.role != "Owner":
         raise HTTPException(403, "Компании изменяет Owner")
     if entity == "users":
@@ -3067,6 +3261,47 @@ def _stage_marketplace_records(db, acc, result):
     return inserted, updated
 
 
+def _stage_marketplace_catalog_records(db, acc, result):
+    """Idempotently stage WB catalogue pages without changing financial states."""
+    inserted = updated = 0
+    for item in result.records:
+        if str(item.get("record_type") or "").lower() != "product":
+            continue
+        external_id = str(item.get("external_id") or "").strip()
+        if not external_id:
+            continue
+        row = db.scalar(select(MarketplaceRecord).where(
+            MarketplaceRecord.account_id == acc.id,
+            MarketplaceRecord.source == "wildberries",
+            MarketplaceRecord.external_id == external_id,
+        ))
+        payload = jsonable_encoder(item)
+        if row:
+            if (row.payload or {}) != payload:
+                row.payload = payload
+                updated += 1
+            continue
+        try:
+            with db.begin_nested():
+                db.add(MarketplaceRecord(account_id=acc.id, company_id=acc.company_id,
+                    source="wildberries", external_id=external_id, payload=payload))
+                db.flush()
+            inserted += 1
+        except IntegrityError:
+            # A normal marketplace sync can stage the same card concurrently.
+            row = db.scalar(select(MarketplaceRecord).where(
+                MarketplaceRecord.account_id == acc.id,
+                MarketplaceRecord.source == "wildberries",
+                MarketplaceRecord.external_id == external_id,
+            ))
+            if row is None:
+                raise
+            if (row.payload or {}) != payload:
+                row.payload = payload
+                updated += 1
+    return inserted, updated
+
+
 def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_ids, report_mode="issued", status_only=False):
     """Refresh only a requested Kaspi creation-date window plus old open orders."""
     with SessionLocal() as db:
@@ -3821,10 +4056,13 @@ def job_status(id: int, u=Depends(current_user), db=Depends(get_db)):
     job = db.get(Job, id)
     if not job or job.user_id != u.id:
         raise HTTPException(404, "Задание не найдено")
+    stale_after = timedelta(hours=2) if job.kind == "marketplace_catalog_refresh" else timedelta(minutes=15)
     if (job.status == "running" and job.started_at
-            and job.started_at < now() - timedelta(minutes=15)):
+            and job.started_at < now() - stale_after):
         job.status = "failed"
-        job.error = "AI-задание прервано сервером. Проверьте подключение AI и повторите запрос."
+        job.error = ("Загрузка каталога прервана сервером. Повторите задание: прогресс страниц сохранён."
+                     if job.kind == "marketplace_catalog_refresh" else
+                     "AI-задание прервано сервером. Проверьте подключение AI и повторите запрос.")
         db.commit()
     return dump(job)
 
@@ -3834,6 +4072,12 @@ def retry_job(id: int, tasks: BackgroundTasks, u=Depends(current_user), db=Depen
     job = db.get(Job, id)
     if not job or job.user_id != u.id:
         raise HTTPException(404, "Не найдено")
+    if job.kind == "marketplace_catalog_refresh" and job.status in {"failed", "partial"} and job.attempts < 3:
+        job.status = "queued"
+        job.error = ""
+        db.commit()
+        tasks.add_task(_run_wb_product_catalog_refresh, job.id)
+        return dump(job)
     if job.status != "failed" or job.attempts >= 3:
         raise HTTPException(409, "Повтор недоступен")
     if job.kind == "card_review":
