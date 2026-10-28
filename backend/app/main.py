@@ -479,7 +479,7 @@ def marketplace_products(channel: str, company_id: int | None = None, account_id
     if channel not in {"Kaspi", "Wildberries", "Ozon"}:
         raise HTTPException(422, "Неподдерживаемый маркетплейс")
     aq = select(Account).where(Account.channel == channel, Account.active.is_(True))
-    if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
+    aq = aq.where(Account.company_id == company_id)
     if company_id is not None:
         scope(u, company_id); aq = aq.where(Account.company_id == company_id)
     accounts = list(db.scalars(aq)); account_ids = [a.id for a in accounts]
@@ -1697,6 +1697,12 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
     financial reports; normal, idempotent marketplace projection uses it later.
     """
     require(u, "inventory", True)
+    if company_id is None:
+        permitted = list(u.company_ids or [])
+        if u.role == "Owner" or len(permitted) != 1:
+            return {"linked": 0, "accounts": [], "ambiguous": [], "message": "Выберите компанию для безопасного сопоставления"}
+        company_id = permitted[0]
+    scope(u, company_id)
     product = db.get(Product, product_id)
     if not product or not product.active:
         raise HTTPException(404, "Активный товар QOR не найден")
@@ -1739,6 +1745,90 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
         _schedule_wb_sync_for_product(tasks, product.id, account.company_id)
     return {"ok": True, "product_id": product.id, "account_id": account.id,
             "channel": account.channel, "external_key": external_key}
+
+
+@app.post("/api/products/{product_id}/match-synced-marketplace-cards")
+def match_synced_marketplace_cards(product_id: int, company_id: int | None = Query(None), u=Depends(current_user), db=Depends(get_db)):
+    """Link exact matches from stored records only; never calls APIs or projects finance."""
+    require(u, "inventory", True)
+    product = db.get(Product, product_id)
+    if not product or not product.active:
+        raise HTTPException(404, "Активный товар QOR не найден")
+    codes = {str(v).strip().casefold() for v in (product.sku, product.article) if v and str(v).strip()}
+    specs = product.specifications if isinstance(product.specifications, dict) else {}
+    raw_barcodes = specs.get("barcodes") or []
+    if isinstance(raw_barcodes, str): raw_barcodes = [raw_barcodes]
+    barcodes = {re.sub(r"[^0-9A-Za-z]", "", str(v)).casefold()
+        for v in [specs.get("barcode"), *raw_barcodes] if v and str(v).strip()}
+    if not codes and not barcodes:
+        return {"linked": 0, "accounts": [], "ambiguous": [], "message": "Добавьте артикул или штрихкод"}
+    aq = select(Account).where(Account.active.is_(True), Account.channel.in_(["Kaspi", "Wildberries"]))
+    if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
+    linked, results, ambiguous, conflicts = 0, [], [], []
+    for account in db.scalars(aq.order_by(Account.id)):
+        source = "kaspi" if account.channel == "Kaspi" else "wildberries"
+        records = db.scalars(select(MarketplaceRecord).where(
+            MarketplaceRecord.account_id == account.id, MarketplaceRecord.company_id == account.company_id,
+            MarketplaceRecord.source == source).order_by(MarketplaceRecord.id.desc()).limit(10000)).all()
+        candidates = {}
+        for record in records:
+            payload = record.payload or {}
+            if account.channel == "Wildberries" and payload.get("record_type") != "product": continue
+            if account.channel == "Kaspi" and payload.get("record_type") != "order_entry": continue
+            items = [payload, *(x for x in payload.get("products", []) if isinstance(x, dict))]
+            for item in items:
+                keys = marketplace_pipeline.identifiers(item)
+                item_codes = {str(item.get(k)).strip().casefold() for k in
+                    ("supplierArticle", "vendorCode", "sa_name", "offer_id", "merchant_code", "external_sku", "sku")
+                    if item.get(k) and not str(item.get(k)).strip().isdigit()}
+                raw_listing_barcodes = item.get("barcodes") or []
+                if isinstance(raw_listing_barcodes, str): raw_listing_barcodes = [raw_listing_barcodes]
+                item_barcodes = {re.sub(r"[^0-9A-Za-z]", "", str(v)).casefold()
+                    for v in [item.get("barcode"), *raw_listing_barcodes] if v}
+                matched_by = "артикул" if codes & item_codes else "штрихкод" if barcodes & item_barcodes else None
+                if not matched_by: continue
+                stable = next((k for k in keys if k.startswith("product:")), None) or next((k for k in keys if k.startswith("sku:")), None)
+                if not stable: continue
+                entry = candidates.setdefault(stable, {"keys": set(), "matched_by": matched_by,
+                    "name": item.get("product_name") or item.get("name") or item.get("title") or item.get("subjectName") or product.name})
+                entry["keys"].update(keys)
+        if not candidates: continue
+        if len(candidates) > 1:
+            ambiguous.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
+                "card_count": len(candidates), "products": [{"name": c["name"], "keys": sorted(c["keys"])} for c in candidates.values()]})
+            continue
+        added, already_linked, new_keys = 0, 0, []
+        for candidate in candidates.values():
+            before_candidate, candidate_already_linked = added, False
+            for key in candidate["keys"]:
+                existing = db.scalar(select(MarketplaceProductMapping).where(
+                    MarketplaceProductMapping.account_id == account.id, MarketplaceProductMapping.external_key == key))
+                if existing:
+                    if existing.product_id == product.id: candidate_already_linked = True
+                    else: conflicts.append({"account_id": account.id, "channel": account.channel, "account_name": account.name, "external_key": key})
+                    continue
+                try:
+                    with db.begin_nested():
+                        db.add(MarketplaceProductMapping(company_id=account.company_id, account_id=account.id,
+                            channel=account.channel, external_key=key, product_id=product.id))
+                        db.flush()
+                    added += 1
+                    new_keys.append(key)
+                except IntegrityError:
+                    # A concurrent click can win the unique-key race; retries remain safe.
+                    continue
+            if candidate_already_linked and added == before_candidate: already_linked += 1
+        if added or already_linked:
+            linked += added
+            if new_keys:
+                audit(db, u, "mapping", "products", product.id, {
+                    "account_id": account.id, "channel": account.channel,
+                    "external_keys": new_keys, "source": "exact_sku_barcode_match"})
+            results.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
+                "card_count": len(candidates), "mapping_count": added, "already_linked_count": already_linked})
+    db.commit()
+    return {"linked": linked, "already_linked": sum(x["already_linked_count"] for x in results), "accounts": results, "ambiguous": ambiguous, "conflicts": conflicts,
+        "message": "Поиск выполнен только по уже синхронизированным данным"}
 
 
 @app.post("/api/marketplace-records/{id}/mapping")
