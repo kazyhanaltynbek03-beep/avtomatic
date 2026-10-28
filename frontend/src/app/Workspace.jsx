@@ -1893,6 +1893,8 @@ function MarketplaceInbox({ channel, ctx }) {
 }
 
 function DataPage({ page, ctx }) {
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
   const entity = channels.includes(page) ? "sales" : page;
   const [search, setSearch] = useState(""),
     [offset, setOffset] = useState(0),
@@ -1912,6 +1914,7 @@ function DataPage({ page, ctx }) {
     [catalogSort, setCatalogSort] = useState("name"),
     [kaspiAction, setKaspiAction] = useState({order_id:"",code:"",status:"ACCEPTED_BY_MERCHANT",cancellation_reason:"BUYER_CANCELLATION_BY_MERCHANT",cancellation_comment:"",number_of_space:"1",security_code:""});
   const mutationLock = useRef(false);
+  const run = async (fn) => { setBusy(true); setError(""); try { await fn(); } catch (e) { setError(e.message); } finally { setBusy(false); } };
   const params = new URLSearchParams({
     limit: "30",
     offset: String(offset),
@@ -2027,8 +2030,8 @@ function DataPage({ page, ctx }) {
             review: job.result.review || [], review_count: job.result.review_count || 0,
             per_account: job.result.per_account,
           });
-          ctx.bump?.();
-          ctx.notify(`Каталог WB: ${job.status === "done" ? "загружен" : job.status === "partial" ? "загружен частично" : "не загружен"}. Связано товаров с магазинами: ${job.result?.products_linked || 0}; проверить вручную: ${job.result?.review_count || 0}.${job.error ? ` ${job.error}` : ""}`);
+          ctxRef.current.bump?.();
+          ctxRef.current.notify(`Каталог WB: ${job.status === "done" ? "загружен" : job.status === "partial" ? "загружен частично" : "не загружен"}. Связано товаров с магазинами: ${job.result?.products_linked || 0}; проверить вручную: ${job.result?.review_count || 0}.${job.error ? ` ${job.error}` : ""}`);
         }
       } catch (e) { if (live) setError(e.message); }
     };
