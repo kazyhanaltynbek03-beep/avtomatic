@@ -1741,7 +1741,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     ? (Math.round(Number(totals.payout) * 100) - Math.round(Number(totals.logistics_total) * 100) - Math.round(Number(totals.penalty) * 100) - Math.round(Number(totals.storage) * 100)) / 100
     : null;
   const cogsComplete = data.cogs_complete === true;
-
+  const periodLabel = period === "weekly" ? "Недельный" : period === "monthly" ? "Месячный" : "Дневной";
   const wbReportMetrics = [
     ["WB реализовал товар",totals.realization],
     ["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],
@@ -1768,33 +1768,40 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     {title:"Удержания и расходы", metrics:wbReportMetrics.slice(5,13)},
     {title:"Себестоимость и прибыль", metrics:wbReportMetrics.slice(13)}
   ];
-  const periodLabel = period === "weekly" ? "Недельный" : period === "monthly" ? "Месячный" : "Дневной";
+
   return <section className="panel wb-weekly-report" aria-label={`${periodLabel} финансовый отчёт Wildberries`}>
     <div className="section-heading"><div><h3>{periodLabel} финансовый отчёт</h3><p className="muted">Источник — Finance API WB. Основа расчёта — сумма к перечислению; месячный итог агрегируется из дневных строк WB. Это начисление WB, не подтверждение банковского зачисления.</p></div><span className={`pill wb-weekly-status ${data.status === "готов" ? "ready" : ""}`}>{statusText}</span></div>
     <div className="row-actions wb-weekly-controls">
       {accounts.length > 1 && <label>Аккаунт WB<select value={accountId} onChange={(e)=>setAccountId(e.target.value)}>{accounts.map((a)=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>}
       <label>{period === "daily" ? "День отчёта" : period === "monthly" ? "Месяц отчёта" : "Неделя с понедельника"}<input type={period === "monthly" ? "month" : "date"} max={period === "weekly" ? lastCompletedWeek : undefined} value={period === "monthly" ? week.slice(0,7) : week} onChange={(e)=>{if(period === "monthly"){setWeek(`${e.target.value}-01`);return;}const d=new Date(`${e.target.value}T12:00:00`);if(period === "weekly") d.setDate(d.getDate()-((d.getDay()+6)%7));const monday=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);setWeek(period === "weekly" && monday > lastCompletedWeek ? lastCompletedWeek : monday);}}/></label>
-      <label>Тип отчёта<select value={period} onChange={(e)=>{const next=e.target.value;setPeriod(next);if(next==="weekly")setWeek(mondayOfLastWeek());else if(next==="daily"){const d=new Date();d.setDate(d.ge<div className="wb-report-overview">
+      <label>Тип отчёта<select value={period} onChange={(e)=>{const next=e.target.value;setPeriod(next);if(next==="weekly")setWeek(mondayOfLastWeek());else if(next==="daily"){const d=new Date();d.setDate(d.getDate()-1);setWeek(inputDate(d));}else{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);setWeek(inputDate(d));}}}><option value="daily">Финансы за день</option><option value="weekly">Финансы за неделю</option><option value="monthly">Итог за месяц</option></select></label>
+      <label>Поиск товара<input type="search" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Артикул или название"/></label>
+      <label>Операции<select value={kind} onChange={(e)=>setKind(e.target.value)}><option value="all">Все</option><option value="sales">Продажи</option><option value="returns">Есть возвраты</option></select></label>
+      <button type="button" disabled={!activeAccountId || syncing} onClick={startReportSync}>{syncing ? "Проверяем WB…" : "Проверить WB сейчас"}</button>
+      <button type="button" className="button primary" disabled={downloadingExcel || !activeAccountId} onClick={downloadExcel}>{downloadingExcel ? "Скачиваем Excel…" : "Скачать Excel"}</button>
+    </div>
+    {syncError && syncError !== report.error && <ErrorBox error={syncError}/>}
+    {excelError && <ErrorBox error={excelError}/>}
+    {report.loading ? <Spinner/> : report.error ? <ErrorBox error={report.error}/> : <>
+      <p className="muted" role="status">Аккаунт WB #{data.account_id ?? activeAccountId} · Период {data.start || data.week_start} — {data.end || data.week_end}. Проверено: {data.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
+      {data.status === "ошибка" && data.error && <ErrorBox error={data.error}/>}
+      <div className="wb-report-overview">
         <article className="wb-report-total">
           <span>Расчёт по схеме клиента</span>
           <strong>{amount(estimatedClientPayout)}</strong>
           <small>Ориентир после логистики, штрафов и хранения · не банковское зачисление</small>
         </article>
         <div className="wb-report-summary">
-          {wbReportMetrics.slice(0,2).map(wbMetricButton)}
-          {wbReportMetrics[3] && wbMetricButton(wbReportMetrics[3])}
+          {wbMetricButton(wbReportMetrics[0])}
+          {wbMetricButton(wbReportMetrics[1])}
+          {wbMetricButton(wbReportMetrics[3])}
         </div>
       </div>
       <div className="wb-report-breakdown">{wbReportGroups.map(group=><details className="marketplace-report-details" key={group.title}>
         <summary><span>{group.title}</span><small>{group.metrics.length} показателей</small></summary>
         <div className="marketplace-report-metrics">{group.metrics.map(wbMetricButton)}</div>
       </details>)}</div>
-      ta.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
-      {data.status === "ошибка" && data.error && <ErrorBox error={data.error}/>}
-      <div className="kpis marketplace-kpis wb-weekly-kpis">
-        {[["WB реализовал товар",totals.realization],["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],["Розничная цена со скидкой",totals.retail],["К перечислению",totals.payout],["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],["Маржа, %",cogsComplete?totals.margin_pct:null]].map(([label,value])=><button type="button" className="kpi marketplace-kpi-button wb-report-kpi-button" key={label} aria-pressed={detailFocus===label} onClick={()=>{setDetailFocus(detailFocus===label?"":label);setOpPage(0);}}><span>{label}</span><strong>{label === "Маржа, %" ? (value == null ? "Не рассчитана" : `${Number(value).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong><small>Открыть расшифровку</small></button>)}
-      </div>
-      {detailFocus && <div className="panel wb-report-detail"><div className="section-heading"><div><h4>{detailFocus} · {data.start} — {data.end}</h4><p className="muted">Магазин: {accounts.find(a=>String(a.id)===String(activeAccountId))?.name || `#${activeAccountId}`}. Строки из сохранённого финансового отчёта WB.</p></div><button type="button" onClick={()=>setDetailFocus("")}>Закрыть</button></div>{/себестоимость|прибыл|маржа/i.test(detailFocus) ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Артикул</th><th>Товар</th><th>Продажи</th><th>Возвраты</th><th>Себестоимость</th><th>Прибыль</th></tr></thead><tbody>{products.map(p=><tr key={`focus-${p.article}-${p.sku}`}><td>{p.article}</td><td>{p.name||"—"}</td><td>{p.sales_qty}</td><td>{p.returns_qty}</td><td>{amount(p.cogs,p.currency)}</td><td>{amount(p.profit,p.currency)}</td></tr>)}</tbody></table></div> : <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Операция</th><th>Артикул</th><th>Сумма операции</th><th>Логистика</th><th>Комиссия / НДС</th><th>Эквайринг</th><th>Начисление к перечислению</th><th>ID источника</th></tr></thead><tbody>{focusedOperations.slice(0,500).map(o=><tr key={`focus-${o.external_id}`}><td>{o.date}</td><td>{o.is_return?"Возврат":o.operation||"—"}</td><td>{o.article||"—"}</td><td>{amount(o.raw_amount,o.currency)}</td><td>{amount(o.direct_logistics,o.currency)} / {amount(o.reverse_logistics,o.currency)}</td><td>{amount(o.commission,o.currency)} / {amount(o.commission_vat,o.currency)}</td><td>{amount(o.acquiring,o.currency)}</td><td>{amount(o.amount,o.currency)}</td><td>{o.external_id}</td></tr>)}{!focusedOperations.length&&<tr><td colSpan="8" className="muted">Нет строк операций этого типа за выбранный период.</td></tr>}</tbody></table></div>}</div>}
+            {detailFocus && <div className="panel wb-report-detail"><div className="section-heading"><div><h4>{detailFocus} · {data.start} — {data.end}</h4><p className="muted">Магазин: {accounts.find(a=>String(a.id)===String(activeAccountId))?.name || `#${activeAccountId}`}. Строки из сохранённого финансового отчёта WB.</p></div><button type="button" onClick={()=>setDetailFocus("")}>Закрыть</button></div>{/себестоимость|прибыл|маржа/i.test(detailFocus) ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Артикул</th><th>Товар</th><th>Продажи</th><th>Возвраты</th><th>Себестоимость</th><th>Прибыль</th></tr></thead><tbody>{products.map(p=><tr key={`focus-${p.article}-${p.sku}`}><td>{p.article}</td><td>{p.name||"—"}</td><td>{p.sales_qty}</td><td>{p.returns_qty}</td><td>{amount(p.cogs,p.currency)}</td><td>{amount(p.profit,p.currency)}</td></tr>)}</tbody></table></div> : <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Операция</th><th>Артикул</th><th>Сумма операции</th><th>Логистика</th><th>Комиссия / НДС</th><th>Эквайринг</th><th>Начисление к перечислению</th><th>ID источника</th></tr></thead><tbody>{focusedOperations.slice(0,500).map(o=><tr key={`focus-${o.external_id}`}><td>{o.date}</td><td>{o.is_return?"Возврат":o.operation||"—"}</td><td>{o.article||"—"}</td><td>{amount(o.raw_amount,o.currency)}</td><td>{amount(o.direct_logistics,o.currency)} / {amount(o.reverse_logistics,o.currency)}</td><td>{amount(o.commission,o.currency)} / {amount(o.commission_vat,o.currency)}</td><td>{amount(o.acquiring,o.currency)}</td><td>{amount(o.amount,o.currency)}</td><td>{o.external_id}</td></tr>)}{!focusedOperations.length&&<tr><td colSpan="8" className="muted">Нет строк операций этого типа за выбранный период.</td></tr>}</tbody></table></div>}</div>}
       {estimatedClientPayout != null && <p className="muted">Итого к выплате — расчётный показатель: к перечислению WB − прямая логистика − штрафы − хранение. Дополнительная логистика (rebill) показывается отдельно. Это не подтверждение банковской выплаты.</p>}
       {!cogsComplete && <p className="muted">Себестоимость заполнена/подтверждена для {data.cogs_costed_products || 0} из {data.cogs_products_total || 0} товаров. Расчёт прибыли неполный: возвраты без подтверждённой FIFO-связи требуют проверки.</p>}
       {data.unallocated_operations > 0 && <p className="muted">{data.unallocated_operations} операций WB без артикула сохранены отдельно. Их расходы входят в общий отчёт, но не распределяются между товарами.</p>}
