@@ -1315,16 +1315,18 @@ function Stock({ ctx }) {
     <div className="panel">
       <div className="panel-heading">
         <h2>Остатки товаров</h2>
-        {can(ctx.auth, "inventory", true) && (
-          <button className="secondary" onClick={() => ctx.open("adjustments")}>
-            <Plus size={16} />
-            Корректировка
-          </button>
-        )}
+        <div className="stock-actions">
+          {can(ctx.auth, "sales", true) && <button className="primary" onClick={() => {
+            const account = (ctx.refs.accounts || []).find(a => a.channel === "Offline" && (!ctx.company || a.company_id == ctx.company));
+            if (!account) { ctx.notify("Для офлайн-продаж сначала добавьте канал Offline в разделе магазинов"); return; }
+            ctx.open("sales", {account_id:account.id, company_id:ctx.company || account.company_id});
+          }}><Plus size={16}/>Записать офлайн-продажу</button>}
+          {can(ctx.auth, "inventory", true) && <button className="secondary" onClick={() => ctx.open("adjustments")}><Plus size={16}/>Корректировка</button>}
+        </div>
       </div>
       <p className="panel-note">
-        Выберите тип движения. Списание и брак уменьшают склад и признают расход;
-        обычная инвентаризационная корректировка не маскируется под операционный расход. Причина обязательна.
+        Это общий физический остаток компании для всех каналов. При офлайн-продаже внесите товар, количество, цену и дату — проведённая продажа спишет товар со склада и попадёт в канал «Offline». Возврат денег сам по себе склад не пополняет.
+        Для пересчёта остатков используйте корректировку; списание и брак требуют причины.
       </p>
       {loading ? (
         <Spinner />
@@ -1853,6 +1855,14 @@ function DataPage({ page, ctx }) {
     can(ctx.auth, cap, true) &&
     (!["companies", "users"].includes(entity) ||
       ctx.auth.user.role === "Owner");
+  const openSale = (channel = "Offline") => {
+    const account = (ctx.refs.accounts || []).find(a => a.channel === channel && (!ctx.company || a.company_id == ctx.company));
+    if (!account) {
+      ctx.open("accounts", {company_id:ctx.company || ctx.refs.companies?.[0]?.id || "", name:channel === "Offline" ? "Офлайн продажи" : "B2B продажи", channel});
+      return;
+    }
+    ctx.open("sales", {account_id:account.id, company_id:ctx.company || account.company_id});
+  };
   const remove = async (row) => {
     if (
       !confirm(
@@ -2097,7 +2107,8 @@ function DataPage({ page, ctx }) {
           данных». Сезонность и отзывы сохраняются в исходных данных.
         </div>
       )}
-      {channels.includes(page) && <MarketplaceInbox channel={page} ctx={ctx} />}
+      {channels.includes(page) && ["Kaspi", "Wildberries", "Ozon"].includes(page) && <MarketplaceInbox channel={page} ctx={ctx} />}
+      {page === "Offline" && <div className="info-banner offline-sales-help"><div><b>Продажа в магазине, по телефону или при самовывозе?</b><span>Нажмите «Записать офлайн-продажу», выберите товар, количество, цену и дату. После проведения продажа появится в учёте и уменьшит общий склад.</span></div><button className="primary" onClick={()=>openSale("Offline")}>Записать офлайн-продажу</button></div>}
       <div className="panel">
         {channels.includes(page) && <div className="section-heading"><div><h3>Подтверждённые продажи</h3><p className="muted">Только операции, проведённые финансовым ядром QOR. Заказ сам по себе не превращается в выручку.</p></div></div>}
         <div className="table-toolbar">
@@ -2127,20 +2138,13 @@ function DataPage({ page, ctx }) {
             {channels.includes(page) && writable && (
               <button
                 className="primary"
-                onClick={() =>
-                  ctx.open("sales", {
-                    account_id: ctx.refs.accounts?.find(
-                      (a) =>
-                        a.channel === page &&
-                        (!ctx.company || a.company_id == ctx.company),
-                    )?.id,
-                  })
-                }
+                onClick={() => openSale(page)}
               >
                 <Plus size={16} />
-                Продажа
+                {page === "Offline" ? "Записать офлайн-продажу" : "Продажа"}
               </button>
             )}
+            {page === "sales" && writable && <button className="primary" onClick={()=>openSale("Offline")}><Plus size={16}/>Записать офлайн-продажу</button>}
             {entity === "documents" && writable && (
               <label className="primary file-button">
                 <Upload size={16} />
@@ -2736,15 +2740,36 @@ function EditModal({ kind, item, ctx, close }) {
           ))}
         </div>
         {kind === "products" && <div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div>}
-        {kind === "products" && <section className="marketplace-sync-settings"><h3>Распределение остатка по магазинам</h3><p className="muted">Распределите физический остаток между площадками, чтобы не открыть двойные продажи. Общая сумма выделений не может превышать доступный склад. Себестоимость остаётся в QOR.</p>{(ctx.refs.accounts || []).filter(a=>a.active !== false && ["Kaspi","Wildberries"].includes(a.channel) && (!values.company_id || String(a.company_id) === String(values.company_id))).map(account=><div key={account.id} className="marketplace-allocation"><b>{account.channel} · {account.name}</b>{account.channel === "Kaspi" ? <label>Количество для Kaspi<input type="number" min="0" step="1" value={outboundAllocations[String(account.id)]?.quantity ?? outboundAllocations[String(account.id)] ?? ""} onChange={e=>setOutboundAllocations(old=>({...old,[String(account.id)]:{quantity:e.target.value === "" ? "" : Number(e.target.value)}}))} placeholder="0"/></label> : <>{[...new Set((item?.marketplace_mappings || []).filter(m=>m.account_id === account.id && m.external_key.startsWith("size:")).map(m=>m.external_key.slice(5)))].map(chrt=><label key={chrt}>WB размер · chrtId {chrt}<input type="number" min="0" step="1" value={outboundAllocations[String(account.id)]?.sizes?.[chrt] ?? ""} onChange={e=>setOutboundAllocations(old=>({...old,[String(account.id)]:{...(old[String(account.id)] || {}),sizes:{...(old[String(account.id)]?.sizes || {}),[chrt]:e.target.value === "" ? "" : Number(e.target.value)}}}))} placeholder="0"/></label>)}{!(item?.marketplace_mappings || []).some(m=>m.account_id === account.id && m.external_key.startsWith("size:"))&&<small>Сначала синхронизируйте и сопоставьте карточку и размер WB.</small>}</>}<small>Сопоставленные ID: {(item?.marketplace_mappings || []).filter(m=>m.account_id === account.id).map(m=>m.external_key).join(", ") || "нет"}</small></div>)}</section>}
         {kind === "products" && <section className="marketplace-sync-settings">
-          <h3>ID товара в Kaspi / Wildberries</h3>
-          <p className="muted">У каждой площадки свой ID. Привяжите их к одной карточке QOR, чтобы синхронизированные продажи относились к одному SKU. Привязка сохраняет идентификатор и сама не меняет отчёты или остаток.</p>
+          <h3>Остаток для магазинов</h3>
+          <p className="muted">Склад QOR — общий. Здесь задаётся безопасный лимит, который можно выставить на каждом магазине. Сумма лимитов не должна превышать доступный склад. Сохранение карточки само по себе не публикует товар на маркетплейсе.</p>
+          {(ctx.refs.accounts || []).filter(a=>a.active !== false && ["Kaspi","Wildberries"].includes(a.channel) && (!values.company_id || String(a.company_id) === String(values.company_id))).map(account=>{
+            const mappings = (item?.marketplace_mappings || []).filter(m=>m.account_id === account.id);
+            const allocation = outboundAllocations[String(account.id)] || {};
+            const sizes = [...new Set([
+              ...mappings.filter(m=>m.external_key.startsWith("size:")).map(m=>m.external_key.slice(5)),
+              ...marketplaceIdRows.filter(row=>String(row.account_id)===String(account.id) && row.id_type==="size" && /^\d+$/.test(row.external_id.trim())).map(row=>row.external_id.trim()),
+            ])];
+            const updateQuantity = value => setOutboundAllocations(old=>({...old,[String(account.id)]:{...(old[String(account.id)] || {}),quantity:value === "" ? "" : Number(value)}}));
+            return <div key={account.id} className="marketplace-allocation">
+              <b>{account.channel} · {account.name}</b>
+              {account.channel !== "Wildberries" || sizes.length === 0
+                ? <label className="marketplace-quantity">Лимит остатка для магазина<input aria-label={`Лимит остатка ${account.channel} ${account.name}`} type="number" min="0" step="1" value={allocation.quantity ?? outboundAllocations[String(account.id)] ?? ""} onChange={e=>updateQuantity(e.target.value)} placeholder="0"/></label>
+                : <div className="marketplace-size-allocation"><strong>Распределите остаток по размерам WB</strong><div>{sizes.map(chrt=><label key={chrt}>Размер · chrtId {chrt}<input aria-label={`Остаток WB для размера ${chrt}`} type="number" min="0" step="1" value={allocation.sizes?.[chrt] ?? ""} onChange={e=>setOutboundAllocations(old=>({...old,[String(account.id)]:{...(old[String(account.id)] || {}),quantity:0,sizes:{...(old[String(account.id)]?.sizes || {}),[chrt]:e.target.value === "" ? "" : Number(e.target.value)}}}))} placeholder="0"/></label>)}</div></div>}
+              <small className="marketplace-account-status">{mappings.length ? `Карточка связана · ${mappings.map(m=>m.external_key).join(", ")}` : "Карточка не связана. После создания товара привяжите SKU / ID существующей карточки в блоке ниже."}</small>
+              {account.channel === "Wildberries" && sizes.length === 0 && <small className="marketplace-account-status">WB отправляет остаток по размерам. После привязки карточки и chrtId добавьте остаток для каждого размера. Пока размер не сопоставлен, в WB ничего не отправляется.</small>}
+              {account.channel === "Kaspi" && <small className="marketplace-account-status">Kaspi получает связанные товары через настроенный прайс-лист магазина. Проверьте подключение и SKU в интеграции.</small>}
+            </div>;
+          })}
+        </section>}
+        {kind === "products" && <section className="marketplace-sync-settings">
+          <h3>Связать существующие карточки</h3>
+          <p className="muted">Создайте товар в QOR один раз, затем добавьте ID существующих карточек Kaspi и WB к этой же карточке. QOR не создаёт карточки на площадках: публикация там требует категории, характеристик, фотографий и подтверждения в кабинете маркетплейса.</p>
           {(item?.marketplace_mappings || []).map((mapping, index) => <div className="marketplace-allocation" key={`${mapping.account_id}:${mapping.external_key}:${index}`}><b>{(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.channel || mapping.channel} · {(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.name || `магазин ${mapping.account_id}`}</b><small>{mapping.external_key}</small></div>)}
           {marketplaceIdRows.map((row,index)=><div className="marketplace-allocation" key={index}>
             <label>Магазин<select value={row.account_id} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,account_id:e.target.value}:x))}><option value="">Выберите магазин</option>{(ctx.refs.accounts || []).filter(a=>a.active!==false && ["Kaspi","Wildberries","Ozon"].includes(a.channel) && (!values.company_id || String(a.company_id)===String(values.company_id))).map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select></label>
             <label>Тип ID<select value={row.id_type} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,id_type:e.target.value}:x))}><option value="product">ID карточки товара</option><option value="sku">Артикул / seller SKU</option><option value="barcode">Штрихкод</option><option value="size">ID размера WB (chrtId)</option></select></label>
-            <label>ID на площадке<input value={row.external_id} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,external_id:e.target.value}:x))} placeholder="Введите внешний ID" autoComplete="off"/></label>
+            <label>{row.id_type === "size" ? "ID размера WB (chrtId)" : "ID на площадке"}<input type={row.id_type === "size" ? "number" : "text"} inputMode={row.id_type === "size" ? "numeric" : undefined} min={row.id_type === "size" ? "1" : undefined} value={row.external_id} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,external_id:e.target.value}:x))} placeholder={row.id_type === "size" ? "Например, 123456" : "Введите внешний ID"} autoComplete="off"/></label>
             {marketplaceIdRows.length>1&&<button type="button" className="secondary" onClick={()=>setMarketplaceIdRows(old=>old.filter((_,i)=>i!==index))}>Убрать</button>}
           </div>)}
           <button type="button" className="secondary" onClick={()=>setMarketplaceIdRows(old=>[...old,{account_id:"",id_type:"product",external_id:""}])}>Добавить ID другого магазина</button>
