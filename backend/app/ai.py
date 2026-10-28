@@ -2,6 +2,7 @@ import os, json, base64
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from io import BytesIO
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import select, func
@@ -10,7 +11,8 @@ from .security import require, scope
 from .models import Document, Product, Account, MarketplaceRecord, MarketplaceProductMapping, MarketplaceProductCost, business_today
 from . import action_engine
 
-API = "https://api.openai.com/v1"
+ANTHROPIC_MESSAGES_API = "https://api.anthropic.com/v1/messages"
+OPENAI_IMAGES_API = "https://api.openai.com/v1"
 
 
 AI_AGENTS = {
@@ -27,41 +29,204 @@ def agent_catalog():
 
 
 def key():
-    k = os.getenv("OPENAI_API_KEY")
-    if not k:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
         raise HTTPException(
-            409, "OPENAI_API_KEY не задан. Данные и обычная аналитика доступны без AI."
+            409, "ANTHROPIC_API_KEY не задан. Обычная аналитика доступна без Claude AI."
         )
-    return k
+    return api_key
+
+
+def image_key():
+    api_key = os.getenv("OPENAI_IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            409, "Для редактирования изображений нужен OPENAI_IMAGE_API_KEY или legacy OPENAI_API_KEY."
+        )
+    return api_key
+
+
+def _decode_data_uri(value):
+    if not isinstance(value, str) or not value.startswith("data:") or "," not in value:
+        raise HTTPException(422, "Некорректное AI-вложение")
+    header, encoded = value.split(",", 1)
+    if ";base64" not in header:
+        raise HTTPException(422, "AI-вложение должно быть в формате base64")
+    media_type = header[5:].split(";", 1)[0].lower()
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except Exception:
+        raise HTTPException(422, "Некорректное AI-вложение")
+    return media_type, raw
+
+
+def _xlsx_as_text(raw, filename):
+    try:
+        from openpyxl import load_workbook
+        workbook = load_workbook(BytesIO(raw), read_only=True, data_only=True)
+        sections = []
+        for sheet in workbook.worksheets[:10]:
+            sections.append("Лист: " + str(sheet.title)[:120])
+            for row_index, row in enumerate(sheet.iter_rows(values_only=True)):
+                if row_index >= 1000:
+                    sections.append("[дальнейшие строки листа пропущены]")
+                    break
+                values = ["" if value is None else str(value)[:1000] for value in row[:40]]
+                if any(values):
+                    sections.append(" | ".join(values))
+                if sum(map(len, sections)) > 75000:
+                    sections.append("[таблица сокращена по размеру]")
+                    break
+        workbook.close()
+        return "Содержимое XLSX " + filename + ":\n" + "\n".join(sections)[:80000]
+    except Exception:
+        raise HTTPException(422, "Не удалось прочитать XLSX-вложение")
+
+
+def _anthropic_content(content):
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content or "")
+    blocks = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind in {"input_text", "text"}:
+            blocks.append({"type": "text", "text": str(part.get("text") or "")})
+        elif kind == "input_image":
+            media_type, raw = _decode_data_uri(part.get("image_url"))
+            if media_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
+                raise HTTPException(422, "Claude поддерживает JPEG, PNG, GIF и WebP изображения")
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64.b64encode(raw).decode("ascii"),
+                },
+            })
+        elif kind == "input_file":
+            filename = str(part.get("filename") or "attachment")[:240]
+            media_type, raw = _decode_data_uri(part.get("file_data"))
+            if media_type == "application/pdf":
+                blocks.append({
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                    },
+                })
+            elif media_type in {"text/csv", "text/plain", "application/csv"} or filename.lower().endswith(".csv"):
+                text = raw.decode("utf-8-sig", errors="replace")[:80000]
+                blocks.append({"type": "text", "text": "Содержимое файла " + filename + ":\n" + text})
+            elif "spreadsheetml" in media_type or filename.lower().endswith((".xlsx", ".xlsm")):
+                blocks.append({"type": "text", "text": _xlsx_as_text(raw, filename)})
+            else:
+                raise HTTPException(422, "Поддерживаются PDF, изображения, CSV и XLSX")
+    return blocks or [{"type": "text", "text": ""}]
+
+
+def _anthropic_messages(items):
+    messages = []
+
+    def append_message(role, content):
+        if messages and messages[-1]["role"] == role:
+            current = messages[-1]["content"]
+            if isinstance(current, str):
+                current = [{"type": "text", "text": current}]
+            addition = content if isinstance(content, list) else [{"type": "text", "text": content}]
+            current.extend(addition)
+            messages[-1]["content"] = current
+        else:
+            messages.append({"role": role, "content": content})
+
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        kind = item.get("type")
+        if role in {"user", "assistant"}:
+            append_message(role, _anthropic_content(item.get("content", "")))
+        elif kind == "function_call":
+            try:
+                arguments = json.loads(item.get("arguments") or "{}")
+            except (TypeError, ValueError):
+                arguments = {}
+            append_message("assistant", [{
+                "type": "tool_use",
+                "id": str(item.get("call_id") or "tool_use"),
+                "name": str(item.get("name") or ""),
+                "input": arguments if isinstance(arguments, dict) else {},
+            }])
+        elif kind == "function_call_output":
+            result = item.get("output", "")
+            if not isinstance(result, str):
+                result = json.dumps(result, ensure_ascii=False, default=str)
+            append_message("user", [{
+                "type": "tool_result",
+                "tool_use_id": str(item.get("call_id") or ""),
+                "content": result,
+            }])
+    if not messages:
+        messages.append({"role": "user", "content": ""})
+    return messages
 
 
 def call_response(input, instructions, tools=None, tool_choice=None, text_format=None):
-    api_key = key()
-    payload = {
-        "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-        "input": input,
-        "instructions": instructions,
-        "max_output_tokens": 1800,
-        "store": False,
+    request = {
+        "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5"),
+        "max_tokens": 1800,
+        "system": instructions,
+        "messages": _anthropic_messages(input),
     }
     if tools:
-        payload["tools"] = tools
-    if tool_choice:
-        payload["tool_choice"] = tool_choice
-    if text_format:
-        payload["text"] = {"format": text_format}
+        request["tools"] = [{
+            "name": tool.get("name"),
+            "description": tool.get("description", ""),
+            "input_schema": tool.get("input_schema") or tool.get("parameters") or {
+                "type": "object", "properties": {}, "required": [], "additionalProperties": False,
+            },
+        } for tool in tools if tool.get("name")]
+        if tool_choice == "required":
+            request["tool_choice"] = {"type": "any"}
+    if text_format and text_format.get("type") == "json_schema":
+        request["output_config"] = {
+            "format": {
+                "type": "json_schema",
+                "schema": text_format.get("schema") or {},
+            }
+        }
+    headers = {
+        "x-api-key": key(),
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
     with httpx.Client(timeout=75) as client:
-        res = client.post(
-            API + "/responses",
-            headers={"Authorization": "Bearer " + api_key},
-            json=payload,
-        )
-        if res.status_code >= 400:
+        response = client.post(ANTHROPIC_MESSAGES_API, headers=headers, json=request)
+        if response.status_code >= 400:
             raise HTTPException(
                 502,
-                f"AI provider error {res.status_code}; проверьте ключ, модель и лимит",
+                f"Claude provider error {response.status_code}; проверьте Anthropic API key, модель и лимит",
             )
-        return res.json()
+        body = response.json()
+    output = []
+    for part in body.get("content", []):
+        if part.get("type") == "text":
+            output.append({
+                "type": "message",
+                "content": [{"type": "output_text", "text": part.get("text", "")}],
+            })
+        elif part.get("type") == "tool_use":
+            output.append({
+                "type": "function_call",
+                "name": part.get("name", ""),
+                "arguments": json.dumps(part.get("input") or {}, ensure_ascii=False),
+                "call_id": part.get("id", ""),
+            })
+    return {"output": output}
 
 
 def output_text(res):
@@ -394,7 +559,7 @@ def designer(db, user, payload):
     count = max(1, min(int(payload.get("variants", 1)), 4))
     instruction = (modes[mode] + " " + prompt +
         " The uploaded image is the source of truth for product appearance. Do not change logo, shape, color, controls, labels, included accessories or technical characteristics unless explicitly requested. Do not invent text claims.")
-    api_key = key()
+    api_key = image_key()
     raw_source = Path(d.path).read_bytes()
     root = Path(os.getenv("UPLOAD_DIR", "./uploads")); root.mkdir(parents=True, exist_ok=True)
     docs=[]
@@ -402,7 +567,7 @@ def designer(db, user, payload):
         for _ in range(count):
             files={"image": (d.name or "product.png", raw_source, d.mime)}
             data={"model": os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1"), "prompt": instruction, "size":"1024x1024"}
-            r=client.post(API + "/images/edits", headers={"Authorization":"Bearer "+api_key}, data=data, files=files)
+            r=client.post(OPENAI_IMAGES_API + "/images/edits", headers={"Authorization":"Bearer "+api_key}, data=data, files=files)
             if r.status_code >= 400:
                 raise HTTPException(502, f"Image provider error {r.status_code}")
             item=r.json().get("data", [{}])[0]

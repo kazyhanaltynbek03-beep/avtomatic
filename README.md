@@ -1,6 +1,6 @@
 # QOR Business — AI Assistant + ERP
 
-Рабочий проект: React frontend, FastAPI backend, PostgreSQL, SQLAlchemy/Alembic, фоновые задания, FIFO-учёт, роли, импорт/экспорт и AI API layer. Готов к локальному запуску и развёртыванию для приёмки. Перед реальной эксплуатацией обязательна проверка на целевом PostgreSQL/сервере и настройка HTTPS.
+Рабочий проект: React frontend, FastAPI backend, PostgreSQL, SQLAlchemy/Alembic, фоновые задания, FIFO-учёт, роли, импорт/экспорт и Claude API layer. Готов к локальному запуску и развёртыванию для приёмки. Перед реальной эксплуатацией обязательна проверка на целевом PostgreSQL/сервере и настройка HTTPS.
 
 ## Быстрый запуск: Docker
 
@@ -68,7 +68,7 @@ python -m app.worker
 - Продажи, частичные возвраты в исходные партии, оплаты и задолженность B2B, документы-счета HTML, расходы и деньги отдельно от прибыли.
 - Dashboard с периодами, KPI, динамикой и каналами; P&L, стоимость склада, дебиторка, медленные товары, прогноз по фактическим продажам, предупреждения.
 - CSV/XLSX для товаров, продаж, изменений остатков, закупок, расходов, B2B, marketplace reports, банка: шаблон, mapping, preview, проверка, ошибки CSV, атомарное подтверждение, защита от дублей и формул в экспорте.
-- AI Assistant через ограниченный backend tool; карточки по характеристикам/фото; генерация изображения через Images API; очередь задач, статус и повтор. Калькулятор и прогноз не используют LLM.
+- AI Assistant через Claude Messages API с ограниченными backend tools; карточки по характеристикам/фото. AI Designer image editing is a separate optional OpenAI Images API integration. Калькулятор и прогноз не используют LLM.
 - Market Analyst: сохранение источников/дат/наблюдений, объяснимая оценка 0–100, «Недостаточно данных» при отсутствии показателей.
 - Файлы и документы с контролем доступа; Owner/Admin/Accountant/Manager/Warehouse/Marketing; Argon2, защищённые сессии, CSRF, audit log.
 - Адаптивный интерфейс desktop/tablet/mobile, поиск по справочникам, таблицы с пагинацией.
@@ -79,14 +79,15 @@ python -m app.worker
 
 | Для чего | Что получить |
 |---|---|
-| AI Assistant / карточки / дизайнер | OPENAI_API_KEY с доступом к выбранным моделям и оплачиваемым API-балансом; ChatGPT Plus не заменяет API-доступ |
+| AI Assistant / текстовые карточки | ANTHROPIC_API_KEY с активным Anthropic API access и billing; Claude subscription не заменяет API access |
+| AI Designer / редактирование изображений | OPENAI_IMAGE_API_KEY (или существующий OPENAI_API_KEY) и оплачиваемый Images API access |
 | Kaspi live integration | Токен продавца и доступ к нужным API своего магазина |
 | Wildberries live integration | Токен с правами на нужные seller/statistics/finance API |
 | Ozon live integration | Client-Id + Api-Key с нужными правами |
 
 **Важное ограничение:** Kaspi live API в этой версии поддерживает синхронизацию заказов, чтение деталей и состава, изменение документированных статусов, справочники каталога и импорт карточек. Цены и остатки Kaspi обновляются через XML-прайс-лист, а не через REST seller API; динамический QOR feed ещё не подключён. Документированные методы финансовых взаиморасчётов Kaspi seller API отсутствуют — используйте CSV/XLSX-выгрузки. См. [KASPI_API_SETUP.md](KASPI_API_SETUP.md). WB/Ozon функции доступны согласно разделам интеграций; CSV/XLSX остаётся fallback. Demo adapter не создаёт фальшивых продаж.
 
-AI API код реализован, но живые запросы не проверены без ключа. Проверен mock-контракт function calling, очередь и корректная ошибка при отсутствии ключа. AI-тексты и изображения — черновики для проверки владельцем; исходные финансовые числа выводятся отдельно.
+Claude Messages API code is implemented. Live calls require ANTHROPIC_API_KEY. The optional AI Designer uses OPENAI_IMAGE_API_KEY or the existing OPENAI_API_KEY. AI-тексты и изображения — черновики для проверки владельцем; исходные финансовые числа выводятся отдельно.
 
 ## Проверки
 
@@ -115,7 +116,7 @@ backend/
     security.py     RBAC, company scope, CSRF, audit
     importing.py    CSV/XLSX, mapping, preview, подтверждение
     connectors.py   контракты маркетплейсов, CSV/demo adapters
-    ai.py           controlled tool, Responses/Images API, калькулятор/прогноз
+    ai.py           controlled tool, Claude Messages API, optional OpenAI Images API, calculator/forecast
     worker.py       очередь заданий
     seed.py         bootstrap Owner и demo
   migrations/      Alembic migrations
@@ -136,7 +137,7 @@ docs/
 
 ## AI-команда
 
-Business Assistant усилен до команды из 6 специализированных AI-сотрудников: **Рик (AI-руководитель), Финансист, Аналитик, Закупщик, Маркетолог и Контент**. Владелец по умолчанию общается с Риком, но может открыть любого специалиста напрямую. Все шесть используют один серверный `OPENAI_API_KEY`; разделение выполняется ролями, системными инструкциями и контролируемыми backend tools. Критические финансовые показатели по-прежнему рассчитывает ERP, а не LLM. AI имеет read-only доступ к разрешённому snapshot и не проводит финансовые документы.
+Business Assistant усилен до команды из 6 специализированных AI-сотрудников: **Рик (AI-руководитель), Финансист, Аналитик, Закупщик, Маркетолог и Контент**. Владелец по умолчанию общается с Риком, но может открыть любого специалиста напрямую. Все шесть используют один серверный `ANTHROPIC_API_KEY`; разделение выполняется ролями, системными инструкциями и контролируемыми backend tools. Критические финансовые показатели по-прежнему рассчитывает ERP, а не LLM. AI имеет read-only доступ к разрешённому snapshot и не проводит финансовые документы.
 
 ## Accounting release gate
 
@@ -147,7 +148,7 @@ Business Assistant усилен до команды из 6 специализи�
 For Kaspi/Wildberries/Ozon exports use import kind `marketplace_reports`. Map `event_type`, `external_id`, `date`, `company_id`, `account_id`, `sku` and the event-specific fields. Supported event types are sale/return/stock (Russian aliases are accepted). Preview performs validation without posting financial records; confirmation posts the whole validated import in one transaction. Re-uploading an already committed identical report is rejected by fingerprint.
 
 ## AI Product Studio
-Content generation is grounded in verified ERP/supplier facts. Designer transformations require an uploaded real product image, support multiple marketplace creative modes and store generated images as review-required Documents. Configure server-side `OPENAI_API_KEY` and `OPENAI_IMAGE_MODEL`; never expose keys in the browser.
+Content generation is grounded in verified ERP/supplier facts. Designer transformations require an uploaded real product image, support multiple marketplace creative modes and store generated images as review-required Documents. Configure server-side `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` for text generation. Optional AI Designer image editing uses `OPENAI_IMAGE_API_KEY` and `OPENAI_IMAGE_MODEL`; never expose keys in the browser.
 
 ### Accounting / Bank / Documents foundation
 QOR now includes company-scoped counterparties, bank transactions with reconciliation state, versionable tax-rule records with mandatory accountant approval flag, generated business-document records, and an accounting summary endpoint for bank flow, receivables and payables. Tax rules are configuration only: AI is not allowed to make a final tax/legal decision. Bank API remains optional; CSV/XLSX is the fallback path.

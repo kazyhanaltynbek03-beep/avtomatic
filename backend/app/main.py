@@ -2804,7 +2804,7 @@ def settings(u=Depends(current_user), db=Depends(get_db)):
     obj = db.get(Setting, 1)
     return {
         **dump(obj),
-        "ai_enabled": bool(os.getenv("OPENAI_API_KEY")),
+        "ai_enabled": bool(os.getenv("ANTHROPIC_API_KEY")),
         "demo": os.getenv("DEMO_MODE", "false").strip().lower() == "true",
     }
 
