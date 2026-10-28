@@ -37,6 +37,7 @@ export const groups = [
     "Операции",
     [
       ["products", "Товары / SKU", Package, "catalog"],
+      ["marketplace-products", "Карточки маркетплейсов", Store, "catalog"],
       ["stock", "Единый склад", Warehouse, "inventory"],
       ["movements", "Движения склада", ArrowLeftRight, "inventory"],
       ["sales", "Все продажи", Receipt, "sales"],

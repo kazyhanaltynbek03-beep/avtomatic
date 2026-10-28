@@ -64,6 +64,9 @@ class LoginAttempt(Record, Base):
 class Product(Record, Base):
     __tablename__ = "products"
     sku: Mapped[str] = mapped_column(String(100), unique=True)
+    # Master SKUs are created by the business. Marketplace rows are legacy/imported
+    # catalogue records retained for reporting and remapping; they remain separate.
+    catalog_kind: Mapped[str] = mapped_column(String(20), default="master", server_default="master", nullable=False)
     name: Mapped[str] = mapped_column(String(200))
     category: Mapped[str] = mapped_column(String(100), default="")
     article: Mapped[str] = mapped_column(String(120), default="")

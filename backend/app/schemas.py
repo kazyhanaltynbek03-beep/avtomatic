@@ -17,6 +17,7 @@ class CompanyIn(Strict):
 
 class ProductIn(Strict):
     version: int | None = Field(default=None, ge=1)
+    catalog_kind: Literal["master", "marketplace"] | None = None
     description: str = Field(default="", max_length=10000)
     barcode: str = Field(default="", max_length=100)
     purchase_cost: int = Field(default=0, ge=0, le=10**14)
