@@ -2560,8 +2560,16 @@ function EditModal({ kind, item, ctx, close }) {
           for (const row of identifiers) await api(`/products/${saved.id}/marketplace-mappings`, {
             method:"POST", body:{account_id:Number(row.account_id), id_type:row.id_type, external_id:row.external_id.trim()},
           });
-        }
-        ctx.notify(editing ? "Изменения сохранены" : "Операция выполнена");
+          if (!editing) {
+            const matched = await api(`/products/${saved.id}/match-synced-marketplace-cards`, {method:"POST", body:{}});
+            const shops = (matched.accounts || []).map(x=>`${x.channel} · ${x.account_name}`).join(", ");
+            ctx.notify(matched.linked
+              ? `Товар создан. Найдены и связаны карточки по точному артикулу/штрихкоду: ${shops}. Продажи и остатки обновятся при обычной синхронизации.`
+              : matched.ambiguous?.length
+                ? "Товар создан. Найдено несколько карточек с этим артикулом; автопривязка пропущена, укажите ID нужной карточки вручную."
+                : "Товар создан. Точного совпадения в уже синхронизированных данных пока нет; проверьте SKU/артикул и запустите обычную синхронизацию.");
+          } else ctx.notify("Изменения сохранены");
+        } else ctx.notify(editing ? "Изменения сохранены" : "Операция выполнена");
       }
       close();
     } catch (e) {
@@ -2780,7 +2788,7 @@ function EditModal({ kind, item, ctx, close }) {
         </section>}
         {kind === "products" && <section className="marketplace-sync-settings">
           <h3>Связать существующие карточки</h3>
-          <p className="muted">Создайте товар в QOR один раз, затем добавьте ID существующих карточек Kaspi и WB к этой же карточке. QOR не создаёт карточки на площадках: публикация там требует категории, характеристик, фотографий и подтверждения в кабинете маркетплейса.</p>
+          <p className="muted">Сначала создайте карточку в Kaspi или Wildberries, затем товар в QOR. При сохранении QOR ищет точное совпадение по артикулу или штрихкоду среди уже загруженных данных магазинов и связывает найденные ID. Если карточка ещё не попала в синхронизацию, её можно указать вручную ниже. QOR ничего не публикует на площадки.</p>\n          <small className="marketplace-account-status">Автопоиск использует только уже полученные API-данные. Карточки Kaspi, отсутствующие в синхронизированных заказах/данных магазина, можно связать вручную после синхронизации.</small>
           {(item?.marketplace_mappings || []).map((mapping, index) => <div className="marketplace-allocation" key={`${mapping.account_id}:${mapping.external_key}:${index}`}><b>{(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.channel || mapping.channel} · {(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.name || `магазин ${mapping.account_id}`}</b><small>{mapping.external_key}</small></div>)}
           {marketplaceIdRows.map((row,index)=><div className="marketplace-allocation" key={index}>
             <label>Магазин<select value={row.account_id} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,account_id:e.target.value}:x))}><option value="">Выберите магазин</option>{(ctx.refs.accounts || []).filter(a=>a.active!==false && ["Kaspi","Wildberries","Ozon"].includes(a.channel) && (!values.company_id || String(a.company_id)===String(values.company_id))).map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select></label>
