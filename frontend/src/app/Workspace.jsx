@@ -1803,8 +1803,30 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
   </section>;
 }
 
+function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefresh}) {
+  const [filter,setFilter]=useState("all"),[reload,setReload]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const params=new URLSearchParams({channel,status_filter:filter,limit:"200"});
+  if(ctx.company) params.set("company_id",ctx.company);
+  if(selectedAccount) params.set("account_id",String(selectedAccount.id));
+  const data=useLoad("/marketplace-orders?"+params,`${ctx.refresh}:${reload}`);
+  const refresh=async()=>{
+    setBusy(true);setError("");
+    try {
+      await Promise.all(accounts.map(a=>api(channel==="Wildberries"?`/accounts/${a.id}/sync-now?background=true&sections=order_statuses`:`/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=created&force=true`,{method:"POST",timeoutMs:15000})));
+      setReload(v=>v+1);
+    } catch(e) {setError(e.message);} finally {setBusy(false);}
+  };
+  const summary=data.data?.summary||{};
+  return <section className="panel"><div className="section-heading"><div><h3>Заказы и товары в пути</h3><p className="muted">Статус берётся из API выбранных магазинов. Сумма заказа не считается выплатой; финансовые расчёты продаж остаются отдельными.</p></div>{canRefresh&&<button type="button" disabled={busy||!accounts.length} onClick={refresh}>{busy?"Обновляем…":"Обновить статусы API"}</button>}</div>
+    <div className="row-actions" role="group" aria-label="Фильтр статуса заказа">{[["all","Все"],["in_delivery","В доставке"],["delivered","Доставлены"],["waiting","Ожидают"],["canceled","Отменены"],["returns","Возвраты / брак"]].map(([id,label])=><button key={id} type="button" aria-pressed={filter===id} className={filter===id?"primary":""} onClick={()=>setFilter(id)}>{label}{id==="all"?` · ${data.data?.total||0}`:` · ${summary[id]||0}`}</button>)}</div>
+    {error&&<ErrorBox error={error}/ >}{data.loading?<Spinner/>:data.error?<ErrorBox error={data.error}/>:!data.data?.items?.length?<Empty text="Заказы для этого фильтра не найдены."/>:<div className="table-scroll"><table><thead><tr><th>Магазин</th><th>Дата</th><th>Заказ</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма заказа</th><th>Статус API</th><th>Учёт / деньги</th></tr></thead><tbody>{data.data.items.map((x,i)=><tr key={`${x.account_id}:${x.order_id}:${i}`}><td>{x.store}</td><td>{x.date?new Date(x.date).toLocaleString("ru-RU"):"—"}</td><td>{x.order_id}</td><td>{x.product}{x.sku&&<small className="muted"> · {x.sku}</small>}</td><td>{x.quantity??"—"}</td><td>{x.amount==null?"—":money(Math.round(Number(x.amount)*100))}</td><td><span className="pill">{x.status}</span></td><td><strong>{x.finance_status}</strong><small className="muted">{x.erp_status}</small></td></tr>)}</tbody></table></div>}
+    <p className="muted">Kaspi подтверждает статусы заказа, но не банковское зачисление. Для WB финансовая строка означает наличие строки отчёта реализации, а не подтверждение выплаты банком.</p>
+  </section>;
+}
+
 function MarketplaceInbox({ channel, ctx }) {
   const [wbTab,setWbTab] = useState("weekly");
+  const [ordersMode,setOrdersMode] = useState(false);
   const [kaspiReportMode,setKaspiReportMode] = useState("issued");
   const [summaryReload,setSummaryReload] = useState(0);
   const [kpiDetail,setKpiDetail] = useState(null);
@@ -1913,6 +1935,8 @@ function MarketplaceInbox({ channel, ctx }) {
   ];
   return <div className="panel">
     <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
+    {(channel === "Kaspi" || channel === "Wildberries") && <div className="row-actions" role="group" aria-label="Отчёты маркетплейса"><button type="button" className={!ordersMode?"primary":""} aria-pressed={!ordersMode} onClick={()=>setOrdersMode(false)}>Продажи и финансы</button><button type="button" className={ordersMode?"primary":""} aria-pressed={ordersMode} onClick={()=>setOrdersMode(true)}>Заказы и доставка</button></div>}
+    {ordersMode ? <MarketplaceOrdersReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount} canRefresh={can(ctx.auth,"accounts",true)}/> : <>
     {channel === "Kaspi" && <div className="row-actions kaspi-report-controls" role="group" aria-label="Режим отчёта Kaspi">
       <button type="button" className={kaspiReportMode==="issued"?"primary":""} aria-pressed={kaspiReportMode==="issued"} onClick={()=>setKaspiReportMode("issued")}>Продажи по дате выдачи</button>
       <button type="button" className={kaspiReportMode==="created"?"primary":""} aria-pressed={kaspiReportMode==="created"} onClick={()=>setKaspiReportMode("created")}>Заказы по дате создания</button>
@@ -1964,6 +1988,7 @@ function MarketplaceInbox({ channel, ctx }) {
     {state.loading ? <Spinner/> : <Table raw rows={state.data?.items || []} cols={["reference","product_name","sku","quantity","amount","currency","marketplace_status","status","stage_status","projection_reason"]} actions={row=>row.external_keys?.length && !["mapped_product","projected"].includes(row.status) && can(ctx.auth,"accounts",true) ? <button disabled={busy} onClick={()=>{setSelected(row);setKey(row.external_keys[0]);setProduct("");}}>Привязать товар</button> : null}/>}
     {selected && <div className="panel"><h3>Привязка товара</h3><label>Идентификатор источника<select value={key} onChange={e=>setKey(e.target.value)}>{selected.external_keys.map(k=><option key={k}>{k}</option>)}</select></label><label>Товар ERP<select value={product} onChange={e=>setProduct(e.target.value)}><option value="">Выберите товар</option>{(ctx.refs.products || []).map(p=><option value={p.id} key={p.id}>{p.sku} · {p.name}</option>)}</select></label><button className="primary" disabled={busy || !product} onClick={bind}>Сохранить привязку</button><button onClick={()=>setSelected(null)}>Закрыть</button></div>}
     <div className="row-actions"><button disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>Предыдущие</button><span>{offset+1}–{Math.min(offset+30,state.data?.total || 0)}</span><button disabled={offset+30 >= (state.data?.total || 0)} onClick={()=>setOffset(offset+30)}>Следующие</button></div>
+    </>}
     </>}
     {kpiDetail && (kpiDetail.source === "api" ? <MarketplaceRecordDetails ctx={ctx} detail={kpiDetail} onClose={()=>setKpiDetail(null)}/> : <ReportDetails ctx={ctx} detail={{...kpiDetail,account_id:selectedAccount?.id}} onClose={()=>setKpiDetail(null)}/>)}
   </div>;
