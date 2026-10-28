@@ -61,7 +61,7 @@ def sync_status_for_display(account, at=None):
         return "failed", "SYNC_TIMEOUT: синхронизация давно не обновлялась; запустите её повторно"
     return status, error
 WB_DEFAULT_SYNC_SECTIONS = ("new_orders", "order", "sale")
-WB_ALLOWED_SYNC_SECTIONS = frozenset(("new_orders", "order", "sale", "realization", "stocks", "products"))
+WB_ALLOWED_SYNC_SECTIONS = frozenset(("new_orders", "order", "sale", "realization", "stocks", "products", "order_statuses"))
 
 
 def _wb_weekly_loop():
@@ -474,6 +474,61 @@ def marketplace_records(
             "payload": payload,
         })
     return {"items": jsonable_encoder(rows), "total": count}
+
+
+@app.get("/api/marketplace-orders")
+def marketplace_orders_report(channel: str = Query(...), company_id: int | None = None,
+    account_id: int | None = None, status_filter: str = "all",
+    limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+    u=Depends(current_user), db=Depends(get_db)):
+    """Marketplace order lifecycle view; values are operational, not booked cash."""
+    require(u, "analytics")
+    if channel not in ("Kaspi", "Wildberries"): raise HTTPException(422, "Поддерживаются Kaspi и Wildberries")
+    aq=select(Account).where(Account.channel==channel,Account.active.is_(True))
+    if u.role!="Owner": aq=aq.where(Account.company_id.in_(u.company_ids or []))
+    if company_id is not None: scope(u,company_id); aq=aq.where(Account.company_id==company_id)
+    if account_id is not None: aq=aq.where(Account.id==account_id)
+    accounts=list(db.scalars(aq)); aids=[a.id for a in accounts]
+    if not aids: return {"items":[],"total":0,"summary":{},"stores":[]}
+    types=("order","order_entry") if channel=="Kaspi" else ("assembly_order","new_order","realization")
+    records=list(db.scalars(select(MarketplaceRecord).where(MarketplaceRecord.account_id.in_(aids),
+        MarketplaceRecord.payload["record_type"].as_string().in_(types)).order_by(MarketplaceRecord.id.desc())))
+    accs={a.id:a for a in accounts}; rows=[]
+    if channel=="Kaspi":
+        orders={}; lines={}
+        for rec in records:
+            p=rec.payload or {}; oid=str(p.get("order_id") or "")
+            if p.get("record_type")=="order": orders[(rec.account_id,oid)]=(rec,p)
+            elif p.get("record_type")=="order_entry": lines.setdefault((rec.account_id,oid),[]).append(p)
+        names={"APPROVED_BY_BANK":"Ожидает продавца","ACCEPTED_BY_MERCHANT":"Принят продавцом","COMPLETED":"Выдан покупателю","CANCELLED":"Отменён","CANCELLING":"Отмена в процессе","KASPI_DELIVERY_RETURN_REQUESTED":"Запрошен возврат","RETURNED":"Возвращён"}
+        for (aid,oid),(rec,p) in orders.items():
+            st=str(p.get("status") or ""); state=str(p.get("state") or "")
+            label=names.get(st,st or "Статус не передан")
+            if st=="ACCEPTED_BY_MERCHANT" and state: label += " · "+("Kaspi доставка" if state=="KASPI_DELIVERY" else "доставка продавца" if state=="DELIVERY" else state)
+            group="returns" if st in ("CANCELLING","KASPI_DELIVERY_RETURN_REQUESTED","RETURNED") else "canceled" if st=="CANCELLED" else "delivered" if st=="COMPLETED" else "in_delivery" if st=="ACCEPTED_BY_MERCHANT" else "waiting"
+            for line in lines.get((aid,oid)) or [None]:
+                l=line or {}; rows.append({"account_id":aid,"store":accs[aid].name,"order_id":oid,"date":p.get("creation_date"),"product":l.get("product_name") or "—","sku":l.get("sku") or "","quantity":l.get("quantity"),"amount":l.get("total_price") or p.get("total_price"),"status":label,"group":group,"erp_status":"Проведено в ERP" if rec.status=="projected" else ("Ожидает проведения в ERP" if st=="COMPLETED" else "Не проводится до завершения заказа"),"finance_status":"Kaspi API заказа не подтверждает денежное зачисление","finance_amount":None})
+    else:
+        orders={}; finance={}
+        for rec in records:
+            p=rec.payload or {}; typ=p.get("record_type")
+            if typ in ("assembly_order","new_order"):
+                key=(rec.account_id,str(p.get("id") or p.get("rid") or ""))
+                if typ=="assembly_order" or key not in orders: orders[key]=(rec,p)
+            elif typ=="realization":
+                k=str(p.get("srid") or p.get("rid") or "")
+                if k: finance[(rec.account_id,k)]=p
+        sup={"new":"Новый заказ","confirm":"Подтверждён, сборка","complete":"Передан в доставку","cancel":"Отменён продавцом","cancel_carrier":"Отменён перевозчиком"}
+        wb={"waiting":"Ожидает передачи WB","sorted":"Сортируется","sold":"Выкуплен","canceled":"Отменён","canceled_by_client":"Отменён клиентом","declined_by_client":"Отклонён клиентом","defect":"Брак","ready_for_pickup":"В ПВЗ, ждёт покупателя","postponed_delivery":"Доставка перенесена","accepted_by_carrier":"Принят перевозчиком","sent_to_carrier":"Передан перевозчику","canceled_by_carrier":"Отменён перевозчиком"}
+        for (aid,oid),(rec,p) in orders.items():
+            s=str(p.get("supplierStatus") or ""); w=str(p.get("wbStatus") or ""); label=wb.get(w) or sup.get(s) or "Статус пока не передан"
+            group="returns" if w=="defect" else "canceled" if "cancel" in (w or s) else "delivered" if w in ("sold","ready_for_pickup") else "in_delivery" if w in ("sorted","accepted_by_carrier","sent_to_carrier","postponed_delivery") or s=="complete" else "waiting"
+            fp=finance.get((aid,str(p.get("rid") or "")))
+            rows.append({"account_id":aid,"store":accs[aid].name,"order_id":str(p.get("id") or oid),"date":p.get("createdAt"),"product":p.get("article") or "—","sku":", ".join(map(str,p.get("skus") or [])),"quantity":1,"amount":None,"status":label,"group":group,"erp_status":"Заказ не считается продажей до подтверждения финансовой строки","finance_status":"Строка отчёта WB найдена" if fp else ("Ожидает строки финансового отчёта WB" if group=="delivered" else "Нет финансовой строки"),"finance_amount":(fp.get("forPay") or fp.get("ppvzForPay") or fp.get("retailAmount")) if fp else None})
+    summary={k:sum(1 for r in rows if r["group"]==k) for k in ("in_delivery","delivered","waiting","canceled","returns")}
+    if status_filter!="all": rows=[r for r in rows if r["group"]==status_filter]
+    rows.sort(key=lambda r:str(r.get("date") or ""),reverse=True); total=len(rows)
+    return {"items":rows[offset:offset+limit],"total":total,"summary":summary,"stores":[{"id":a.id,"name":a.name,"sync_status":a.sync_status,"last_sync":a.last_sync} for a in accounts]}
 
 
 @app.get("/api/marketplace-products")
@@ -4021,7 +4076,8 @@ def _perform_marketplace_sync(db, u, acc, sections=None):
                     logger.exception("WB section %s failed for account %s", section, account_id)
             # One idempotent ERP projection after all remote streams have finished.
             # This avoids scanning the full staging history six times per sync.
-            projection = marketplace_pipeline.project_account(db, u, acc) if total_records else {'projected':0,'pending_erp':0}
+            financial_sections = any(section != 'order_statuses' for section in selected_sections)
+            projection = marketplace_pipeline.project_account(db, u, acc) if total_records and financial_sections else {'projected':0,'pending_erp':0}
             acc = db.get(Account, account_id)
             acc.last_sync = now()
             acc.sync_status = 'failed' if successful_sections == 0 else ('partial' if warnings else 'done')

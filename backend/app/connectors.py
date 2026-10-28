@@ -531,6 +531,8 @@ class KaspiConnector(Connector):
 class WildberriesConnector(Connector):
     provider = 'Wildberries'
     new_orders_url = 'https://marketplace-api.wildberries.ru/api/v3/orders/new'
+    assembly_orders_url = 'https://marketplace-api.wildberries.ru/api/v3/orders'
+    assembly_order_status_url = 'https://marketplace-api.wildberries.ru/api/v3/orders/status'
     stats_base = 'https://statistics-api.wildberries.ru'
     # Current documented Finance API period method; the legacy statistics-api
     # reportDetailByPeriod endpoint is deprecated and no longer used.
@@ -610,7 +612,7 @@ class WildberriesConnector(Connector):
         url = "https://marketplace-api.wildberries.ru/api/v3/stocks/" + str(int(warehouse_id))
         return self._request(url, "PUT", {"stocks": rows}, interval=0.6)
 
-    sections = ("new_orders", "order", "sale", "realization", "stocks", "products")
+    sections = ("new_orders", "order", "sale", "realization", "stocks", "products", "order_statuses")
 
     def fetch_section_pages(self, section, cursor=None):
         """Yield bounded WB pages so staging can commit progress incrementally.
@@ -631,6 +633,62 @@ class WildberriesConnector(Connector):
         def emit(items, next_state, warnings=None):
             return SyncResult('wildberries', items, f'Wildberries {section}: {len(items)} записей.',
                               json.dumps(next_state, separators=(',', ':')), warnings or [])
+
+        if section == 'order_statuses':
+            # The API returns order details for the last three months in
+            # 30-calendar-day windows; current statuses are fetched by IDs.
+            section_run = (state.get('_sections') or {}).get('order_statuses') or {}
+            cursor = state.get('_order_statuses_cursor') if section_run.get('pages') else None
+            if not isinstance(cursor, dict):
+                end_ts = int(now.timestamp())
+                start_day = (now.date() - timedelta(days=89))
+                start_ts = int(datetime(start_day.year, start_day.month, start_day.day, tzinfo=timezone.utc).timestamp())
+                cursor = {'from': start_ts, 'to': end_ts, 'next': 0}
+            day_limit = 30 * 86400
+            window_from = int(cursor.get('from') or 0)
+            window_to = min(int(cursor.get('to') or now.timestamp()), window_from + day_limit - 1)
+            page_next = int(cursor.get('next') or 0)
+            query = urlencode({'limit': 1000, 'next': page_next, 'dateFrom': window_from, 'dateTo': window_to})
+            response = self._request(self.assembly_orders_url + '?' + query, interval=0.2)
+            orders = response.get('orders') or []
+            api_next = int(response.get('next') or 0)
+            if not orders or (api_next and api_next <= page_next):
+                if window_to >= int(cursor.get('to') or now.timestamp()):
+                    return
+                cursor = {'from': window_to + 1, 'to': int(cursor.get('to') or now.timestamp()), 'next': 0}
+                state['_order_statuses_cursor'] = cursor
+                yield emit([], state)
+                return
+            ids = [int(order['id']) for order in orders if order.get('id') is not None]
+            status_response = self._request(self.assembly_order_status_url, 'POST', {'orders': ids}, interval=0.2) if ids else {}
+            statuses = {str(item.get('id')): item for item in (status_response.get('orders') or [])}
+            out = []
+            for order in orders:
+                if order.get('id') is None:
+                    continue
+                order_id = str(order['id'])
+                status = statuses.get(order_id) or {}
+                # Retain only fields needed for lifecycle reporting; addresses,
+                # buyer comments, and other personal delivery details are omitted.
+                out.append({
+                    'external_id': 'assembly_order:' + order_id,
+                    'record_type': 'assembly_order', 'id': int(order['id']),
+                    'rid': order.get('rid'), 'orderUid': order.get('orderUid'),
+                    'createdAt': order.get('createdAt'), 'deliveryType': order.get('deliveryType'),
+                    'warehouseId': order.get('warehouseId'), 'officeId': order.get('officeId'),
+                    'article': order.get('article'), 'nmId': order.get('nmId'),
+                    'chrtId': order.get('chrtId'), 'skus': order.get('skus') or [],
+                    'supplyId': order.get('supplyId'), 'supplierStatus': status.get('supplierStatus'),
+                    'wbStatus': status.get('wbStatus'), 'isCancellable': status.get('isCancellable'),
+                    'isTransferable': status.get('isTransferable'), 'status_checked_at': now.isoformat(),
+                })
+            if api_next and api_next > page_next:
+                cursor['next'] = api_next
+            else:
+                cursor = {'from': window_to + 1, 'to': int(cursor.get('to') or now.timestamp()), 'next': 0}
+            state['_order_statuses_cursor'] = cursor
+            yield emit(out, state)
+            return
 
         if section == 'new_orders':
             p = self._request(self.new_orders_url)
