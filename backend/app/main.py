@@ -1750,8 +1750,10 @@ def match_synced_marketplace_cards(product_id: int, u=Depends(current_user), db=
         raise HTTPException(404, "Активный товар QOR не найден")
     codes = {str(v).strip().casefold() for v in (product.sku, product.article) if v and str(v).strip()}
     specs = product.specifications if isinstance(product.specifications, dict) else {}
+    raw_barcodes = specs.get("barcodes") or []
+    if isinstance(raw_barcodes, str): raw_barcodes = [raw_barcodes]
     barcodes = {re.sub(r"[^0-9A-Za-z]", "", str(v)).casefold()
-        for v in [specs.get("barcode"), *(specs.get("barcodes") or [])] if v and str(v).strip()}
+        for v in [specs.get("barcode"), *raw_barcodes] if v and str(v).strip()}
     if not codes and not barcodes:
         return {"linked": 0, "accounts": [], "ambiguous": [], "message": "Добавьте артикул или штрихкод"}
     aq = select(Account).where(Account.active.is_(True), Account.channel.in_(["Kaspi", "Wildberries"]))
@@ -1773,8 +1775,10 @@ def match_synced_marketplace_cards(product_id: int, u=Depends(current_user), db=
                 item_codes = {str(item.get(k)).strip().casefold() for k in
                     ("supplierArticle", "vendorCode", "sa_name", "offer_id", "merchant_code", "external_sku", "sku")
                     if item.get(k) and not str(item.get(k)).strip().isdigit()}
+                raw_listing_barcodes = item.get("barcodes") or []
+                if isinstance(raw_listing_barcodes, str): raw_listing_barcodes = [raw_listing_barcodes]
                 item_barcodes = {re.sub(r"[^0-9A-Za-z]", "", str(v)).casefold()
-                    for v in [item.get("barcode"), *(item.get("barcodes") or [])] if v}
+                    for v in [item.get("barcode"), *raw_listing_barcodes] if v}
                 matched_by = "артикул" if codes & item_codes else "штрихкод" if barcodes & item_barcodes else None
                 if not matched_by: continue
                 stable = next((k for k in keys if k.startswith("product:")), None) or next((k for k in keys if k.startswith("sku:")), None)
