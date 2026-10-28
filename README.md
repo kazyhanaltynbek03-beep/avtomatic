@@ -79,14 +79,15 @@ python -m app.worker
 
 | Для чего | Что получить |
 |---|---|
-| AI Assistant / карточки / дизайнер | ANTHROPIC_API_KEY с активным Anthropic API access и billing; Claude subscription не заменяет API access |
+| AI Assistant / текстовые карточки | ANTHROPIC_API_KEY с активным Anthropic API access и billing; Claude subscription не заменяет API access |
+| AI Designer / редактирование изображений | OPENAI_IMAGE_API_KEY (или существующий OPENAI_API_KEY) и оплачиваемый Images API access |
 | Kaspi live integration | Токен продавца и доступ к нужным API своего магазина |
 | Wildberries live integration | Токен с правами на нужные seller/statistics/finance API |
 | Ozon live integration | Client-Id + Api-Key с нужными правами |
 
 **Важное ограничение:** Kaspi live API в этой версии поддерживает синхронизацию заказов, чтение деталей и состава, изменение документированных статусов, справочники каталога и импорт карточек. Цены и остатки Kaspi обновляются через XML-прайс-лист, а не через REST seller API; динамический QOR feed ещё не подключён. Документированные методы финансовых взаиморасчётов Kaspi seller API отсутствуют — используйте CSV/XLSX-выгрузки. См. [KASPI_API_SETUP.md](KASPI_API_SETUP.md). WB/Ozon функции доступны согласно разделам интеграций; CSV/XLSX остаётся fallback. Demo adapter не создаёт фальшивых продаж.
 
-Claude Messages API code is implemented. Live calls require ANTHROPIC_API_KEY. The optional AI Designer still needs OPENAI_IMAGE_API_KEY. AI-тексты и изображения — черновики для проверки владельцем; исходные финансовые числа выводятся отдельно.
+Claude Messages API code is implemented. Live calls require ANTHROPIC_API_KEY. The optional AI Designer uses OPENAI_IMAGE_API_KEY or the existing OPENAI_API_KEY. AI-тексты и изображения — черновики для проверки владельцем; исходные финансовые числа выводятся отдельно.
 
 ## Проверки
 
