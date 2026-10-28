@@ -1318,7 +1318,10 @@ function Stock({ ctx }) {
         <div className="stock-actions">
           {can(ctx.auth, "sales", true) && <button className="primary" onClick={() => {
             const account = (ctx.refs.accounts || []).find(a => a.channel === "Offline" && (!ctx.company || a.company_id == ctx.company));
-            if (!account) { ctx.notify("Для офлайн-продаж сначала добавьте канал Offline в разделе магазинов"); return; }
+            if (!account) {
+              ctx.open("accounts", {company_id:ctx.company || ctx.refs.companies?.[0]?.id || "", name:"Офлайн продажи", channel:"Offline"});
+              return;
+            }
             ctx.open("sales", {account_id:account.id, company_id:ctx.company || account.company_id});
           }}><Plus size={16}/>Записать офлайн-продажу</button>}
           {can(ctx.auth, "inventory", true) && <button className="secondary" onClick={() => ctx.open("adjustments")}><Plus size={16}/>Корректировка</button>}
@@ -2472,7 +2475,7 @@ function EditModal({ kind, item, ctx, close }) {
   const generateProductDraft = async () => {
     setAiBusy(true); setError(""); setAiQuestions([]);
     try {
-      const draft = await api("/products/ai-draft", {method:"POST", body:{facts:aiFacts}});
+      const draft = await api("/products/ai-draft", {method:"POST", body:{facts:aiFacts,model_id:globalThis.localStorage.getItem("qor.ai.model")||undefined}});
       if (draft.name) set("name", draft.name);
       if (draft.description) set("description", draft.description);
       if (draft.specifications && Object.keys(draft.specifications).length) {
@@ -2900,12 +2903,13 @@ function EditModal({ kind, item, ctx, close }) {
 }
 function AIWorkspace({ ctx, enabled }) {
   const [agents,setAgents]=useState([]),[threads,setThreads]=useState([]),[thread,setThread]=useState(null),[messages,setMessages]=useState([]);
+  const [models,setModels]=useState([]),[modelId,setModelId]=useState(()=>globalThis.localStorage.getItem("qor.ai.model")||"");
   const [text,setText]=useState(""),[files,setFiles]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(""),[actions,setActions]=useState([]),[plans,setPlans]=useState([]),[jobState,setJobState]=useState(null);
   const agent=thread?.agent||"rick";
   const reloadThreads=()=>api("/ai/threads").then(d=>setThreads(d.items||[]));
   const reloadActions=()=>api("/ai/actions?status=pending").then(d=>setActions(d.items||[]));
   const reloadPlans=()=>api("/ai/plans?status=pending").then(d=>setPlans(d.items||[]));
-  useEffect(()=>{api("/ai/agents").then(d=>setAgents(d.items||[])).catch(()=>{});reloadThreads().catch(()=>{});reloadActions().catch(()=>{});reloadPlans().catch(()=>{});},[ctx.refresh]);
+  useEffect(()=>{api("/ai/agents").then(d=>setAgents(d.items||[])).catch(()=>{});api("/ai/models").then(d=>{setModels(d.items||[]);setModelId(v=>d.items?.some(m=>m.id===v)?v:(d.default||""))}).catch(()=>{});reloadThreads().catch(()=>{});reloadActions().catch(()=>{});reloadPlans().catch(()=>{});},[ctx.refresh]);
   useEffect(()=>{if(!thread)return;api(`/ai/threads/${thread.id}/messages`).then(d=>setMessages(d.items||[])).catch(e=>setError(e.message));},[thread]);
   const newChat=async(a="rick")=>{const t=await api("/ai/threads",{method:"POST",body:{agent:a,company_id:ctx.company?Number(ctx.company):null}});setThread(t);setMessages([]);reloadThreads()};
   const chooseAgent=async(a)=>{if(!thread)return newChat(a);const t=await api(`/ai/threads/${thread.id}`,{method:"PATCH",body:{agent:a}});setThread(t);reloadThreads()};
@@ -2913,7 +2917,7 @@ function AIWorkspace({ ctx, enabled }) {
   const send=async(e)=>{e.preventDefault();if((!text.trim()&&!files.length)||busy)return;if(!enabled){setError("AI API не подключён. Настройте OPENAI_API_KEY на сервере.");return}setError("");setBusy(true);try{let t=thread;if(!t)t=await api("/ai/threads",{method:"POST",body:{agent:"rick",company_id:ctx.company?Number(ctx.company):null}});
     const attachments=files.map(f=>({document_id:f.id,name:f.name,mime:f.mime}));const userMsg=await api(`/ai/threads/${t.id}/messages`,{method:"POST",body:{role:"user",content:text||"Проанализируй вложения",attachments}});
     setThread(t);setMessages(m=>[...m,userMsg]);const history=[...messages.slice(-12),userMsg].map(m=>({role:m.role,content:m.content}));
-    let j=await api("/jobs",{method:"POST",body:{kind:"assistant",payload:{question:text||"Проанализируй приложенные материалы",agent:t.agent,company_id:ctx.company?Number(ctx.company):null,start:ctx.start,end:ctx.end,thread_id:t.id,history,document_ids:attachments.map(x=>x.document_id)}}});
+    let j=await api("/jobs",{method:"POST",body:{kind:"assistant",payload:{question:text||"Проанализируй приложенные материалы",agent:t.agent,model_id:modelId,company_id:ctx.company?Number(ctx.company):null,start:ctx.start,end:ctx.end,thread_id:t.id,history,document_ids:attachments.map(x=>x.document_id)}}});
     setJobState(j);setText("");setFiles([]);
     if(["queued","running"].includes(j.status)) j=await waitForAIJob(j.id,setJobState);
     if(j.status!=="done") throw new Error(j.error||"AI-задание завершилось с ошибкой");
@@ -2925,7 +2929,7 @@ function AIWorkspace({ ctx, enabled }) {
   const planAct=async(id,verb)=>{setError("");try{await api(`/ai/plans/${id}/${verb}`,{method:"POST"});await Promise.all([reloadPlans(),reloadActions()]);ctx.bump?.()}catch(e){setError(e.message)}};
   return <div className="chat-shell">
     <aside className="chat-sidebar panel"><button className="primary chat-new" onClick={()=>newChat(agent)}><Plus size={17}/>Новый чат</button><div className="chat-history"><span className="eyebrow">ИСТОРИЯ</span>{threads.map(t=><button key={t.id} className={`chat-thread ${thread?.id===t.id?"active":""}`} onClick={()=>setThread(t)}><MessageSquare size={15}/><span><b>{t.title}</b><small>{agents.find(a=>a.id===t.agent)?.name||t.agent}</small></span></button>)}</div></aside>
-    <section className="chat-main panel"><header className="chat-head"><div><span className="eyebrow">QOR AI WORKSPACE</span><h2>{agents.find(a=>a.id===agent)?.name||"Рик"} · {agents.find(a=>a.id===agent)?.title||"AI-руководитель"}</h2></div><select value={agent} onChange={e=>chooseAgent(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name} — {a.title}</option>)}</select></header>
+    <section className="chat-main panel"><header className="chat-head"><div><span className="eyebrow">QOR AI WORKSPACE</span><h2>{agents.find(a=>a.id===agent)?.name||"Рик"} · {agents.find(a=>a.id===agent)?.title||"AI-руководитель"}</h2></div><div className="chat-selectors"><select aria-label="AI-модель" value={modelId} onChange={e=>{setModelId(e.target.value);globalThis.localStorage.setItem("qor.ai.model",e.target.value)}}>{models.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select><select aria-label="AI-специалист" value={agent} onChange={e=>chooseAgent(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name} — {a.title}</option>)}</select></div></header>
       {!enabled&&<div className="info-banner">Для живых ответов подключите OPENAI_API_KEY на сервере.</div>}
       {jobState&&["queued","running"].includes(jobState.status)&&<div className="info-banner">Задание #{jobState.id} выполняется в фоне. Страница остаётся доступной.</div>}<div className="chat-messages">{!messages.length&&<div className="chat-empty"><div className="ai-orb"><Sparkles size={28}/></div><h2>Чем помочь бизнесу?</h2><p>Пишите как в обычном мессенджере. Можно прикрепить фото, PDF, Excel/CSV и продолжать разговор в этом же чате.</p><div className="prompt-chips">{["Сколько чистой прибыли за месяц?","Какие товары нужно дозаказать?","Почему продажи WB снизились?","Подготовь карточку нового товара"].map(x=><button className="secondary" key={x} onClick={()=>setText(x)}>{x}</button>)}</div></div>}
         {messages.map(m=><div key={m.id} className={`chat-row ${m.role}`}><div className="chat-bubble"><div className="chat-role">{m.role==="user"?"Вы":agents.find(a=>a.id===(m.meta?.agent||agent))?.name||"QOR AI"}</div><div className="chat-text">{m.content}</div>{m.attachments?.length>0&&<div className="chat-attachments">{m.attachments.map((a,i)=><a key={i} href={`/api/documents/${a.document_id}/download`} target="_blank" rel="noreferrer"><ImageIcon size={15}/>{a.name}</a>)}</div>}{m.role==="assistant"&&<div className="chat-actions"><button onClick={()=>copy(m.content)}><Copy size={14}/>Копировать</button><button onClick={()=>setText("Переделай предыдущий ответ. ")}><RotateCcw size={14}/>Переделать</button></div>}</div></div>)}
@@ -2946,14 +2950,18 @@ function AIPage({ page, ctx, enabled }) {
     [busy, setBusy] = useState(false),
     [docs, setDocs] = useState([]),
     [agents, setAgents] = useState([]),
+    [models, setModels] = useState([]),
+    [modelId, setModelId] = useState(() => globalThis.localStorage.getItem("qor.ai.model") || ""),
     [agent, setAgent] = useState("rick"),
     [designMode, setDesignMode] = useState("main_photo"),
+    [marketplace, setMarketplace] = useState("kaspi"),
     [variants, setVariants] = useState(1),
     [products, setProducts] = useState([]),
     [productId, setProductId] = useState(""),
     [studioCard, setStudioCard] = useState(null);
   useEffect(() => {
     if (page === "assistant") api("/ai/agents").then((d) => setAgents(d.items || [])).catch(() => {});
+    if (page === "content") api("/ai/models").then((d) => { setModels(d.items || []); setModelId((v) => d.items?.some((m) => m.id === v) ? v : (d.default || "")); }).catch(() => {});
     api("/data/documents?limit=100").then((d) => setDocs(d.items)).catch(() => {});
     if (["content","designer"].includes(page)) api("/data/products?limit=200").then((d)=>setProducts(d.items||[])).catch(()=>{});
   }, [page, ctx.refresh]);
@@ -2985,6 +2993,8 @@ function AIPage({ page, ctx, enabled }) {
             start: ctx.start,
             end: ctx.end,
             mode: page === "designer" ? designMode : undefined,
+            marketplace: ["content", "designer"].includes(page) ? marketplace : undefined,
+            model_id: page === "content" ? modelId : undefined,
             variants: page === "designer" ? Number(variants) : undefined,
           },
         },
@@ -3076,6 +3086,8 @@ function AIPage({ page, ctx, enabled }) {
             />
           </label>
           {["content", "designer"].includes(page) && (<label>Товар из ERP<select value={productId} onChange={(e)=>setProductId(e.target.value)}><option value="">Выберите товар</option>{products.map(p=><option key={p.id} value={p.id}>{p.sku} · {p.name}</option>)}</select></label>)}
+          {["content", "designer"].includes(page) && (<label>Маркетплейс для карточки<select value={marketplace} onChange={(e)=>{setMarketplace(e.target.value);setStudioCard(null)}}><option value="kaspi">Kaspi</option><option value="wildberries">Wildberries</option><option value="ozon">Ozon</option></select></label>)}
+          {page === "content" && (<label>AI-модель<select value={modelId} onChange={(e)=>{setModelId(e.target.value);globalThis.localStorage.setItem("qor.ai.model",e.target.value)}}>{models.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>)}
           {["content", "designer"].includes(page) && (
             <label>
               {page === "designer" ? "Исходная фотография товара (обязательно)" : "Фотография товара"}
@@ -3148,7 +3160,8 @@ function AIPage({ page, ctx, enabled }) {
                     Скачать изображение
                   </a>
                 )}
-                {page === "designer" && job.result.document_id && productId && <div className="studio-actions"><button type="button" className="primary" onClick={async()=>{try{const card=await api("/product-studio/cards",{method:"POST",body:{product_id:Number(productId),company_id:ctx.company?Number(ctx.company):undefined,marketplace:"kaspi",image_document_ids:[Number(doc||job.result.document_id)],title:products.find(p=>String(p.id)===String(productId))?.name||"",description:text,characteristics:{}}});setStudioCard(card)}catch(e){setError(e.message)}}}>Проверить карточку Kaspi</button>{studioCard&&<div className={`validation-box ${studioCard.validation?.passed?"ok":"bad"}`}><b>{studioCard.validation?.passed?"QOR Validator: пройден":"Нужно исправить"}</b>{studioCard.validation?.errors?.map(x=><small key={x}>{x}</small>)}{studioCard.validation?.passed&&<button type="button" className="secondary" onClick={()=>api(`/product-studio/cards/${studioCard.id}/publish`,{method:"POST",body:{review_days:7,auto_optimize:true,auto_publish:false,rollback:true,max_generations:3}}).then(setStudioCard).catch(e=>setError(e.message))}>Запустить · контроль через 7 дней</button>}</div>}</div>}
+                {page === "content" && job.result.text && productId && <div className="studio-actions"><button type="button" className="primary" onClick={async()=>{try{const card=await api("/product-studio/cards",{method:"POST",body:{product_id:Number(productId),company_id:ctx.company?Number(ctx.company):Number(ctx.refs.companies?.[0]?.id),marketplace:job.result.marketplace||marketplace,image_document_ids:doc?[Number(doc)]:[],title:job.result.title||products.find(p=>String(p.id)===String(productId))?.name||"",description:job.result.description||job.result.text,characteristics:job.result.characteristics||{}}});setStudioCard(card)}catch(e){setError(e.message)}}}>Сохранить черновик и проверить</button>{studioCard&&<div className={`validation-box ${studioCard.validation?.passed?"ok":"bad"}`}><b>{studioCard.validation?.passed?"QOR Validator: пройден":"Черновик сохранён · нужны правки"}</b>{studioCard.validation?.errors?.map(x=><small key={x}>{x}</small>)}<small>Сохранённая версия: {studioCard.marketplace} · V{studioCard.version}</small></div>}</div>}
+                {page === "designer" && job.result.document_id && productId && <div className="studio-actions"><button type="button" className="primary" onClick={async()=>{try{const selectedImage=job.result.document_ids?.map(Number).includes(Number(doc))?Number(doc):Number(job.result.document_id);const targetMarketplace=job.result.marketplace||marketplace;const card=await api("/product-studio/cards",{method:"POST",body:{product_id:Number(productId),company_id:ctx.company?Number(ctx.company):undefined,marketplace:targetMarketplace,image_document_ids:[selectedImage],title:products.find(p=>String(p.id)===String(productId))?.name||"",description:text,characteristics:{}}});setStudioCard(card)}catch(e){setError(e.message)}}}>Проверить карточку {((job.result.marketplace||marketplace) === "wildberries") ? "Wildberries" : ((job.result.marketplace||marketplace) === "ozon") ? "Ozon" : "Kaspi"}</button>{studioCard&&<div className={`validation-box ${studioCard.validation?.passed?"ok":"bad"}`}><b>{studioCard.validation?.passed?"QOR Validator: пройден":"Нужно исправить"}</b>{studioCard.validation?.errors?.map(x=><small key={x}>{x}</small>)}{studioCard.validation?.passed&&<button type="button" className="secondary" onClick={()=>api(`/product-studio/cards/${studioCard.id}/publish`,{method:"POST",body:{review_days:7,auto_optimize:true,auto_publish:false,rollback:true,max_generations:3}}).then(setStudioCard).catch(e=>setError(e.message))}>Запустить · контроль через 7 дней</button>}</div>}</div>}
                 {job.result.data && (
                   <>
                     <h3>Проверенные показатели</h3>
