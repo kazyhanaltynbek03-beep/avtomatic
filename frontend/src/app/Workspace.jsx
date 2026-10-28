@@ -1536,6 +1536,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
   const [week, setWeek] = useState(initialAnchor);
   const [period, setPeriod] = useState(initialPeriod);
   const [accountId, setAccountId] = useState("");
+  const activeAccountId = accounts.length === 1 ? String(accounts[0].id) : accountId;
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("all");
   const [opPage, setOpPage] = useState(0);
@@ -1550,7 +1551,8 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     if (period === "weekly" && week > lastCompletedWeek) setWeek(lastCompletedWeek);
   }, [period, week, lastCompletedWeek]);
   useEffect(() => {
-    if (!accountId && accounts.length) setAccountId(String(accounts[0].id));
+    if (accounts.length && !accounts.some(a=>String(a.id)===String(accountId))) setAccountId(String(accounts[0].id));
+    else if (!accounts.length && accountId) setAccountId("");
   }, [accounts, accountId]);
   const periodRange = () => {
     if (period === "daily") return {start:week,end:week};
@@ -1569,10 +1571,10 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     return {start:reportWeek,end:new Date(new Date(`${reportWeek}T00:00:00Z`).getTime()+6*86400000).toISOString().slice(0,10)};
   };
   const range = periodRange();
-  useEffect(() => setOpPage(0), [week, accountId, period]);
-  useEffect(() => { setSyncing(false); setSyncStartedAt(0); }, [week, accountId, period]);
+  useEffect(() => setOpPage(0), [week, activeAccountId, period]);
+  useEffect(() => { setSyncing(false); setSyncStartedAt(0); }, [week, activeAccountId, period]);
   const params = new URLSearchParams({ period, start:range.start, end:range.end });
-  if (accountId) params.set("account_id", accountId);
+  if (activeAccountId) params.set("account_id", activeAccountId);
   if (company) params.set("company_id", company);
   const report = useLoad(`/wildberries/finance?${params}`, reportRefresh);
   const data = report.data || {};
@@ -1601,12 +1603,12 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     return () => window.clearTimeout(timer);
   }, [data.status, data.updated_at]);
   const startReportSync = useCallback(async () => {
-    if (!accountId) return;
+    if (!activeAccountId) return;
     setSyncError("");
     setSyncing(true);
     setSyncStartedAt(Date.now());
     try {
-      const query = new URLSearchParams({ period, start:range.start, end:range.end, account_id: accountId });
+      const query = new URLSearchParams({ period, start:range.start, end:range.end, account_id: activeAccountId });
       await api(`/wildberries/finance/sync?${query}`, { method: "POST" });
       setReportRefresh((v) => v + 1);
     } catch (error) {
@@ -1614,10 +1616,10 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
       setSyncStartedAt(0);
       setSyncError(error.message);
     }
-  }, [accountId, period, range.start, range.end]);
+  }, [activeAccountId, period, range.start, range.end]);
   useEffect(() => {
-    if (!accountId) return;
-    const key = `${accountId}:${period}:${range.start}:${range.end}:${company || ""}`;
+    if (!activeAccountId) return;
+    const key = `${activeAccountId}:${period}:${range.start}:${range.end}:${company || ""}`;
     const lastAttempt = autoSyncRef.current.get(key) || 0;
     const matchesRange = data.start === range.start && data.end === range.end && data.period === period;
     const updatedAt = Date.parse(data.updated_at || "");
@@ -1627,7 +1629,7 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     if (fresh || matchesRange && data.status === "загружается" || Date.now() - lastAttempt < refreshAfterMs) return;
     autoSyncRef.current.set(key, Date.now());
     startReportSync();
-  }, [accountId, period, range.start, range.end, company, data.start, data.end, data.period, data.status, data.updated_at, startReportSync]);
+  }, [activeAccountId, period, range.start, range.end, company, data.start, data.end, data.period, data.status, data.updated_at, startReportSync]);
   const downloadExcel = async () => {
     setExcelError("");
     setDownloadingExcel(true);
@@ -1668,13 +1670,13 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
       <label>Тип отчёта<select value={period} onChange={(e)=>{const next=e.target.value;setPeriod(next);if(next==="weekly")setWeek(mondayOfLastWeek());else if(next==="daily"){const d=new Date();d.setDate(d.getDate()-1);setWeek(inputDate(d));}else{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);setWeek(inputDate(d));}}}><option value="daily">Финансы за день</option><option value="weekly">Финансы за неделю</option><option value="monthly">Итог за месяц</option></select></label>
       <label>Поиск товара<input type="search" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Артикул или название"/></label>
       <label>Операции<select value={kind} onChange={(e)=>setKind(e.target.value)}><option value="all">Все</option><option value="sales">Продажи</option><option value="returns">Есть возвраты</option></select></label>
-      <button type="button" disabled={!accountId || syncing} onClick={startReportSync}>{syncing ? "Проверяем WB…" : "Проверить WB сейчас"}</button>
-      <button type="button" className="button primary" disabled={downloadingExcel || !accountId} onClick={downloadExcel}>{downloadingExcel ? "Скачиваем Excel…" : "Скачать Excel"}</button>
+      <button type="button" disabled={!activeAccountId || syncing} onClick={startReportSync}>{syncing ? "Проверяем WB…" : "Проверить WB сейчас"}</button>
+      <button type="button" className="button primary" disabled={downloadingExcel || !activeAccountId} onClick={downloadExcel}>{downloadingExcel ? "Скачиваем Excel…" : "Скачать Excel"}</button>
     </div>
     {syncError && syncError !== report.error && <ErrorBox error={syncError}/>}
     {excelError && <ErrorBox error={excelError}/>} 
     {report.loading ? <Spinner/> : report.error ? <ErrorBox error={report.error}/> : <>
-      <p className="muted" role="status">Аккаунт WB #{data.account_id ?? accountId} · Период {data.start || data.week_start} — {data.end || data.week_end}. Проверено: {data.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
+      <p className="muted" role="status">Аккаунт WB #{data.account_id ?? activeAccountId} · Период {data.start || data.week_start} — {data.end || data.week_end}. Проверено: {data.updated_at ? new Date(data.updated_at).toLocaleString("ru-RU") : "—"}. {data.status === "ожидается" ? "WB пока не опубликовал финансовые строки. QOR проверит отчёт автоматически через 15 минут; отсутствие строк не считается нулём продаж." : `Строк отчёта: ${data.row_count || 0}.`}</p>
       {data.status === "ошибка" && data.error && <ErrorBox error={data.error}/>}
       <div className="kpis marketplace-kpis wb-weekly-kpis">
         {[["WB реализовал товар",totals.realization],["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],["Розничная цена со скидкой",totals.retail],["К перечислению",totals.payout],["ИТОГО к выплате (расчёт по схеме клиента)",estimatedClientPayout],["Вознаграждение с продаж",totals.commission],["НДС с вознаграждения",totals.commission_vat],["Эквайринг",totals.acquiring],["Прямая логистика WB (расчётная)",totals.direct_logistics],["Дополнительная логистика WB (входит в общую)",totals.reverse_logistics],["Логистика всего",data.row_count ? totals.logistics_total : null],["Штрафы",totals.penalty],["Хранение",totals.storage],["Себестоимость",cogsComplete?totals.cogs:null],["Чистая прибыль (после логистики и расходов)",cogsComplete?totals.profit:null],["Маржа, %",cogsComplete?totals.margin_pct:null]].map(([label,value])=><div className="kpi" key={label}><span>{label}</span><strong>{label === "Маржа, %" ? (value == null ? "Не рассчитана" : `${Number(value).toLocaleString("ru-RU", {minimumFractionDigits:2,maximumFractionDigits:2})}%`) : amount(value)}</strong></div>)}
@@ -1702,23 +1704,32 @@ function MarketplaceInbox({ channel, ctx }) {
   const kaspiLastRefreshRef = useRef(ctx.refresh);
 
   const [showTechnical,setShowTechnical] = useState(false);
+  const [selectedAccountId,setSelectedAccountId] = useState("");
   const [offset,setOffset] = useState(0), [status,setStatus] = useState(""),
     [selected,setSelected] = useState(null), [product,setProduct] = useState(""),
     [key,setKey] = useState(""), [error,setError] = useState(""), [busy,setBusy] = useState(false),
-    [currency,setCurrency] = useState("RUB"), [rate,setRate] = useState(""), [rateDate,setRateDate] = useState(today()),
-    [costAccountId,setCostAccountId] = useState("");
+    [currency,setCurrency] = useState("RUB"), [rate,setRate] = useState(""), [rateDate,setRateDate] = useState(today());
+  const accounts = (ctx.refs.accounts || []).filter(a=>a.active !== false && a.channel===channel && (!ctx.company || String(a.company_id)===String(ctx.company)));
+  const channelAccountIds = accounts.map(a=>String(a.id)).join(",");
+  const selectedAccount = accounts.find(a=>String(a.id)===String(selectedAccountId));
+  const scopedAccounts = selectedAccount ? [selectedAccount] : accounts;
+  useEffect(()=>{
+    if (selectedAccountId && !channelAccountIds.split(",").includes(String(selectedAccountId))) setSelectedAccountId("");
+  },[selectedAccountId,channelAccountIds]);
   const params = new URLSearchParams({limit:"30", offset:String(offset), channel});
   if (ctx.company) params.set("company_id", ctx.company);
+  if (selectedAccount) params.set("account_id", String(selectedAccount.id));
   if (status) params.set("status",status);
   const state = useLoad("/marketplace-records?" + params, ctx.refresh);
   const summaryParams = new URLSearchParams({channel, start:ctx.start, end:ctx.end});
   if (ctx.company) summaryParams.set("company_id", ctx.company);
+  if (selectedAccount) summaryParams.set("account_id", String(selectedAccount.id));
   const summary = useLoad("/marketplace-summary?" + summaryParams, `${ctx.refresh}:${summaryReload}`);
-  const accounts = (ctx.refs.accounts || []).filter(a=>a.active !== false && a.channel===channel && (!ctx.company || String(a.company_id)===String(ctx.company)));
   const canSyncKaspi = can(ctx.auth,"accounts",true);
-  const accountKey = accounts.map(a=>a.id).join(",");
+  const accountKey = scopedAccounts.map(a=>a.id).join(",");
   const ordersCreatedParams = new URLSearchParams({start:ctx.start,end:ctx.end,limit:"100"});
   if (ctx.company) ordersCreatedParams.set("company_id",ctx.company);
+  if (selectedAccount) ordersCreatedParams.set("account_id", String(selectedAccount.id));
   const ordersCreated = useLoad(channel === "Kaspi" ? "/kaspi/orders-created?" + ordersCreatedParams : null, `${ctx.refresh}:${summaryReload}`);
   useEffect(()=>{
     if (channel !== "Kaspi" || !accountKey || !canSyncKaspi) return;
@@ -1770,13 +1781,12 @@ function MarketplaceInbox({ channel, ctx }) {
     },interval);
     return ()=>window.clearInterval(timer);
   },[channel,kaspiReportMode,canSyncKaspi,accountKey,ctx.start,ctx.end]);
-  useEffect(()=>{ if (!costAccountId && accounts.length) setCostAccountId(String(accounts[0].id)); },[accounts,costAccountId]);
   const productParams = new URLSearchParams({channel, limit:"60", start:ctx.start, end:ctx.end});
   if (ctx.company) productParams.set("company_id", ctx.company);
-  if (costAccountId) productParams.set("account_id", costAccountId);
+  if (selectedAccount) productParams.set("account_id", String(selectedAccount.id));
   const marketplaceProducts = useLoad("/marketplace-products?" + productParams, ctx.refresh);
 
-  useEffect(()=>setOffset(0), [ctx.company,channel,status]);
+  useEffect(()=>setOffset(0), [ctx.company,channel,status,selectedAccountId]);
   const run = async (fn) => { setBusy(true);setError("");try{await fn();}catch(e){setError(e.message);}finally{setBusy(false);} };
   const bind = () => run(async()=>{
     const r = await api(`/marketplace-records/${selected.id}/mapping`,{method:"POST",body:{product_id:Number(product),external_keys:[key]}});
@@ -1799,6 +1809,7 @@ function MarketplaceInbox({ channel, ctx }) {
   ];
   return <div className="panel">
     <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
+    {accounts.length > 1 && <div className="row-actions marketplace-account-picker"><label>{channel} · магазин<select aria-label={`${channel}: магазин`} value={selectedAccountId} onChange={e=>setSelectedAccountId(e.target.value)}><option value="">Все магазины {channel}</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><span className="muted">Сводка, товары и API-записи: {selectedAccount ? selectedAccount.name : `все магазины ${channel}`}.</span></div>}
     {channel === "Kaspi" && <div className="row-actions kaspi-report-controls" role="group" aria-label="Режим отчёта Kaspi">
       <button type="button" className={kaspiReportMode==="issued"?"primary":""} aria-pressed={kaspiReportMode==="issued"} onClick={()=>setKaspiReportMode("issued")}>Продажи по дате выдачи</button>
       <button type="button" className={kaspiReportMode==="created"?"primary":""} aria-pressed={kaspiReportMode==="created"} onClick={()=>setKaspiReportMode("created")}>Заказы по дате создания</button>
@@ -1818,9 +1829,8 @@ function MarketplaceInbox({ channel, ctx }) {
     {channel === "Kaspi" && m.sync_in_progress && !m.sync_errors?.length && kaspiReportMode === "issued" && <p className="muted" role="status">Обновляем выбранный период Kaspi в фоне. Страница продолжает показывать сохранённые итоги.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
     {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : <div className="kpis marketplace-kpis">{marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика","Реклама","Чистая прибыль"].includes(title))).map(([title,value,note])=><div className={"kpi "+(title==="Чистая прибыль"?"featured":"")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}</div>)}
-    {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={accounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
+    {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={scopedAccounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
     {(channel !== "Wildberries" || wbTab === "products") && <><div className="section-heading"><div><h3>Товары маркетплейса</h3><p className="muted">Продажи и прибыль связаны с товаром QOR по SKU. Себестоимость и остаток меняются в единой карточке «Товары / SKU».</p></div><span className="pill">{marketplaceProducts.data?.total || 0} товаров</span></div>
-    {accounts.length>1 && <div className="row-actions"><label>Магазин для карточек<select value={costAccountId} onChange={e=>setCostAccountId(e.target.value)}>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><span className="muted">Продажи в отчётах объединяются по всем подключённым магазинам.</span></div>}
     {marketplaceProducts.error ? <ErrorBox error={marketplaceProducts.error}/> : marketplaceProducts.loading ? <Spinner/> : <div className="marketplace-product-grid">
       {(marketplaceProducts.data?.items || []).slice(0,60).map(p=><MarketplaceProductCard key={p.id} p={p} channel={channel}/>)}
     </div>}
@@ -1828,7 +1838,7 @@ function MarketplaceInbox({ channel, ctx }) {
     {channel === "Wildberries" && <button type="button" className="wb-tech-toggle" onClick={()=>setShowTechnical(v=>!v)}>{showTechnical ? "Скрыть технические данные" : "Технические данные API (для администратора)"}</button>}
     {(channel !== "Wildberries" || showTechnical) && <><div className="section-heading marketplace-technical"><div><h3>Технические данные API</h3><p className="muted">Исходные записи нужны для сверки и диагностики. Они сами по себе не считаются продажами или расходами.</p></div></div>
     <div className="row-actions">{can(ctx.auth,"accounts",true) && <button disabled={busy} onClick={()=>run(async()=>{const result=await api("/admin/reconcile-marketplaces",{method:"POST"});ctx.notify(`Проверено аккаунтов: ${result.results.length}. Данные ERP обновлены.`);})}>Восстановить учёт из сохранённых API-записей</button>}<select aria-label="Статус обработки" value={status} onChange={e=>setStatus(e.target.value)}><option value="">Все записи</option><option value="pending">Ожидают обработки</option><option value="projected">Проведены</option><option value="received_stock">Остатки для сверки</option></select>
-      {accounts.map(a=><button key={a.id} disabled={busy} onClick={()=>run(async()=>{const r=await api(`/accounts/${a.id}/reprocess`,{method:"POST"});ctx.notify(`${a.name}: проведено ${r.projected}; ожидает ${r.pending_erp}`);})}>Обработать повторно: {a.name}</button>)}
+      {scopedAccounts.map(a=><button key={a.id} disabled={busy} onClick={()=>run(async()=>{const r=await api(`/accounts/${a.id}/reprocess`,{method:"POST"});ctx.notify(`${a.name}: проведено ${r.projected}; ожидает ${r.pending_erp}`);})}>Обработать повторно: {a.name}</button>)}
     </div>
     {channel!=="Kaspi" && <div className="row-actions"><label>Дата курса<input type="date" value={rateDate} onChange={e=>setRateDate(e.target.value)}/></label><label>Валюта источника<select value={currency} onChange={e=>setCurrency(e.target.value)}><option>RUB</option><option>KZT</option></select></label><label>Курс в ₸ за 1 единицу<input type="number" min="0.0001" step="0.0001" value={rate} onChange={e=>setRate(e.target.value)}/></label>{accounts.map(a=><button key={a.id} disabled={busy || !rate || Number(rate)<=0} onClick={()=>run(()=>api(`/accounts/${a.id}/settlement`,{method:"PUT",body:{currency,effective_date:rateDate,fx_rate:Math.round(Number(rate)*10000)}}))}>Сохранить курс: {a.name}</button>)}</div>}
     <ErrorBox error={error || state.error}/>

@@ -40,6 +40,47 @@ def test_marketplace_summary_rejects_inverted_period(client):
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize('channel',['Kaspi','Wildberries'])
+def test_marketplace_summary_can_filter_one_store_without_changing_all_store_total(client,channel):
+    with SessionLocal() as db:
+        primary=db.get(Account,1); primary.channel=channel
+        second=Account(id=4,company_id=1,name=f'{channel} второй магазин',channel=channel)
+        db.add(second); db.flush()
+        for account_id,reference,revenue in ((1,'store-one',10000),(4,'store-two',25000)):
+            db.add(Sale(company_id=1,account_id=account_id,product_id=1,reference=reference,
+                        date=date(2026,10,25),quantity=1,revenue=revenue,cogs=0,
+                        cogs_pending=False,commission=0,logistics=0,advertising=0))
+        db.commit()
+    params={'channel':channel,'start':'2026-10-25','end':'2026-10-25'}
+    all_stores=client.get('/api/marketplace-summary',params=params)
+    one_store=client.get('/api/marketplace-summary',params={**params,'account_id':4})
+    wrong_channel=client.get('/api/marketplace-summary',params={**params,'account_id':3})
+    assert all_stores.status_code==200,all_stores.text
+    assert one_store.status_code==200,one_store.text
+    assert all_stores.json()['revenue']==35000
+    assert one_store.json()['revenue']==25000
+    assert wrong_channel.status_code==404
+
+
+def test_kaspi_created_orders_filter_by_store(client):
+    with SessionLocal() as db:
+        first=db.get(Account,1); first.sync_status='done'
+        second=Account(id=4,company_id=1,name='Kaspi второй магазин',channel='Kaspi',sync_status='done')
+        db.add(second); db.flush()
+        staged(db,first,'order:K-1',record_type='order',order_id='id-1',code='K-1',
+               status='COMPLETED',creation_date='2026-10-25',total_price='1000')
+        staged(db,second,'order:K-2',record_type='order',order_id='id-2',code='K-2',
+               status='COMPLETED',creation_date='2026-10-25',total_price='2000')
+        db.commit()
+    response=client.get('/api/kaspi/orders-created',params={
+        'start':'2026-10-25','end':'2026-10-25','account_id':4,
+    })
+    assert response.status_code==200,response.text
+    data=response.json()
+    assert data['total']==1
+    assert data['items'][0]['account_id']==4
+
+
 def test_kaspi_orders_created_report_filters_by_almaty_creation_date(client):
     with SessionLocal() as db:
         acc=db.get(Account,1); acc.channel='Kaspi'; acc.sync_status='done'
