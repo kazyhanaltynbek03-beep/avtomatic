@@ -139,9 +139,9 @@ export const forms = {
   ],
   accounts: [
     company,
-    field("name", "Название интеграции", "text", { required: true }),
-    field("channel", "Маркетплейс", "select", {
-      options: ["Kaspi", "Wildberries", "Ozon"],
+    field("name", "Название магазина / канала", "text", { required: true }),
+    field("channel", "Канал продаж", "select", {
+      options: ["Kaspi", "Wildberries", "Ozon", "Offline", "B2B"],
       required: true,
     }),
   ],
