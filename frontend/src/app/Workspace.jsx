@@ -41,7 +41,6 @@ import { money, decimal, today } from "../utils/formatters";
 import { can } from "../utils/permissions";
 import { ErrorBox, Empty, Spinner } from "../components/Feedback";
 import { useLoad } from "../hooks/useLoad";
-import MarketplaceReturns from "../features/MarketplaceReturns";
 import { groups, forms, columns, labels, monetary } from "../config";
 import "../style.css";
 const flat = groups.flatMap((g) => g[1]);
@@ -377,6 +376,14 @@ export default function App() {
                     ? "Один физический склад. Остатки разделены по владельцам."
                     : page === "accounts"
                       ? "Каналы продаж и отдельные аккаунты ваших компаний."
+                    : page === "products"
+                      ? "Одна карточка QOR для товара, его SKU и продаж по магазинам."
+                      : page === "purchases"
+                        ? "Фиксируйте поступление от поставщика: оно пополняет склад и задаёт себестоимость. Оплата отражается отдельно в разделе «Деньги и выплаты»."
+                        : page === "cash"
+                          ? "Записывайте фактические поступления и выплаты. Остаток денег и прибыль — разные показатели."
+                          : page === "alerts"
+                            ? "Проверяйте товары с низким остатком и платежи, срок которых уже наступил."
                       : "Данные рабочего пространства"}
               </p>
             </div>
@@ -424,7 +431,6 @@ export default function App() {
               "accounting",
               "expenses",
               "cash",
-              "marketplace-returns",
               ...channels.slice(0, 3),
             ].includes(page) && (
               <div className="periods">
@@ -468,7 +474,6 @@ export default function App() {
               "accounting",
               "expenses",
               "cash",
-              "marketplace-returns",
               ...channels.slice(0, 3),
             ].includes(page) && (
               <div className="dates">
@@ -501,8 +506,6 @@ export default function App() {
             <ReportPage page={page} ctx={ctx} />
           ) : page === "stock" ? (
             <Stock ctx={ctx} />
-          ) : page === "marketplace-returns" ? (
-            <MarketplaceReturns ctx={ctx} />
           ) : ["assistant", "content", "designer"].includes(page) ? (
             <AIPage
               key={page}
@@ -526,6 +529,10 @@ export default function App() {
             />
           ) : page === "expenses" ? (
             <><ExpenseSummary ctx={ctx}/><DataPage key={page} page={page} ctx={ctx}/></>
+          ) : page === "cash" ? (
+            <><div className="panel cash-help"><h2>Что здесь учитывается</h2><p>Cash Flow — это фактические поступления и выплаты за период. Здесь отражаются проведённые денежные операции; прибыль считается отдельно по продажам, себестоимости и расходам.</p></div><DataPage key={page} page={page} ctx={ctx}/></>
+          ) : page === "purchases" ? (
+            <><div className="panel purchase-help"><h2>Поступление товара от поставщика</h2><p>Проведённая закупка увеличивает складской остаток и создаёт учётную партию для расчёта себестоимости. В «Партиях» ничего вводить вручную не нужно. Оплаченную часть система отражает в «Деньги и выплаты».</p></div><DataPage key={page} page={page} ctx={ctx}/></>
           ) : (
             <DataPage key={page} page={page} ctx={ctx} />
           )}
@@ -800,7 +807,10 @@ function ReportPage({ page, ctx }) {
   }
   if ((!usesDashboard && page !== "forecast" && reportLoading)) return <Spinner />;
   if (!usesDashboard && page !== "forecast" && reportError) return <ErrorBox error={reportError} />;
-  if (page === "alerts")
+  if (page === "alerts") {
+    const stockAlerts = Array.isArray(r?.stock_alerts) ? r.stock_alerts : [];
+    const receivables = Array.isArray(r?.receivables) ? r.receivables : [];
+    const systemAlertItems = Array.isArray(systemAlerts?.items) ? systemAlerts.items : [];
     return (
       <>
         <div className="panel">
@@ -809,32 +819,33 @@ function ReportPage({ page, ctx }) {
             <span className="badge amber">{systemAlerts?.count ?? "…"}</span>
           </div>
           {systemAlertsError ? <ErrorBox error={systemAlertsError} /> :
-            systemAlerts?.items?.length ? <div className="alert-list">{systemAlerts.items.map((item, index) =>
+            systemAlertItems.length ? <div className="alert-list">{systemAlertItems.map((item, index) =>
               <div className={`alert-item ${item.severity || "info"}`} key={`${item.type}-${item.account_id || "all"}-${index}`}>
                 <strong>{item.title}</strong>
                 {item.action && <p>{item.action}</p>}
               </div>)}
-            </div> : <Empty title="Критических проверок нет" />}
+            </div> : <Empty text="Критических проверок нет." />}
         </div>
         <div className="panel">
           <div className="panel-heading">
             <h2>Остатки требуют внимания</h2>
-            <span className="badge amber">{r.stock_alerts.length} SKU</span>
+            <span className="badge amber">{stockAlerts.length} товаров</span>
           </div>
-          <Table rows={r.stock_alerts} cols={columns.stock} />
+          <Table rows={stockAlerts} cols={columns.stock} />
         </div>
         <div className="panel">
           <div className="panel-heading">
             <h2>Просроченные оплаты</h2>
           </div>
           <Table
-            rows={r.receivables.filter((x) => x.overdue)}
+            rows={receivables.filter((x) => x.overdue)}
             cols={["reference", "channel", "due", "due_date"]}
             refs={ctx.refs}
           />
         </div>
       </>
     );
+  }
   if (page === "forecast") return <Forecast ctx={ctx} />;
   if (page === "profit" || page === "accounting")
     return (
@@ -901,7 +912,7 @@ function ReportPage({ page, ctx }) {
             ))}
             <p className="panel-note">
               Стоимость склада — актив, а не расход периода. Оплата закупки
-              отражается в Cash Flow отдельно от прибыли.
+              отражается в разделе «Деньги и выплаты» отдельно от прибыли.
             </p>
             {page === "accounting" && (
               <div className="export-links">
@@ -923,8 +934,9 @@ function ReportPage({ page, ctx }) {
         </div>
         <div className="panel cashflow-panel">
           <div className="panel-heading">
-            <div><h2>Cash Flow за период</h2><span>Движение реальных денег, отдельно от прибыли</span></div>
+            <div><h2>Деньги: поступления и выплаты</h2><span>Фактическое движение средств за выбранный период</span></div>
           </div>
+          <p className="panel-note cashflow-explainer">Это не прибыль: прибыль учитывает продажи, себестоимость и расходы. Здесь показаны деньги, которые фактически поступили или были выплачены, и их остаток.</p>
           <div className="secondary-kpis compact-kpis">
             <div><span>На начало</span><strong>{money(r.cash_opening || 0)}</strong></div>
             <div><span>Поступления</span><strong>{money(r.cash_inflow || 0)}</strong></div>
@@ -936,8 +948,9 @@ function ReportPage({ page, ctx }) {
         </div>
         <div className="panel">
           <div className="panel-heading">
-            <h2>Дебиторская задолженность</h2>
+            <h2>Деньги к получению</h2>
           </div>
+          <p className="panel-note">Это суммы, которые покупатели или маркетплейсы ещё должны перечислить вашей компании. Это не ваш долг. Сверяйте документ, канал и срок оплаты.</p>
           <Table
             rows={r.receivables}
             cols={[
@@ -1126,7 +1139,7 @@ function ReportPage({ page, ctx }) {
           ["Стоимость склада", r.stock_value, true],
           ["Деньги", r.cash, true],
           ["B2B задолженность", r.b2b_debt, true],
-          ["Cash Flow", r.cash_flow, true],
+          ["Денежный поток", r.cash_flow, true],
           ["Kaspi оборот", dash?.selected?.channels?.Kaspi || 0, true],
           ["WB оборот", dash?.selected?.channels?.WB || 0, true],
           ["Ozon оборот", dash?.selected?.channels?.Ozon || 0, true],
@@ -1411,32 +1424,40 @@ function ProductCatalogCard({ product, onEdit, onDelete, onCount, onPrice, selec
       <h3 className="catalog-product-title">{product.name || "Товар без названия"}</h3>
       <div className="catalog-product-price-row"><strong>{Number(product.price || 0) > 0 ? money(product.price) : "Цена не указана"}</strong><span>Себестоимость<br/><b>{Number(product.purchase_cost || 0) > 0 ? money(product.purchase_cost) : "Не задана"}</b></span></div>
       <section className="catalog-inventory-summary" aria-label="Сводка остатка">
-        <div><span>Остаток по учёту</span><strong>{inventory.total ?? 0}<small> шт.</small></strong></div>
+        <div><span>Доступно для продажи</span><strong>{inventory.available ?? 0}<small> шт.</small></strong></div>
         <span className={`catalog-reconciliation ${inventory.reconciliation_status === "confirmed" ? "is-confirmed" : "is-pending"}`}><i/>{reconciliationLabel}</span>
-        <small>QOR, в пути и брак. Остатки площадок считаются отдельно до сверки, чтобы не задвоить товар.</small>
       </section>
-      <div className="catalog-stock-grid">
-        <div><span>Склад QOR</span><b>{inventory.physical ?? 0}</b></div>
-        <div><span>Доступно</span><b>{inventory.available ?? 0}</b></div>
-        <div><span>Резерв</span><b>{inventory.reserved ?? 0}</b></div>
-        <div><span>Выделено</span><b>{inventory.allocated ?? 0}</b></div>
-        <div><span>На площадках</span><b>{inventory.marketplace ?? 0}</b></div>
-        <div><span>В пути</span><b>{inventory.in_transit ?? 0}</b></div>
-        <div><span>Брак</span><b>{inventory.defective ?? 0}</b></div>
-        <div><span>Продажи / возвраты</span><b>{inventory.sold ?? 0} / {inventory.returned ?? 0}</b></div>
+      <div className="catalog-primary-facts">
+        <div><span>Продано за период</span><strong>{inventory.sold ?? 0} шт.</strong></div>
+        <div><span>Связано магазинов</span><strong>{coverage.linked}/{coverage.active_accounts}</strong></div>
       </div>
-      <section className="catalog-channel-sales">
-        <div className="catalog-section-title"><b>Продажи по магазинам</b><small>За выбранный период</small></div>
-        {sales.length ? <div className="catalog-channel-list">{sales.map((sale) => <div className="catalog-channel-row" key={sale.account_id}><span><i className={`channel-dot ${sale.channel === "Kaspi" ? "kaspi" : sale.channel === "Wildberries" ? "wb" : "other"}`}/><b>{sale.channel}</b><small>{sale.account_name}</small></span><strong>{sale.sold} продано <small>· {sale.returned} возврат</small></strong></div>)}</div> : <p className="catalog-empty-sales">Нет подтверждённых продаж за период.</p>}
-        <small className="catalog-mapping-note">ID сопоставлены: {coverage.linked}/{coverage.active_accounts} активных магазинов</small>
-      </section>
+      <details className="catalog-details">
+        <summary>Остатки и продажи по магазинам</summary>
+        <p className="catalog-detail-note">Остаток QOR — физический запас. Количество на площадках сверяется отдельно, чтобы не посчитать один товар дважды.</p>
+        <div className="catalog-stock-grid">
+          <div><span>Всего по учёту</span><b>{inventory.total ?? 0}</b></div>
+          <div><span>Склад QOR</span><b>{inventory.physical ?? 0}</b></div>
+          <div><span>Доступно</span><b>{inventory.available ?? 0}</b></div>
+          <div><span>Резерв</span><b>{inventory.reserved ?? 0}</b></div>
+          <div><span>Выделено магазинам</span><b>{inventory.allocated ?? 0}</b></div>
+          <div><span>Подтверждено на площадках</span><b>{inventory.marketplace ?? 0}</b></div>
+          <div><span>В пути</span><b>{inventory.in_transit ?? 0}</b></div>
+          <div><span>Брак</span><b>{inventory.defective ?? 0}</b></div>
+          <div><span>Продано / возвращено</span><b>{inventory.sold ?? 0} / {inventory.returned ?? 0}</b></div>
+        </div>
+        <section className="catalog-channel-sales">
+          <div className="catalog-section-title"><b>Продажи по магазинам</b><small>За выбранный период</small></div>
+          {sales.length ? <div className="catalog-channel-list">{sales.map((sale) => <div className="catalog-channel-row" key={sale.account_id}><span><i className={`channel-dot ${sale.channel === "Kaspi" ? "kaspi" : sale.channel === "Wildberries" ? "wb" : "other"}`}/><b>{sale.channel}</b><small>{sale.account_name}</small></span><strong>{sale.sold} продано <small>· {sale.returned} возврат</small></strong></div>)}</div> : <p className="catalog-empty-sales">Нет подтверждённых продаж за период.</p>}
+          <small className="catalog-mapping-note">Связано ID: {coverage.linked} из {coverage.active_accounts} активных магазинов</small>
+        </section>
+        <small className="catalog-return-note">Возврат денег не пополняет склад. Товар возвращается в доступный остаток только после получения и проверки.</small>
+        <small className="catalog-sync-time">Синхронизация: {inventory.last_sync ? new Date(inventory.last_sync).toLocaleString("ru-RU") : "нет данных"}</small>
+      </details>
       {(inventory.snapshot_review_required || inventory.allocation_overdrawn || inventory.low_stock) && <div className="catalog-inventory-alerts">
         {inventory.snapshot_review_required && <p>Остаток из API показан отдельно: его связь со складом пока не подтверждена.</p>}
         {inventory.allocation_overdrawn && <p>Выделение площадкам больше остатка склада. Исправьте его перед следующей синхронизацией.</p>}
-        {inventory.low_stock && <p>Низкий доступный остаток · минимум {product.min_stock ?? 0}</p>}
+        {inventory.low_stock && Number(product.min_stock || 0) > 0 && <p>Низкий доступный остаток · минимум {product.min_stock}</p>}
       </div>}
-      <small className="catalog-return-note">Возврат денег не пополняет склад. Возврат товара учитывается после получения и проверки пригодности.</small>
-      <small className="catalog-sync-time">Синхронизация: {inventory.last_sync ? new Date(inventory.last_sync).toLocaleString("ru-RU") : "нет данных"}</small>
       <div className="row-actions catalog-product-actions"><button className="secondary" onClick={onEdit}>Изменить / ID</button><button className="secondary" onClick={onPrice}>Цена</button><button className="secondary" onClick={onCount}>Остаток</button>{[...new Set((product.marketplace_mappings || []).filter(m=>m.channel === "Wildberries").map(m=>m.account_id))].map(id=><button className="secondary" key={id} onClick={()=>onSync?.(id)} title="Отправить текущую цену и выделенный остаток">Синхр. WB · {accounts.find(a=>a.id === id)?.name || id}</button>)}<button className="icon-button danger" title="Архивировать товар" onClick={onDelete}><Trash2 size={16}/></button></div>
     </div>
   </article>;
@@ -2125,7 +2146,7 @@ function DataPage({ page, ctx }) {
             {entity === "products" && <>
               <select aria-label="Категория товара" value={catalogCategory} onChange={e=>setCatalogCategory(e.target.value)}><option value="">Все категории</option>{[...new Set((state.data?.items || []).map(p=>p.category).filter(Boolean))].sort().map(x=><option key={x}>{x}</option>)}</select>
               <select aria-label="Сортировка каталога" value={catalogSort} onChange={e=>setCatalogSort(e.target.value)}><option value="name">Название</option><option value="stock">Остаток ↑</option><option value="stock_desc">Остаток ↓</option><option value="price">Цена ↑</option></select>
-              <button className="secondary" onClick={()=>setCatalogView(catalogView === "cards" ? "table" : "cards")}>{catalogView === "cards" ? "Таблица" : "Карточки"}</button>
+              <div className="catalog-view-switch" role="group" aria-label="Вид каталога"><button type="button" className={catalogView === "cards" ? "active" : ""} aria-pressed={catalogView === "cards"} onClick={()=>setCatalogView("cards")}>Карточки</button><button type="button" className={catalogView === "table" ? "active" : ""} aria-pressed={catalogView === "table"} onClick={()=>setCatalogView("table")}>Таблица</button></div>
               {selectedProducts.length > 0 && <button className="secondary" disabled={busy} onClick={bulkPrice}>Цена для выбранных ({selectedProducts.length})</button>}
             </>}
             <a
