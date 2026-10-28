@@ -2925,11 +2925,151 @@ def alerts(
     u=Depends(current_user), db=Depends(get_db),
 ):
     require(u, "analytics")
-    current = f.report(db, u, start, end, company_id)
+    if end < start:
+        raise HTTPException(422, "Конец периода раньше начала")
+
+    # Alert comparisons need only financial headline fields. The full report also
+    # materializes all historical cash, sales, returns, movements and products;
+    # building it twice here blocked the single web worker for every alert refresh.
+    current = f.report_headline(db, u, start, end, company_id)
     days = (end - start).days + 1
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=days - 1)
-    previous = f.report(db, u, prev_start, prev_end, company_id)
+    previous = f.report_headline(db, u, prev_start, prev_end, company_id)
+
+    account_query = scope_query(select(Account), Account, u)
+    if company_id is not None:
+        account_query = account_query.where(Account.company_id == company_id)
+    account_ids = {a.id for a in db.scalars(account_query)}
+
+    # Recreate the report's inventory slice with grouped SQL instead of loading
+    # every historical row into Python. This does not alter marketplace reports.
+    stock_query = scope_query(
+        select(
+            Movement.product_id,
+            func.coalesce(func.sum(Movement.quantity), 0).label("quantity"),
+            func.coalesce(func.sum(Movement.cost), 0).label("value"),
+        ),
+        Movement,
+        u,
+    ).where(Movement.date <= end).group_by(Movement.product_id)
+    if company_id is not None:
+        stock_query = stock_query.where(Movement.company_id == company_id)
+    stock_by_product = {
+        pid: {"quantity": int(quantity or 0), "value": int(value or 0)}
+        for pid, quantity, value in db.execute(stock_query)
+    }
+
+    sold_by_product = {}
+    if account_ids:
+        sold_query = scope_query(
+            select(Sale.product_id, func.coalesce(func.sum(Sale.quantity), 0)),
+            Sale,
+            u,
+        ).where(
+            Sale.account_id.in_(account_ids), Sale.date >= start, Sale.date <= end
+        )
+        if company_id is not None:
+            sold_query = sold_query.where(Sale.company_id == company_id)
+        for pid, quantity in db.execute(sold_query.group_by(Sale.product_id)):
+            sold_by_product[pid] = int(quantity or 0)
+
+        returned_query = scope_query(
+            select(Sale.product_id, func.coalesce(func.sum(Return.quantity), 0))
+            .join(Sale, Return.sale_id == Sale.id),
+            Return,
+            u,
+        ).where(
+            Sale.account_id.in_(account_ids),
+            Sale.date <= end,
+            Return.date >= start,
+            Return.date <= end,
+        )
+        if company_id is not None:
+            returned_query = returned_query.where(
+                Return.company_id == company_id, Sale.company_id == company_id
+            )
+        for pid, quantity in db.execute(returned_query.group_by(Sale.product_id)):
+            sold_by_product[pid] = sold_by_product.get(pid, 0) - int(quantity or 0)
+
+    stockrows = []
+    for product in db.scalars(select(Product)):
+        stock = stock_by_product.get(product.id, {"quantity": 0, "value": 0})
+        sold = sold_by_product.get(product.id, 0)
+        quantity = stock["quantity"]
+        stockrows.append({
+            "product_id": product.id,
+            "sku": product.sku,
+            "name": product.name,
+            "quantity": quantity,
+            "value": stock["value"],
+            "min_stock": product.min_stock,
+            "sold": sold,
+            "unit_cost": f.rounded(stock["value"], quantity) if quantity > 0 else 0,
+            "days_of_stock": round(quantity / (sold / max(1, days)), 1) if sold > 0 else None,
+            "turnover_days": round(max(1, days) * quantity / sold, 1) if sold > 0 else None,
+            "velocity_per_day": round(sold / max(1, days), 3),
+        })
+    current["stock"] = stockrows
+    current["stock_alerts"] = [row for row in stockrows if row["quantity"] <= row["min_stock"]]
+
+    # Preserve the receivables rows previously included in the alert response,
+    # but aggregate returns and payments in SQL rather than materializing history.
+    receivables = []
+    if account_ids:
+        sales_query = scope_query(
+            select(
+                Sale.id, Sale.reference, Sale.customer_id, Sale.account_id,
+                Sale.revenue, Sale.due_date, Account.channel,
+            ).join(Account, Account.id == Sale.account_id),
+            Sale,
+            u,
+        ).where(Sale.account_id.in_(account_ids), Sale.date <= end)
+        if company_id is not None:
+            sales_query = sales_query.where(Sale.company_id == company_id)
+        all_sales = sales_query.subquery()
+
+        returns_query = scope_query(
+            select(Return.sale_id, func.coalesce(func.sum(Return.revenue), 0).label("returned"))
+            .join(Sale, Return.sale_id == Sale.id),
+            Return,
+            u,
+        ).where(Sale.account_id.in_(account_ids), Return.date <= end)
+        if company_id is not None:
+            returns_query = returns_query.where(
+                Return.company_id == company_id, Sale.company_id == company_id
+            )
+        return_totals = returns_query.group_by(Return.sale_id).subquery()
+
+        paid_query = scope_query(
+            select(CashEntry.sale_id, func.coalesce(func.sum(CashEntry.amount), 0).label("paid")),
+            CashEntry,
+            u,
+        ).where(CashEntry.date <= end, CashEntry.sale_id.is_not(None))
+        if company_id is not None:
+            paid_query = paid_query.where(CashEntry.company_id == company_id)
+        paid_totals = paid_query.group_by(CashEntry.sale_id).subquery()
+
+        receivable_rows = db.execute(
+            select(
+                all_sales.c.id, all_sales.c.reference, all_sales.c.customer_id,
+                all_sales.c.channel, all_sales.c.revenue, all_sales.c.due_date,
+                func.coalesce(return_totals.c.returned, 0),
+                func.coalesce(paid_totals.c.paid, 0),
+            )
+            .select_from(all_sales)
+            .outerjoin(return_totals, return_totals.c.sale_id == all_sales.c.id)
+            .outerjoin(paid_totals, paid_totals.c.sale_id == all_sales.c.id)
+        )
+        for sale_id, reference, customer_id, channel, revenue, due_date, returned, paid in receivable_rows:
+            due = max(0, int(revenue) - int(returned or 0) - int(paid or 0))
+            if due:
+                receivables.append({
+                    "sale_id": sale_id, "reference": reference, "customer_id": customer_id,
+                    "channel": channel, "due": due, "due_date": due_date,
+                    "overdue": bool(due_date and due_date < end),
+                })
+
     items = []
     for x in current["stock"]:
         dl = x.get("days_of_stock")
@@ -2980,7 +3120,7 @@ def alerts(
                     "account_id":account.id,"channel":account.channel,
                     "action":(account.sync_error or "Откройте интеграцию и проверьте состояние подключения.")[:300]})
     return {"items":items, "count":len(items), "stock_alerts":current.get("stock_alerts", []),
-            "receivables":current.get("receivables", []), "period":[str(start),str(end)], "comparison_period":[str(prev_start),str(prev_end)],
+            "receivables":receivables, "period":[str(start),str(end)], "comparison_period":[str(prev_start),str(prev_end)],
             "method":"Детерминированные правила ERP; без LLM. Рыночные сигналы добавляются только при наличии подтверждённого источника."}
 
 
