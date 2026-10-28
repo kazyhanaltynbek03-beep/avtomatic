@@ -2235,7 +2235,7 @@ function DataPage({ page, ctx }) {
       {page === "Offline" && <div className="info-banner offline-sales-help"><div><b>Продажа в магазине, по телефону или при самовывозе?</b><span>Нажмите «Записать офлайн-продажу», выберите товар, количество, цену и дату. После проведения продажа появится в учёте и уменьшит общий склад.</span></div><button className="primary" onClick={()=>openSale("Offline")}>Записать офлайн-продажу</button></div>}
       <div className="panel">
         {channels.includes(page) && <div className="section-heading"><div><h3>Подтверждённые продажи</h3><p className="muted">Только операции, проведённые финансовым ядром QOR. Заказ сам по себе не превращается в выручку.</p></div></div>}
-        <div className="table-toolbar">
+        <div className={`table-toolbar${entity === "products" ? " product-catalog-toolbar" : ""}`}>
           <div className="search">
             <Search size={17} />
             <input
