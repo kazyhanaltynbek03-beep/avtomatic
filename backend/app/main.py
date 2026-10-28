@@ -1741,6 +1741,70 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
             "channel": account.channel, "external_key": external_key}
 
 
+@app.post("/api/products/{product_id}/match-synced-marketplace-cards")
+def match_synced_marketplace_cards(product_id: int, u=Depends(current_user), db=Depends(get_db)):
+    """Link exact matches from stored records only; never calls APIs or projects finance."""
+    require(u, "inventory", True)
+    product = db.get(Product, product_id)
+    if not product or not product.active:
+        raise HTTPException(404, "Активный товар QOR не найден")
+    codes = {str(v).strip().casefold() for v in (product.sku, product.article) if v and str(v).strip()}
+    specs = product.specifications if isinstance(product.specifications, dict) else {}
+    barcodes = {re.sub(r"[^0-9A-Za-z]", "", str(v)).casefold()
+        for v in [specs.get("barcode"), *(specs.get("barcodes") or [])] if v and str(v).strip()}
+    if not codes and not barcodes:
+        return {"linked": 0, "accounts": [], "ambiguous": [], "message": "Добавьте артикул или штрихкод"}
+    aq = select(Account).where(Account.active.is_(True), Account.channel.in_(["Kaspi", "Wildberries"]))
+    if u.role != "Owner": aq = aq.where(Account.company_id.in_(u.company_ids or []))
+    linked, results, ambiguous = 0, [], []
+    for account in db.scalars(aq.order_by(Account.id)):
+        source = "kaspi" if account.channel == "Kaspi" else "wildberries"
+        records = db.scalars(select(MarketplaceRecord).where(
+            MarketplaceRecord.account_id == account.id, MarketplaceRecord.company_id == account.company_id,
+            MarketplaceRecord.source == source).order_by(MarketplaceRecord.id.desc()).limit(10000)).all()
+        candidates = {}
+        for record in records:
+            payload = record.payload or {}
+            if account.channel == "Wildberries" and payload.get("record_type") != "product": continue
+            if account.channel == "Kaspi" and payload.get("record_type") != "order_entry": continue
+            items = [payload, *(x for x in payload.get("products", []) if isinstance(x, dict))]
+            for item in items:
+                keys = marketplace_pipeline.identifiers(item)
+                item_codes = {str(item.get(k)).strip().casefold() for k in
+                    ("supplierArticle", "vendorCode", "sa_name", "offer_id", "merchant_code", "external_sku", "sku")
+                    if item.get(k) and not str(item.get(k)).strip().isdigit()}
+                item_barcodes = {re.sub(r"[^0-9A-Za-z]", "", str(v)).casefold()
+                    for v in [item.get("barcode"), *(item.get("barcodes") or [])] if v}
+                matched_by = "артикул" if codes & item_codes else "штрихкод" if barcodes & item_barcodes else None
+                if not matched_by: continue
+                stable = next((k for k in keys if k.startswith("product:")), None) or next((k for k in keys if k.startswith("sku:")), None)
+                if not stable: continue
+                entry = candidates.setdefault(stable, {"keys": set(), "matched_by": matched_by,
+                    "name": item.get("product_name") or item.get("name") or item.get("title") or item.get("subjectName") or product.name})
+                entry["keys"].update(keys)
+        if not candidates: continue
+        if len(candidates) > 1:
+            ambiguous.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
+                "card_count": len(candidates), "products": [{"name": c["name"], "keys": sorted(c["keys"])} for c in candidates.values()]})
+            continue
+        added = 0
+        for candidate in candidates.values():
+            for key in candidate["keys"]:
+                existing = db.scalar(select(MarketplaceProductMapping).where(
+                    MarketplaceProductMapping.account_id == account.id, MarketplaceProductMapping.external_key == key))
+                if existing: continue
+                db.add(MarketplaceProductMapping(company_id=account.company_id, account_id=account.id,
+                    channel=account.channel, external_key=key, product_id=product.id))
+                added += 1
+        if added:
+            linked += added
+            results.append({"account_id": account.id, "channel": account.channel, "account_name": account.name,
+                "card_count": len(candidates), "mapping_count": added})
+    db.commit()
+    return {"linked": linked, "accounts": results, "ambiguous": ambiguous,
+        "message": "Поиск выполнен только по уже синхронизированным данным"}
+
+
 @app.post("/api/marketplace-records/{id}/mapping")
 def marketplace_mapping(id: int, p: MarketplaceMappingIn, u=Depends(current_user), db=Depends(get_db)):
     require(u, "accounts", True)
