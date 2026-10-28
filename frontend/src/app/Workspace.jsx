@@ -1904,6 +1904,8 @@ function DataPage({ page, ctx }) {
     [wbWarehouses, setWbWarehouses] = useState([]),
     [kaspiFeedUrl, setKaspiFeedUrl] = useState(""),
     [selectedProducts, setSelectedProducts] = useState([]),
+    [productMatchResult, setProductMatchResult] = useState(null),
+    [productCatalogJob, setProductCatalogJob] = useState(null),
     [productOperation, setProductOperation] = useState(null),
     [catalogView, setCatalogView] = useState("cards"),
     [catalogCategory, setCatalogCategory] = useState(""),
@@ -1989,6 +1991,51 @@ function DataPage({ page, ctx }) {
     } catch(e) { setError(`Сохранено ${saved} из ${rows.length}. ${e.message}`); }
     finally { setBusy(false); }
   };
+  const autoMatchProducts = () => run(async()=>{
+    const result = await api("/products/marketplace-matching/auto", {method:"POST", body:ctx.company ? {company_id:Number(ctx.company)} : {}});
+    setProductMatchResult(result);
+    ctx.bump?.();
+    ctx.notify(`Связано товаров с магазинами: ${result.products_linked}. Добавлено ID-связей: ${result.links_created}. Требуют проверки: ${result.review_count}. Магазинов с каталогом: ${result.catalog_accounts} из ${result.accounts_scanned}.`);
+  });
+  const loadWBProductCatalogs = () => run(async()=>{
+    const result = await api("/products/marketplace-catalogs/wb/refresh", {method:"POST", body:ctx.company ? {company_id:Number(ctx.company)} : {}});
+    setProductCatalogJob(result.job);
+    ctx.notify(result.already_running ? "Загрузка каталога WB уже выполняется" : "Загрузка каталогов WB запущена; финансовые отчёты не пересчитываются");
+  });
+  const retryWBProductCatalogs = () => run(async()=>{
+    const job = await api(`/jobs/${productCatalogJob.id}/retry`, {method:"POST"});
+    setProductCatalogJob(job);
+    ctx.notify("Повторная загрузка каталога WB запущена с сохранённого прогресса");
+  });
+  useEffect(()=>{
+    if (!productCatalogJob?.id || !["queued","running"].includes(productCatalogJob.status)) return undefined;
+    let live = true;
+    const poll = async()=>{
+      try {
+        const job = await api(`/jobs/${productCatalogJob.id}`, {timeoutMs:10000});
+        if (!live) return;
+        setProductCatalogJob(job);
+        if (["done","partial","failed"].includes(job.status)) {
+          if (job.result?.per_account) setProductMatchResult({
+            catalog_refresh: true,
+            products_scanned: job.result.per_account.reduce((n,x)=>n+Number(x.catalog_items || 0),0),
+            accounts_scanned: Object.keys(job.payload?.accounts || {}).length,
+            catalog_accounts: job.result.per_account.filter(x=>Number(x.catalog_items || 0)>0).length,
+            links_created: job.result.links_created || 0,
+            products_linked: job.result.products_linked || 0,
+            already_linked: 0,
+            review: job.result.review || [], review_count: job.result.review_count || 0,
+            per_account: job.result.per_account,
+          });
+          ctx.bump?.();
+          ctx.notify(`Каталог WB: ${job.status === "done" ? "загружен" : job.status === "partial" ? "загружен частично" : "не загружен"}. Связано товаров с магазинами: ${job.result?.products_linked || 0}; проверить вручную: ${job.result?.review_count || 0}.${job.error ? ` ${job.error}` : ""}`);
+        }
+      } catch (e) { if (live) setError(e.message); }
+    };
+    const timer = window.setInterval(poll, 2500);
+    poll();
+    return ()=>{ live=false; window.clearInterval(timer); };
+  },[productCatalogJob?.id,productCatalogJob?.status]);
   const catalogRows = [...(state.data?.items || [])]
     .filter(p => !catalogCategory || p.category === catalogCategory)
     .sort((a,b) => catalogSort === "stock" ? (a.inventory?.available ?? 0)-(b.inventory?.available ?? 0)
@@ -2197,6 +2244,8 @@ function DataPage({ page, ctx }) {
           </div>
           <div className="row-actions">
             {entity === "products" && <>
+              {writable && <button className="secondary" onClick={loadWBProductCatalogs} disabled={busy || ["queued","running"].includes(productCatalogJob?.status)} title="Загрузка карточек WB отдельно от финансовой синхронизации">{["queued","running"].includes(productCatalogJob?.status) ? "Загружаем каталог WB…" : "Загрузить каталог WB"}</button>}
+              {writable && <button className="secondary" onClick={autoMatchProducts} disabled={busy} title="Связывает только однозначные совпадения по точному артикулу продавца">{busy ? "Сопоставляем…" : "Связать по артикулам"}</button>}
               <select aria-label="Категория товара" value={catalogCategory} onChange={e=>setCatalogCategory(e.target.value)}><option value="">Все категории</option>{[...new Set((state.data?.items || []).map(p=>p.category).filter(Boolean))].sort().map(x=><option key={x}>{x}</option>)}</select>
               <select aria-label="Сортировка каталога" value={catalogSort} onChange={e=>setCatalogSort(e.target.value)}><option value="name">Название</option><option value="stock">Остаток ↑</option><option value="stock_desc">Остаток ↓</option><option value="price">Цена ↑</option></select>
               <div className="catalog-view-switch" role="group" aria-label="Вид каталога"><button type="button" className={catalogView === "cards" ? "active" : ""} aria-pressed={catalogView === "cards"} onClick={()=>setCatalogView("cards")}>Карточки</button><button type="button" className={catalogView === "table" ? "active" : ""} aria-pressed={catalogView === "table"} onClick={()=>setCatalogView("table")}>Таблица</button></div>
@@ -2233,6 +2282,13 @@ function DataPage({ page, ctx }) {
             )}
           </div>
         </div>
+        {entity === "products" && productCatalogJob && <div className="product-match-summary" role="status"><b>Каталог WB · {productCatalogJob.status === "running" ? "загружается" : productCatalogJob.status === "queued" ? "в очереди" : productCatalogJob.status}</b><span>{Object.values(productCatalogJob.payload?.accounts || {}).map(row=>`${row.account_name || `магазин #${row.account_id || ""}`}: ${row.status}, ${row.records || 0} карточек`).join(" · ")}</span>{productCatalogJob.error && <small>{productCatalogJob.error}</small>}{["partial","failed"].includes(productCatalogJob.status) && productCatalogJob.attempts < 3 && <button type="button" className="secondary" onClick={retryWBProductCatalogs} disabled={busy}>Повторить загрузку</button>}</div>}
+        {entity === "products" && productMatchResult && <div className="product-match-summary" role="status">
+          <b>{productMatchResult.catalog_refresh ? "Каталог Wildberries сопоставлен" : "Автосопоставление завершено"}</b>
+          <span>{productMatchResult.catalog_refresh ? `${productMatchResult.accounts_scanned} магазинов WB обработано · ${productMatchResult.products_scanned} артикулов каталога · ${productMatchResult.products_linked} товаров-магазинов сопоставлено · ${productMatchResult.links_created} ID-связей добавлено` : `${productMatchResult.products_scanned} товаров проверено · ${productMatchResult.products_linked} связей товар-магазин · ${productMatchResult.links_created} ID-связей добавлено · ${productMatchResult.already_linked} ID уже были связаны`}</span>
+          {productMatchResult.accounts_scanned > productMatchResult.catalog_accounts && <small>Не во всех магазинах загружены карточки для сопоставления. Kaspi API сообщает артикулы товаров из заказов; полный каталог Kaspi автоматически через доступные методы не загружается.</small>}
+          {(productMatchResult.review || []).length > 0 && <ul>{productMatchResult.review.map((row,index)=><li key={`${row.product_id}:${row.account_id}:${index}`}>{row.sku} · {row.account_name}: {row.reason}{row.marketplace_keys?.length ? ` (${row.marketplace_keys.join(", ")})` : ""}</li>)}</ul>}
+        </div>}
         {entity === "documents" && (
           <p className="panel-note">
             Максимум 5 МБ. Компания:{" "}
@@ -2496,6 +2552,9 @@ function EditModal({ kind, item, ctx, close }) {
   const [marketplaceIdRows, setMarketplaceIdRows] = useState([
     {account_id:"", id_type:"product", external_id:""},
   ]);
+  const [productCompanyId, setProductCompanyId] = useState(String(
+    ctx.company || (item?.specifications?._qor_company_ids || [])[0] || ctx.refs.companies?.[0]?.id || ""
+  ));
   const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
   const submitLock = useRef(false);
   const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {});
@@ -2577,7 +2636,14 @@ function EditModal({ kind, item, ctx, close }) {
         else if (f.type === "json") payload[f.key] = JSON.parse(v || "{}");
         else payload[f.key] = v;
       }
-      if (kind === "products") payload.marketplace_stock_allocations = outboundAllocations;
+      if (kind === "products") {
+        payload.marketplace_stock_allocations = outboundAllocations;
+        const specifications = payload.specifications || {};
+        if (productCompanyId) {
+          const companyIds = [...new Set([...(specifications._qor_company_ids || []), Number(productCompanyId)])];
+          payload.specifications = {...specifications, _qor_company_ids:companyIds};
+        }
+      }
       if (kind === "products" && editing) payload.version = item.version;
       if (kind === "adjustments") payload.reference = submissionRef;
       if (kind === "purchases")
@@ -2614,13 +2680,27 @@ function EditModal({ kind, item, ctx, close }) {
         await api(`/accounts/${saved.id}/sync-now?background=true`, {method:"POST", timeoutMs:10000});
         ctx.notify(`${payload.channel}: интеграция создана, API сохранён, проверка и синхронизация запущены`);
       } else {
+        let productSaveMessage = "Товар сохранён";
         if (kind === "products") {
           const identifiers = marketplaceIdRows.filter(row => row.account_id && row.external_id.trim());
           for (const row of identifiers) await api(`/products/${saved.id}/marketplace-mappings`, {
             method:"POST", body:{account_id:Number(row.account_id), id_type:row.id_type, external_id:row.external_id.trim()},
           });
+          if (!editing) {
+            try {
+              const selectedCompanyId = productCompanyId || ctx.company;
+              const matched = await api("/products/marketplace-matching/auto", {method:"POST", body:{product_ids:[saved.id], ...(selectedCompanyId ? {company_id:Number(selectedCompanyId)} : {})}});
+              productSaveMessage = matched.products_linked
+                ? `Товар сохранён и связан с ${matched.products_linked} магазинами по артикулу`
+                : matched.review_count
+                  ? "Товар сохранён. Совпадения требуют проверки в разделе товаров"
+                  : "Товар сохранён. Автоматических совпадений пока нет; каталог магазина должен быть синхронизирован";
+            } catch (matchError) {
+              productSaveMessage = `Товар сохранён. Автопоиск карточек не завершился: ${matchError.message}`;
+            }
+          }
         }
-        ctx.notify(editing ? "Изменения сохранены" : "Операция выполнена");
+        ctx.notify(editing ? "Изменения сохранены" : kind === "products" ? productSaveMessage : "Операция выполнена");
       }
       close();
     } catch (e) {
@@ -2798,6 +2878,7 @@ function EditModal({ kind, item, ctx, close }) {
           {aiQuestions.length > 0 && <div className="product-ai-questions"><b>Проверьте и уточните перед сохранением</b><ul>{aiQuestions.map((q,i)=><li key={i}>{q}</li>)}</ul></div>}
           <small>AI только заполняет поля формы. Товар сохраняется после нажатия «Сохранить».</small>
         </section>}
+        {kind === "products" && <label className="wide">Компания, которой принадлежит этот SKU<select required value={productCompanyId} onChange={e=>setProductCompanyId(e.target.value)}><option value="">Выберите компанию</option>{(ctx.refs.companies || []).map(company=><option key={company.id} value={company.id}>{company.name}</option>)}</select><small>Это помогает безопасно сопоставлять товар только с магазинами этой компании.</small></label>}
         <div className="form-grid">
           {fields.map((f) => (
             <label
@@ -2816,9 +2897,14 @@ function EditModal({ kind, item, ctx, close }) {
           ))}
         </div>
         {kind === "products" && <div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div>}
-        {kind === "products" && <section className="marketplace-sync-settings">
+        {kind === "products" && <details className="product-marketplace-setup" open={Boolean(editing && (item?.marketplace_mappings || []).length)}>
+          <summary>
+            <span><b>Связать Kaspi и Wildberries</b><small>Один раз привяжите карточки магазинов, чтобы объединять продажи и остатки.</small></span>
+            <span className="product-marketplace-summary-count">{(item?.marketplace_mappings || []).length ? `Связано: ${(item.marketplace_mappings || []).length}` : "Настроить"}</span>
+          </summary>
+          <section className="marketplace-sync-settings">
           <h3>Остаток для магазинов</h3>
-          <p className="muted">Склад QOR — общий. Здесь задаётся безопасный лимит, который можно выставить на каждом магазине. Сумма лимитов не должна превышать доступный склад. Сохранение карточки само по себе не публикует товар на маркетплейсе.</p>
+          <p className="muted">Укажите, сколько общего остатка разрешить к продаже в каждом магазине. Товар уже должен быть создан в кабинете Kaspi или WB и связан ниже.</p>
           {(ctx.refs.accounts || []).filter(a=>a.active !== false && ["Kaspi","Wildberries"].includes(a.channel) && (!values.company_id || String(a.company_id) === String(values.company_id))).map(account=>{
             const mappings = (item?.marketplace_mappings || []).filter(m=>m.account_id === account.id);
             const allocation = outboundAllocations[String(account.id)] || {};
@@ -2837,10 +2923,10 @@ function EditModal({ kind, item, ctx, close }) {
               {account.channel === "Kaspi" && <small className="marketplace-account-status">Kaspi получает связанные товары через настроенный прайс-лист магазина. Проверьте подключение и SKU в интеграции.</small>}
             </div>;
           })}
-        </section>}
-        {kind === "products" && <section className="marketplace-sync-settings">
+          </section>
+          <section className="marketplace-sync-settings">
           <h3>Связать существующие карточки</h3>
-          <p className="muted">Создайте товар в QOR один раз, затем добавьте ID существующих карточек Kaspi и WB к этой же карточке. QOR не создаёт карточки на площадках: публикация там требует категории, характеристик, фотографий и подтверждения в кабинете маркетплейса.</p>
+          <p className="muted">Выберите магазин и укажите его артикул или ID карточки. Разные ID Kaspi и WB будут связаны с одним товаром QOR. Если товара ещё нет на площадке, сначала создайте его там.</p>
           {(item?.marketplace_mappings || []).map((mapping, index) => <div className="marketplace-allocation" key={`${mapping.account_id}:${mapping.external_key}:${index}`}><b>{(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.channel || mapping.channel} · {(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.name || `магазин ${mapping.account_id}`}</b><small>{mapping.external_key}</small></div>)}
           {marketplaceIdRows.map((row,index)=><div className="marketplace-allocation" key={index}>
             <label>Магазин<select value={row.account_id} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,account_id:e.target.value}:x))}><option value="">Выберите магазин</option>{(ctx.refs.accounts || []).filter(a=>a.active!==false && ["Kaspi","Wildberries","Ozon"].includes(a.channel) && (!values.company_id || String(a.company_id)===String(values.company_id))).map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select></label>
@@ -2849,7 +2935,8 @@ function EditModal({ kind, item, ctx, close }) {
             {marketplaceIdRows.length>1&&<button type="button" className="secondary" onClick={()=>setMarketplaceIdRows(old=>old.filter((_,i)=>i!==index))}>Убрать</button>}
           </div>)}
           <button type="button" className="secondary" onClick={()=>setMarketplaceIdRows(old=>[...old,{account_id:"",id_type:"product",external_id:""}])}>Добавить ID другого магазина</button>
-        </section>}
+          </section>
+        </details>}
         {kind === "accounts" && !editing && ["Kaspi","Wildberries","Ozon"].includes(values.channel) && (
           <div className="panel padded wide integration-create-box">
             <div className="info-banner"><ShieldCheck size={18}/> API-данные сохраняются на сервере в зашифрованном виде. После создания QOR сразу проверит соединение и запустит синхронизацию.</div>
