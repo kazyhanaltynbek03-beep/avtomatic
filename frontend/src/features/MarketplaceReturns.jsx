@@ -38,7 +38,68 @@ function ReturnDetails({ item }) {
   </dl></details>;
 }
 
-function ReturnRow({ item }) {
+const inventoryStatusLabels = {
+  requested: "Возврат ожидает подтверждения",
+  approved: "Возврат принят",
+  in_transit: "В пути",
+  received: "Получен · ожидает осмотра",
+  inspection: "На проверке",
+  restocked: "Пригоден · добавлен в остаток",
+  defective: "Брак · недоступен для продажи",
+  written_off: "Брак списан",
+};
+const inventoryNext = {
+  requested: ["approved", "Подтвердить возврат"],
+  approved: ["in_transit", "Отметить: в пути"],
+  in_transit: ["received", "Отметить: получен"],
+  received: ["inspection", "Начать проверку"],
+  defective: ["written_off", "Списать брак"],
+};
+
+function InventoryAction({ item, onUpdated }) {
+  const [match, setMatch] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const link = async () => {
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const result = await api(`/marketplace-returns/${item.id}/inventory-match`, { method: "POST" });
+      setMatch(result);
+      if (!result.matched) setError(result.message);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const update = async (status) => {
+    if (!match?.matched || busy) return;
+    let reason = "";
+    if (status === "defective" || status === "written_off") {
+      reason = window.prompt(status === "defective" ? "Укажите причину брака" : "Укажите причину списания брака", "") || "";
+      if (reason.trim().length < 3) { setError("Для фиксации брака нужна причина."); return; }
+    }
+    setBusy(true); setError("");
+    try {
+      const result = await api(`/returns/${match.return_id}/status`, { method: "POST", body: { status, reason } });
+      setMatch((current) => ({ ...current, status: result.inventory_status || status }));
+      onUpdated?.();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const next = match?.matched ? inventoryNext[match.status] : null;
+  return <div className="returns-inventory-action">
+    <strong>Единый склад</strong>
+    {match?.matched ? <>
+      <span>{inventoryStatusLabels[match.status] || match.status} · {match.quantity} шт.</span>
+      {match.status === "inspection" ? <div className="returns-inventory-buttons">
+        <button type="button" className="primary" disabled={busy} onClick={() => update("restocked")}>Пригоден · вернуть в остаток</button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => update("defective")}>Брак</button>
+      </div> : next ? <button type="button" className="secondary" disabled={busy} onClick={() => update(next[0])}>{next[1]}</button> : null}
+    </> : <button type="button" className="secondary" disabled={busy} onClick={link}>{busy ? "Проверяем…" : "Проверить связь со складом"}</button>}
+    {error && <small role="status">{error}</small>}
+  </div>;
+}
+
+function ReturnRow({ item, onUpdated }) {
   const title = item.product_name || "Товар не сопоставлен";
   return <>
     <tr className="returns-desktop-row">
@@ -48,13 +109,13 @@ function ReturnRow({ item }) {
       <td>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</td>
       <td>{item.financial_return_date ? showDate(item.financial_return_date) : "Не подтверждено"}</td>
       <td>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</td>
-      <td><span className="returns-status">{labels[item.status] || item.status}</span><small className="returns-muted">{item.financial_status === "confirmed" ? "Финансы подтверждены" : "Ожидает финансового подтверждения"}</small><ReturnDetails item={item}/></td>
+      <td><span className="returns-status">{labels[item.status] || item.status}</span><small className="returns-muted">{item.financial_status === "confirmed" ? "Финансы подтверждены" : "Ожидает финансового подтверждения"}</small><ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated}/></td>
     </tr>
     <article className="returns-mobile-card">
       <header><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><span className="returns-status">{labels[item.status] || item.status}</span></header>
       <div className="returns-mobile-product">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<div><strong>{title}</strong><small>{item.sku || "SKU не найден"} · {item.store}</small></div></div>
       <div className="returns-mobile-facts"><span>Заказ <b>{item.order_id || "Не подтверждено"}</b></span><span>Кол-во <b>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</b></span><span>Дата возврата <b>{showDate(item.financial_return_date)}</b></span><span>Сумма <b>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</b></span></div>
-      <ReturnDetails item={item}/>
+      <ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated}/>
     </article>
   </>;
 }
@@ -147,7 +208,7 @@ export default function MarketplaceReturns({ ctx }) {
   const financeWrite = can(ctx.auth, "finance", true);
 
   return <section className="marketplace-returns-page">
-    <div className="returns-intro"><div><div className="eyebrow">ОПЕРАЦИИ · ИЗОЛИРОВАННЫЙ ЖУРНАЛ</div><h2>Возвраты маркетплейсов</h2><p>Заявки и финансовые операции показываются отдельно. Обнаружение возврата не меняет продажу, прибыль или склад.</p></div>
+    <div className="returns-intro"><div><div className="eyebrow">ОПЕРАЦИИ · ИЗОЛИРОВАННЫЙ ЖУРНАЛ</div><h2>Возвраты маркетплейсов</h2><p>Финансовая сверка остаётся отдельной. Для склада возврат нужно сопоставить с исходной ERP-продажей, затем отметить получение и результат осмотра.</p></div>
       {wbOrKaspiStores.length > 0 && <div className="returns-sync-actions">{wbOrKaspiStores.map((store) => { const sync = progressByAccount[store.account_id]; const running = sync?.status === "running"; const resume = sync?.status === "partial"; return <button className="secondary returns-sync-button" key={store.account_id} disabled={Boolean(busyAccount || running)} onClick={() => discover(store.account_id)}><RefreshCw size={16} className={running ? "returns-spin" : ""}/>{busyAccount === store.account_id || running ? `Проверяем ${store.name}` : resume ? `Продолжить ${store.name} · ${sync.scanned}` : `Проверить ${store.name}`}</button>; })}</div>}
     </div>
     {actionError && <ErrorBox error={actionError}/>}
@@ -187,7 +248,7 @@ export default function MarketplaceReturns({ ctx }) {
     </div>
     <section className="returns-reconciliation"><div className="returns-reconciliation-title"><PackageCheck size={18}/><strong>Финансовая сверка возвратов</strong><span>Тестовый режим</span></div><div className="returns-reconciliation-grid"><div><small>Текущая сумма отчёта</small><strong>Требует выбора финансового источника</strong></div><div><small>Подтверждённые возвраты за период</small><strong>{summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"}</strong></div><div><small>Уже учтено / ещё не учтено</small><strong>{summary.accounted_amount || summary.not_accounted_amount ? `${money(summary.accounted_amount)} / ${money(summary.not_accounted_amount)}` : "Сверка не выполнена"}</strong></div><div><small>Отдельный скорректированный итог</small><strong>Не рассчитывается автоматически</strong></div></div><p>Автовычитание отключено: возврат не уменьшается повторно, если он уже есть в отчёте. Выручка, прибыль, выплата и денежный поток сверяются отдельно.</p></section>
     {loading && !data ? <Spinner/> : error ? <ErrorBox error={error}/> : records.length ? <>
-      <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={item.id} item={item}/>)}</tbody></table></div>
+      <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={item.id} item={item} onUpdated={() => setPollTick((n) => n + 1)}/>)}</tbody></table></div>
       <div className="returns-pagination"><span>{data.total} записей · страница {currentPage} из {Math.max(pageCount, 1)}</span><div><button disabled={!offset} aria-label="Предыдущая страница" onClick={() => setOffset(Math.max(0, offset - 30))}><ChevronLeft size={18}/></button><button disabled={offset + 30 >= data.total} aria-label="Следующая страница" onClick={() => setOffset(offset + 30)}><ChevronRight size={18}/></button></div></div>
     </> : <div className="returns-empty"><Clock3 size={24}/><strong>Возвраты пока не найдены</strong><span>Записи появятся после проверки сохранённых данных маркетплейса. Открытие страницы не запускает полную синхронизацию.</span></div>}
   </section>;
