@@ -99,14 +99,22 @@ def _resume_kaspi_jobs_once():
             # non-secret; API credentials remain in the existing encrypted store.
             target_ids = {int(x) for x in os.getenv("KASPI_BACKFILL_ACCOUNT_IDS", "").split(",") if x.strip().isdigit()}
             configured_start, configured_end = os.getenv("KASPI_BACKFILL_START"), os.getenv("KASPI_BACKFILL_END")
-            if account.id in target_ids and configured_start and configured_end and not job:
+            if account.id in target_ids and configured_start and configured_end:
                 start_day, end_day = date.fromisoformat(configured_start), date.fromisoformat(configured_end)
                 if end_day < start_day or (end_day-start_day).days > 366:
                     raise ValueError("Invalid configured Kaspi backfill period")
-                owner = db.scalar(select(User).where(User.active.is_(True), User.role == "Owner").order_by(User.id))
-                if owner and not (settings.get("kaspi_period_sync") or {}).get(_kaspi_period_sync_key("issued", start_day, end_day)):
-                    job = {"start":configured_start,"end":configured_end,"mode":"issued","user_id":owner.id,
-                           "status":"retry","retry_at":now().isoformat(),"batches":0,"records":0}
+                target_key = _kaspi_period_sync_key("issued", start_day, end_day)
+                current_is_target = job.get("start") == str(start_day) and job.get("end") == str(end_day)
+                target_complete = bool((settings.get("kaspi_period_sync") or {}).get(target_key))
+                current_is_active = job.get("status") in {"running", "retry"}
+                if not current_is_target and not current_is_active and not target_complete:
+                    owner = db.scalar(select(User).where(User.active.is_(True), User.role == "Owner").order_by(User.id))
+                    if owner:
+                        # A saved per-period cursor is reused by the worker. This
+                        # queues the requested period behind an already-running
+                        # job without overwriting that job's lease or checkpoint.
+                        job = {"start":str(start_day),"end":str(end_day),"mode":"issued","user_id":owner.id,
+                               "status":"retry","retry_at":now().isoformat(),"batches":0,"records":0}
             if job.get("status") not in {"running", "retry"}:
                 continue
             if job["status"] == "running" and heartbeat and heartbeat > now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS):
