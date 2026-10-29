@@ -1102,6 +1102,8 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
     channels = defaultdict(lambda: {"revenue": 0, "cogs": 0, "costs": 0, "quantity": 0, "pending_cogs": 0})
     channel_totals = defaultdict(lambda: {"revenue": 0, "cogs": 0, "costs": 0, "quantity": 0, "commission": 0, "logistics": 0, "advertising": 0, "returns": 0, "return_units": 0, "pending_cogs": 0})
     products = defaultdict(lambda: {"revenue": 0, "cogs": 0, "costs": 0, "quantity": 0, "pending_cogs": 0})
+    products_by_channel = defaultdict(lambda: defaultdict(lambda: {"revenue": 0, "quantity": 0}))
+    products_by_store = defaultdict(lambda: defaultdict(lambda: {"revenue": 0, "quantity": 0}))
     categories = defaultdict(lambda: {"revenue": 0, "cogs": 0, "costs": 0, "quantity": 0, "pending_cogs": 0})
     daily = defaultdict(lambda: {"revenue": 0, "profit": 0, "units": 0})
     catalog = {p.id: p for p in db.scalars(select(Product))}
@@ -1130,6 +1132,9 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
         pr["costs"] += direct_costs
         pr["quantity"] += s.quantity
         pr["pending_cogs"] += int(s.id in pending_cost_ids)
+        for product_totals in (products_by_channel[channel], products_by_store[s.account_id]):
+            product_totals[s.product_id]["revenue"] += s.revenue
+            product_totals[s.product_id]["quantity"] += s.quantity
         cat = categories[catalog[s.product_id].category or "Без категории"]
         cat["revenue"] += s.revenue
         cat["cogs"] += sale_cogs.get(s.id, s.cogs)
@@ -1163,6 +1168,10 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
         pr["revenue"] -= r.revenue
         pr["cogs"] -= return_cost
         pr["quantity"] -= r.quantity
+        channel = accounts[s.account_id].channel
+        for product_totals in (products_by_channel[channel], products_by_store[s.account_id]):
+            product_totals[s.product_id]["revenue"] -= r.revenue
+            product_totals[s.product_id]["quantity"] -= r.quantity
         cat = categories[catalog[s.product_id].category or "Без категории"]
         cat["revenue"] -= r.revenue
         cat["cogs"] -= return_cost
@@ -1192,6 +1201,26 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
         if account:
             channels[account.name]['pending_cogs']+=1
             channel_totals[account.channel]['pending_cogs']+=1
+    def ranked_product_rows(totals, limit=50):
+        return [
+            {"id": pid, "sku": catalog[pid].sku, "name": catalog[pid].name, **values}
+            for pid, values in sorted(
+                totals.items(), key=lambda item: (item[1]["quantity"], item[1]["revenue"]), reverse=True
+            ) if values["quantity"] > 0
+        ][:limit]
+
+    product_ranking_by_channel = {
+        channel: ranked_product_rows(totals)
+        for channel, totals in products_by_channel.items()
+    }
+    product_ranking_by_store = {
+        str(account_id): {
+            "store": accounts[account_id].name,
+            "channel": accounts[account_id].channel,
+            "products": ranked_product_rows(totals, limit=20),
+        }
+        for account_id, totals in products_by_store.items()
+    }
     stock = defaultdict(lambda: {"quantity": 0, "value": 0})
     for m in movements:
         stock[m.product_id]["quantity"] += m.quantity
@@ -1305,6 +1334,8 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
             }
             for pid, v in products.items()
         ],
+        "products_by_channel": product_ranking_by_channel,
+        "products_by_store": product_ranking_by_store,
         "daily": [{"date": k, **v, "profit": v["profit"] if net_profit_complete else None} for k, v in sorted(daily.items())],
         "stock": stockrows,
         "stock_alerts": [s for s in stockrows if s["quantity"] <= s["min_stock"]],

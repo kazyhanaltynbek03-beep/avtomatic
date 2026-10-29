@@ -200,3 +200,34 @@ def test_dashboard_sales_finance_inventory_and_ai_share_backend_truth(ledger, mo
     ai_finance = _agent_tool_data(truth, "get_finance_summary")
     for key in ("revenue", "cogs", "gross_profit", "net_profit", "commission", "logistics", "advertising", "cash_flow", "b2b_debt"):
         assert ai_finance[key] == truth[key]
+
+
+
+def test_product_ranking_is_available_by_channel_and_store_without_changing_finance(ledger):
+    db, user = ledger
+    for account_id, reference in ((1, "KASPI-PRODUCT"), (2, "WB-PRODUCT")):
+        sale = f.sale(db, user, s.SaleIn(company_id=1, account_id=account_id,
+            reference=reference, date=date(2026, 10, 2), product_id=1,
+            quantity=4, unit_price=300_000, paid=1_200_000))
+        f.return_sale(db, user, s.ReturnIn(sale_id=sale.id,
+            reference=f"RETURN-{reference}", date=date(2026, 10, 3),
+            quantity=1, refund=300_000))
+    db.commit()
+
+    truth = f.report(db, user, START, END, 1)
+    ai_products = _agent_tool_data(truth, "get_product_summary")
+
+    # One SKU sold 4 units and had one return in each marketplace.
+    assert ai_products["products_by_channel"]["Kaspi"][0]["quantity"] == 3
+    assert ai_products["products_by_channel"]["Wildberries"][0]["quantity"] == 3
+    assert ai_products["products_by_store"]["1"]["products"][0]["quantity"] == 3
+    assert ai_products["products_by_store"]["2"]["products"][0]["quantity"] == 3
+
+    for channel, rows in ai_products["products_by_channel"].items():
+        summary = next(row for row in truth["channel_summary"] if row["channel"] == channel)
+        assert sum(row["quantity"] for row in rows) == summary["quantity"]
+        assert sum(row["revenue"] for row in rows) == summary["revenue"]
+    for account_id, store in ai_products["products_by_store"].items():
+        summary = next(row for row in truth["channels"] if row["name"] == store["store"])
+        assert sum(row["quantity"] for row in store["products"]) == summary["quantity"]
+        assert sum(row["revenue"] for row in store["products"]) == summary["revenue"]
