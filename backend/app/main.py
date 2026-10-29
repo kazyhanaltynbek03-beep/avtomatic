@@ -1195,6 +1195,85 @@ def marketplace_record_details(
     return {"channel": channel, "metric": metric, "start": str(start), "end": str(end), "items": output, "note": note}
 
 
+@app.get("/api/marketplace-report.xlsx")
+def marketplace_report_xlsx(channel: str, start: date, end: date,
+                            company_id: int | None = None, account_id: int | None = None,
+                            u=Depends(current_user), db=Depends(get_db)):
+    """Export a separate API-sourced marketplace report without changing ERP calculations."""
+    require(u, "analytics")
+    if channel not in {"Kaspi", "Wildberries"}:
+        raise HTTPException(422, "Отчёт API доступен для Kaspi и Wildberries")
+    if end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
+    if channel == "Wildberries":
+        # The official WB Finance export is the source of truth for this channel.
+        # Keep the custom range in its isolated report namespace.
+        period = "custom"
+        _wb_finance_period_args(period, start, end)
+        account = _wb_week_account(db, u, account_id)
+        from .wb_weekly import build_report, create_xlsx
+        report = build_report(db, account, start, end, period=period)
+        if report.get("status") != "готов" or not report.get("row_count"):
+            raise HTTPException(409, "Финансовый отчёт WB за период ещё не получен")
+        raw = create_xlsx(report)
+        filename = f"WB-API-{start}-{end}.xlsx"
+    else:
+        # Reuse the existing, read-only Kaspi API summary and detail selectors.
+        # These are copies of current API/ERP fields; this export has no new
+        # commissions, tax, return or profit formulas.
+        summary = marketplace_summary(channel, start, end, company_id, account_id, u, db)
+        sales = marketplace_record_details(channel, "sales", start, end, company_id, account_id, u, db)
+        returns = marketplace_record_details(channel, "returns", start, end, company_id, account_id, u, db)
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from io import BytesIO
+        book = Workbook(); overview = book.active; overview.title = "Итоги API"
+        api_available = summary.get("api_data_available") is True
+        overview.append(["Kaspi · отчёт по данным API"])
+        overview.append(["Период", f"{start} — {end}"])
+        overview.append(["Статус синхронизации", summary.get("sync_status")])
+        overview.append(["Последняя синхронизация", str(summary.get("last_sync") or "—")])
+        overview.append(["Данные API подтверждены", "Да" if api_available else "Нет"])
+        overview.append(["Показатель", "Значение", "Источник / смысл"])
+        for label, key, note in [
+            ("Продажи API, до возвратов", "api_gross_revenue", "Подтверждённые строки Kaspi API"),
+            ("Продажи API, за вычетом возвратов", "api_revenue", "Поле сводки Kaspi API"),
+            ("Продано, шт.", "api_units", "Количество из строк Kaspi API"),
+            ("Возвраты API", "api_returns", "Фактическая сумма возврата не предоставляется API"),
+            ("Возвраты, шт.", "api_return_units", "Количество из строк Kaspi API"),
+            ("Строки без конвертации", "api_unconverted", "Требуют проверки даты/суммы"),
+        ]:
+            overview.append([label, summary.get(key) if api_available else None, note])
+        sale_ws = book.create_sheet("Продажи API")
+        headers = ["Дата выдачи", "Магазин", "ID заказа", "Товар", "SKU", "Количество", "Сумма API", "Валюта", "Статус"]
+        sale_ws.append(headers)
+        for item in sales.get("items", []):
+            sale_ws.append([item.get("event_date"), item.get("store"), item.get("reference"), item.get("product_name"), item.get("sku"), item.get("quantity"), item.get("amount"), item.get("currency"), item.get("status")])
+        return_ws = book.create_sheet("Возвраты API")
+        return_ws.append(["Дата возврата API", "Магазин", "ID заказа", "Товар", "SKU", "Количество", "Сумма возврата", "Валюта", "Статус"])
+        for item in returns.get("items", []):
+            return_ws.append([item.get("event_date"), item.get("store"), item.get("reference"), item.get("product_name"), item.get("sku"), item.get("quantity"), item.get("amount"), item.get("currency"), item.get("status")])
+        note_ws = book.create_sheet("Примечания")
+        note_ws.append(["Показатель", "Источник", "Ограничение"])
+        note_ws.append(["Суммы и продажи", "Kaspi API и действующая сводка QOR", "Экспорт не пересчитывает финансовые показатели"])
+        note_ws.append(["Возвраты", "Статусы и позиции Kaspi API", "Kaspi API не подтверждает фактическую дату и сумму возврата; пустые суммы намеренно оставлены пустыми"])
+        for ws in book.worksheets:
+            ws.freeze_panes = "A2"; ws.auto_filter.ref = ws.dimensions if ws.max_row > 1 else None
+            header_rows = (1, 6) if ws.title == "Итоги API" else (1,)
+            for row_no in header_rows:
+                for cell in ws[row_no]:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill("solid", fgColor="135B45")
+                    cell.alignment = Alignment(vertical="center", wrap_text=True)
+            for column in ws.columns:
+                width = min(44, max(14, max(len(str(c.value or "")) for c in list(column)[:200]) + 2))
+                ws.column_dimensions[column[0].column_letter].width = width
+        out = BytesIO(); book.save(out); raw = out.getvalue()
+        filename = f"Kaspi-API-{start}-{end}.xlsx"
+    return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @app.post("/api/marketplace-returns/discover")
 def discover_marketplace_returns(payload: dict, tasks: BackgroundTasks,
                                  u=Depends(current_user), db=Depends(get_db)):

@@ -42,6 +42,22 @@ def test_fetch_daily_period_and_month_validation(monkeypatch):
         assert wb_weekly._validate_report_period("monthly", today.replace(day=1), today - timedelta(days=1)) == "daily"
 
 
+def test_custom_period_uses_daily_wb_api_without_changing_other_period_rules():
+    start, end = date(2026, 5, 5), date(2026, 10, 5)
+    assert wb_weekly._validate_report_period("custom", start, end) == "daily"
+    try:
+        wb_weekly._validate_report_period("custom", end, start)
+        assert False, "reversed custom range should be rejected"
+    except ValueError as exc:
+        assert "Начало периода" in str(exc)
+    try:
+        tomorrow = wb_weekly.finance_today() + timedelta(days=1)
+        wb_weekly._validate_report_period("custom", tomorrow, tomorrow)
+        assert False, "future custom range should be rejected"
+    except ValueError as exc:
+        assert "завершённый день" in str(exc)
+
+
 def test_profit_is_based_on_payout_and_deducts_costs_once():
     assert wb_weekly.payout_profit("700", "400", "50", "10", "20", "5", "15") == 200
     # The independent commission/acquiring fields and retail/SPP fields are intentionally not inputs.
@@ -70,6 +86,40 @@ def test_monthly_finance_sync_uses_daily_api_and_separate_period_storage(client,
             MarketplaceRecord.source == wb_weekly.SOURCE,
             MarketplaceRecord.external_id == "row:2026-09-01:501",
         ).first()
+
+
+def test_custom_finance_sync_keeps_selected_range_and_rows_isolated(client, monkeypatch):
+    start, end = date(2026, 5, 5), date(2026, 10, 5)
+    calls = []
+    def fake_fetch(token, range_start, range_end, api_period):
+        calls.append((range_start, range_end, api_period))
+        return [{"rrdId": 9501, "currency": "KZT", "vendorCode": "M-CUSTOM", "nmId": 9501,
+                 "docTypeName": "Продажа", "quantity": 1, "forPay": "900", "rrDt": "2026-08-14"}]
+    monkeypatch.setattr(wb_weekly, "fetch_period", fake_fetch)
+    with SessionLocal() as db:
+        account = Account(company_id=1, name="WB custom", channel="Wildberries", mode="api")
+        db.add(account); db.commit(); db.refresh(account)
+        state = wb_weekly.sync_period(db, account, "token", "custom", start, end)
+        report = wb_weekly.build_report(db, account, start, end, period="custom")
+        assert calls == [(start, end, "daily")]
+        assert state["status"] == report["status"] == "готов"
+        assert report["period"] == "custom"
+        assert report["start"] == str(start) and report["end"] == str(end)
+        assert report["totals"]["payout"] == "900"
+        assert db.query(MarketplaceRecord).filter(
+            MarketplaceRecord.account_id == account.id,
+            MarketplaceRecord.source == wb_weekly.SOURCE,
+            MarketplaceRecord.external_id == f"row:custom:{start}:{end}:9501",
+        ).count() == 1
+        shorter_end = date(2026, 9, 30)
+        wb_weekly.sync_period(db, account, "token", "custom", start, shorter_end)
+        shorter = wb_weekly.build_report(db, account, start, shorter_end, period="custom")
+        assert shorter["row_count"] == report["row_count"] == 1
+        assert db.query(MarketplaceRecord).filter(
+            MarketplaceRecord.account_id == account.id,
+            MarketplaceRecord.source == wb_weekly.SOURCE,
+            MarketplaceRecord.external_id.like(f"row:custom:{start}:%"),
+        ).count() == 2
 
 
 def test_xlsx_totals_use_full_report_including_unallocated_operations():

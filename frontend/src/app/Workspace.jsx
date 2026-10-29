@@ -2136,7 +2136,7 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
     ? (Math.round(Number(totals.payout) * 100) - Math.round(Number(totals.logistics_total) * 100) - Math.round(Number(totals.penalty) * 100) - Math.round(Number(totals.storage) * 100)) / 100
     : null;
   const cogsComplete = data.cogs_complete === true;
-  const periodLabel = period === "weekly" ? "Недельный" : period === "monthly" ? "Месячный" : "Дневной";
+  const periodLabel = period === "weekly" ? "Недельный" : period === "monthly" ? "Месячный" : period === "custom" ? "Отчёт за выбранный период" : "Дневной";
   const wbReportMetrics = [
     ["WB реализовал товар",totals.realization],
     ["Возвраты WB (уменьшение начисления)",data.row_count ? -Number(data.returns_amount || 0) : null],
@@ -2231,8 +2231,67 @@ function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefres
   </section>;
 }
 
+function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
+  const [start,setStart]=useState(ctx.start), [end,setEnd]=useState(ctx.end);
+  const [range,setRange]=useState(null), [refresh,setRefresh]=useState(0), [busy,setBusy]=useState(false), [error,setError]=useState("");
+  const params=new URLSearchParams({channel,start:range?.start||start,end:range?.end||end});
+  if(ctx.company) params.set("company_id",ctx.company);
+  if(selectedAccount) params.set("account_id",String(selectedAccount.id));
+  const active=Boolean(range);
+  const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
+  const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
+  const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
+  const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh);
+  const returns=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+returnsParams:null,refresh);
+  const apiAvailable=summary.data?.api_data_available===true;
+  const generate=async(event)=>{
+    event.preventDefault(); setError("");
+    if(!start||!end||end<start){setError("Проверьте даты: начало должно быть не позже окончания.");return;}
+    setBusy(true);
+    try {
+      if(channel==="Kaspi"&&can(ctx.auth,"accounts",true)) {
+        const targets=selectedAccount?[selectedAccount]:accounts;
+        await Promise.allSettled(targets.map(a=>api(`/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})));
+      }
+      setRange({start,end}); setRefresh(v=>v+1);
+    } finally {setBusy(false);}
+  };
+  const download=async()=>{
+    if(!range) return;
+    setError(""); setBusy(true);
+    try { await downloadApiFile(`/marketplace-report.xlsx?${params.toString()}`,`${channel}-API-${range.start}-${range.end}.xlsx`); }
+    catch(e){setError(e.message||"Не удалось сформировать Excel");}
+    finally{setBusy(false);}
+  };
+  return <section className="panel marketplace-client-report" aria-label={`Отдельный отчёт ${channel}`}>
+    <div className="section-heading"><div><h3>Отдельный отчёт {channel}</h3><p className="muted">Собирает страницы и Excel за выбранные даты. Источник — сохранённые записи API и действующие отчёты QOR.</p></div></div>
+    <form className="row-actions" onSubmit={generate}>
+      <label>С<input type="date" value={start} onChange={e=>setStart(e.target.value)} required/></label>
+      <label>По<input type="date" value={end} onChange={e=>setEnd(e.target.value)} required/></label>
+      <button className="primary" type="submit" disabled={busy||!accounts.length}>{busy?"Готовим…":"Показать отчёт"}</button>
+      {channel==="Kaspi"&&<button type="button" disabled={!range||busy} onClick={download}>{busy?"Формируем…":"Скачать Excel"}</button>}
+    </form>
+    {error&&<ErrorBox error={error}/>}
+    {active&&<>
+      {channel==="Wildberries" ? <WBFinanceReport key={`client-custom:${range.start}:${range.end}`} accounts={selectedAccount?[selectedAccount]:accounts} company={ctx.company} period="custom" start={range.start} end={range.end}/> : <>
+        {summary.loading&&!summary.data?<Spinner/>:summary.error?<ErrorBox error={summary.error}/>:<>
+          <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. Значения показаны в том виде, как их отдаёт API/сводка.</p>
+          <div className="marketplace-report-summary">
+        {[ ["Продажи API",apiAvailable?summary.data?.api_gross_revenue:null], ["Продажи после возвратов",apiAvailable?summary.data?.api_revenue:null], ["Единиц продано",!apiAvailable?"Нет данных":summary.data?.api_units==null?"—":`${summary.data.api_units} шт.`], ["Возвраты",!apiAvailable?"Нет данных":summary.data?.api_returns==null?"—":summary.data.api_returns], ["Единиц возврата",!apiAvailable?"Нет данных":summary.data?.api_return_units==null?"—":`${summary.data.api_return_units} шт.`] ].map(([label,value])=><article className="kpi" key={label}><span>{label}</span><strong>{typeof value==="number"?money(value):value??"Нет подтверждённых данных"}</strong></article>)}
+          </div>
+          {summary.data?.sync_errors?.length>0&&<ErrorBox error={summary.data.sync_errors.join("; ")}/>}
+          <p className="muted">Kaspi API подтверждает позиции и статусы возвратов, но не отдаёт фактические дату и сумму возврата. Поэтому неподтверждённые суммы в отчёте остаются пустыми.</p>
+          {sales.loading?<Spinner/>:sales.error?<ErrorBox error={sales.error}/>:<><h4>Продажи API · {sales.data?.items?.length||0} строк</h4><div className="table-wrap"><table className="data-table"><thead><tr><th>Дата выдачи</th><th>Магазин</th><th>ID заказа</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма API</th><th>Статус</th></tr></thead><tbody>{(sales.data?.items||[]).slice(0,1000).map(x=><tr key={`${x.account_id}:${x.id}`}><td>{x.event_date||"—"}</td><td>{x.store}</td><td>{x.reference}</td><td>{x.product_name}<small>{x.sku}</small></td><td>{x.quantity??"—"}</td><td>{x.amount==null?"—":money(Number(x.amount)*100)}</td><td>{x.status}</td></tr>)}</tbody></table></div></>}
+          {returns.loading?<Spinner/>:returns.error?<ErrorBox error={returns.error}/>:<><h4>Возвраты API · {returns.data?.items?.length||0} строк</h4><div className="table-wrap"><table className="data-table"><thead><tr><th>Дата API</th><th>Магазин</th><th>ID заказа</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>{(returns.data?.items||[]).slice(0,1000).map(x=><tr key={`${x.account_id}:${x.id}`}><td>{x.event_date||"Не подтверждена"}</td><td>{x.store}</td><td>{x.reference}</td><td>{x.product_name}<small>{x.sku}</small></td><td>{x.quantity??"—"}</td><td>{x.amount==null?"Не предоставлена API":money(Number(x.amount)*100)}</td><td>{x.status}</td></tr>)}</tbody></table></div></>}
+        </>}
+      </>}
+    </>}
+  </section>;
+}
+
 function MarketplaceInbox({ channel, ctx }) {
   const [wbTab,setWbTab] = useState("finance");
+  const [showClientReport,setShowClientReport]=useState(false);
   const [ordersMode,setOrdersMode] = useState(false);
   const [kaspiReportMode,setKaspiReportMode] = useState("issued");
   const [summaryReload,setSummaryReload] = useState(0);
@@ -2354,7 +2413,8 @@ function MarketplaceInbox({ channel, ctx }) {
     if (startDate.getUTCDate() === 1 && sameMonth && reportEnd < todayKey && (reportEnd === lastDay || reportEnd === yesterdayKey)) {
       return {period:"monthly", start:ctx.start, end:reportEnd};
     }
-    return {error:"Отчёт WB по API доступен за один завершённый день, полную прошлую неделю или месяц. Выберите такой период сверху."};
+    if (reportEnd < todayKey) return {period:"custom", start:ctx.start, end:reportEnd};
+    return {error:"Финансовый отчёт WB доступен только по завершённые дни. Укажите дату окончания не позже вчерашнего дня."};
   })();
 
   useEffect(()=>setOffset(0), [ctx.company,channel,status,selectedAccountId]);
@@ -2379,7 +2439,8 @@ function MarketplaceInbox({ channel, ctx }) {
     ["Чистая прибыль", incomplete ? "—" : m.net_profit, incomplete ? (fxPending ? "Прибыль ожидает курс/проведение и FIFO — ложное значение не показываем" : "Не показываем ложную прибыль: есть продажи без FIFO") : (m.margin == null ? "Маржа —" : `Маржа ${decimal(m.margin)}%`), {source:"ledger",metric:"net_profit",title:"Чистая прибыль по проведённым операциям"}],
   ];
   return <div className="panel marketplace-inbox">
-    <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div>{state.loading ? <span className="pill" role="status" aria-live="polite">Загружаем API…</span> : state.error ? <span className="pill marketplace-read-error" role="alert" title={state.error}>Ошибка чтения API</span> : <span className="pill">{state.data?.total ?? 0} API-записей</span>}</div>
+    <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><div className="row-actions"><button type="button" className={showClientReport?"primary":""} aria-expanded={showClientReport} onClick={()=>setShowClientReport(v=>!v)}>{showClientReport?"Скрыть отдельный отчёт":"Отчёт за период · Excel"}</button>{state.loading ? <span className="pill" role="status" aria-live="polite">Загружаем API…</span> : state.error ? <span className="pill marketplace-read-error" role="alert" title={state.error}>Ошибка чтения API</span> : <span className="pill">{state.data?.total ?? 0} API-записей</span>}</div></div>
+    {showClientReport&&<ClientMarketplaceReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount}/>}
     {(channel === "Kaspi" || channel === "Wildberries") && <div className="row-actions" role="group" aria-label="Отчёты маркетплейса"><button type="button" className={!ordersMode?"primary":""} aria-pressed={!ordersMode} onClick={()=>setOrdersMode(false)}>Продажи и финансы</button><button type="button" className={ordersMode?"primary":""} aria-pressed={ordersMode} onClick={()=>setOrdersMode(true)}>Заказы и доставка</button></div>}
     {ordersMode ? <MarketplaceOrdersReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount} canRefresh={can(ctx.auth,"accounts",true)}/> : <>
     {channel === "Kaspi" && <div className="row-actions kaspi-report-controls" role="group" aria-label="Режим отчёта Kaspi">
