@@ -2251,7 +2251,13 @@ function MarketplaceInbox({ channel, ctx }) {
   const summaryParams = new URLSearchParams({channel, start:ctx.start, end:ctx.end});
   if (ctx.company) summaryParams.set("company_id", ctx.company);
   if (selectedAccount) summaryParams.set("account_id", String(selectedAccount.id));
-  const summary = useLoad("/marketplace-summary?" + summaryParams, `${ctx.refresh}:${summaryReload}`);
+  const summaryPath = "/marketplace-summary?" + summaryParams;
+  const summary = useLoad(summaryPath, `${ctx.refresh}:${summaryReload}`);
+  const summaryCacheRef = useRef({path:"", data:null});
+  useEffect(()=>{
+    if (summary.data) summaryCacheRef.current = {path:summaryPath, data:summary.data};
+  },[summary.data,summaryPath]);
+  const displayedSummary = summary.data || (summary.loading && summaryCacheRef.current.path === summaryPath ? summaryCacheRef.current.data : null);
   const canSyncKaspi = can(ctx.auth,"accounts",true);
   const accountKey = scopedAccounts.map(a=>a.id).join(",");
   const ordersCreatedParams = new URLSearchParams({start:ctx.start,end:ctx.end,limit:"100"});
@@ -2288,7 +2294,7 @@ function MarketplaceInbox({ channel, ctx }) {
   },[channel,accountKey,ctx.start,ctx.end,ctx.refresh,kaspiReportMode,canSyncKaspi]);
 
   const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress && !summary.data?.sync_errors?.length;
-  const m = summary.data || {};
+  const m = displayedSummary || {};
   const created = ordersCreated.data || {};
   const activeSyncErrors = kaspiReportMode === "created" ? created.sync_errors : m.sync_errors;
   useEffect(()=>{
@@ -2388,7 +2394,7 @@ function MarketplaceInbox({ channel, ctx }) {
     </> : null}
     {channel === "Kaspi" && m.sync_in_progress && !m.sync_errors?.length && kaspiReportMode === "issued" && <p className="muted" role="status">Обновляем выбранный период Kaspi в фоне. Страница продолжает показывать сохранённые итоги.</p>}
     {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи"],["finance","Финансы"],["products","Товары"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
-    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : (() => {
+    {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading && !displayedSummary ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : (() => {
       const visible = marketplaceKpis.filter(([title])=>channel!=="Wildberries" || ["Оборот продаж WB","Продано"].includes(title));
       const isPrimary = ([title]) => channel==="Kaspi"
         ? ["Выручка API за вычетом возвратов","К получению (расчёт)","Продано","Чистая прибыль"].includes(title)
