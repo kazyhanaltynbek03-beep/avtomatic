@@ -2258,3 +2258,36 @@ button.marketplace-report-metric[aria-pressed=true]{background:#f1f8f3}
 .marketplace-report-summary:not(.wb-report-summary) .kpi{min-width:0}
 @media(max-width:900px){.wb-report-overview{grid-template-columns:1fr}.wb-report-total{min-height:130px}.marketplace-report-summary:not(.wb-report-summary){grid-template-columns:repeat(2,minmax(0,1fr))}.marketplace-report-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.wb-weekly-report{padding:14px}.wb-report-overview{gap:9px;margin:12px 0}.wb-report-total{padding:18px;min-height:125px;border-radius:15px}.wb-report-total strong{font-size:28px}.wb-report-summary{gap:8px}.marketplace-report-summary:not(.wb-report-summary){gap:8px;margin:12px 0}.marketplace-report-summary:not(.wb-report-summary) .kpi{padding:13px;border-radius:13px}.marketplace-report-metric>span{font-size:12px}.marketplace-report-metrics{grid-template-columns:1fr}.marketplace-report-details>summary{padding:14px;font-size:14px}.marketplace-report-details>summary small{font-size:11px}.wb-report-breakdown{gap:8px}}
+
+
+/* Marketplace orders: keep the report readable on desktop and turn each order into a card on phones. */
+.marketplace-orders-report{min-width:0}
+.marketplace-orders-report>.row-actions[role="group"]{display:flex;flex-wrap:wrap;gap:8px}
+.marketplace-orders-report>.row-actions[role="group"]>button{min-height:40px}
+@media(max-width:700px){
+  .marketplace-orders-report{padding:14px}
+  .marketplace-orders-report>.section-heading{align-items:flex-start;flex-direction:column;gap:10px}
+  .marketplace-orders-report>.section-heading>button{width:100%;min-height:44px;justify-content:center}
+  .marketplace-orders-report>.row-actions[role="group"]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .marketplace-orders-report>.row-actions[role="group"]>button{min-width:0;min-height:44px;padding:8px 7px;white-space:normal;line-height:1.25}
+  .marketplace-orders-report>.table-scroll{overflow:visible}
+  .marketplace-orders-report>.table-scroll>table{display:block;width:100%;min-width:0}
+  .marketplace-orders-report>.table-scroll>table>thead{display:none}
+  .marketplace-orders-report>.table-scroll>table>tbody{display:grid;gap:10px}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;border:1px solid #e2eae5;border-radius:14px;background:#fff;overflow:hidden}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td{display:flex;flex-direction:column;gap:4px;min-width:0;max-width:none;padding:10px;border:0;border-bottom:1px solid #edf1ee;overflow-wrap:anywhere;font-size:12px}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td::before{color:#829187;font-size:10px;font-weight:650;letter-spacing:.03em}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(1)::before{content:"МАГАЗИН"}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(2)::before{content:"ДАТА"}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(3)::before{content:"ЗАКАЗ"}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(4){grid-column:1/-1}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(4)::before{content:"ТОВАР / SKU"}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(5)::before{content:"КОЛИЧЕСТВО"}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(6)::before{content:"СУММА ЗАКАЗА"}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(7){align-items:flex-start}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(7)::before{content:"СТАТУС API"}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(8){grid-column:1/-1}
+  .marketplace-orders-report>.table-scroll>table>tbody>tr>td:nth-child(8)::before{content:"УЧЁТ / ДЕНЬГИ"}
+  .marketplace-orders-report .marketplace-order-status{white-space:normal;line-height:1.3}
+  .marketplace-orders-report>p.muted{font-size:11px;line-height:1.5}
+}
