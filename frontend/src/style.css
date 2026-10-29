@@ -2414,6 +2414,7 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
 .marketplace-inbox>.section-heading{align-items:flex-start;gap:12px}
 .marketplace-inbox>.section-heading>div{flex:1 1 280px;min-width:0}
 .marketplace-inbox>.section-heading>.pill{flex:0 0 auto;align-self:flex-start;margin-top:2px}
+.marketplace-inbox>.section-heading>.marketplace-read-error{background:#fff0ed;color:#a23c31;letter-spacing:0}
 .marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:10px;margin:10px 14px 14px;padding:0}
 .marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]>button{width:100%;min-width:0;min-height:48px;padding:10px 12px;border:1px solid #dce7e1;border-radius:12px;background:#f5f8f6;color:#315345;font-size:13px;font-weight:700;line-height:1.25;text-align:center;white-space:normal;overflow-wrap:anywhere}
 .marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]>button.primary{border-color:#17664c;background:#17664c;color:#fff}
