@@ -1896,7 +1896,6 @@ function MarketplaceInbox({ channel, ctx }) {
       return {period:"daily", start:ctx.start, end:reportEnd};
     }
     const startDate = asDate(ctx.start);
-    const endDate = asDate(reportEnd);
     if (startDate.getUTCDay() === 1 && shift(ctx.start, 6) === reportEnd && reportEnd < todayKey) {
       return {period:"weekly", start:ctx.start, end:reportEnd};
     }
