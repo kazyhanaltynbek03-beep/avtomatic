@@ -237,3 +237,45 @@ def test_claude_connection_check_does_not_load_or_send_erp_data(monkeypatch):
     assert sent["messages"] == [{"role": "user", "content": "Reply exactly: CLAUDE_OK"}]
     assert not sent["args"] and not sent["kwargs"]
     assert "confidential" not in str(sent)
+
+
+
+def test_assistant_recovers_when_claude_tool_turn_has_no_final_text(monkeypatch):
+    from app import ai
+
+    monkeypatch.setattr(ai, "require", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai, "report", lambda *args, **kwargs: {
+        "start": "2026-10-01", "end": "2026-10-29", "currency": "KZT",
+        "money_unit": "tiyn", "method": "FIFO", "profit_complete": True,
+        "pending_cogs_sales": 0, "incomplete_reason": None, "revenue": 12345,
+        "gross_profit": 10000, "net_profit": 9000, "margin": 0.7, "units": 2,
+        "returns": 0, "advertising": 0, "expenses": 0, "cash": 9000,
+        "stock_value": 0, "b2b_debt": 0,
+    })
+    monkeypatch.setattr(ai, "_agent_skills", lambda _: [])
+
+    calls = []
+
+    def fake_call_response(messages, instructions, tools=None, tool_choice=None, **kwargs):
+        calls.append({"messages": messages, "instructions": instructions, "tools": tools})
+        if len(calls) == 1:
+            return {"output": [{"type": "function_call", "name": "get_executive_summary",
+                                "arguments": "{}", "call_id": "call-1"}],
+                    "raw_content": [], "stop_reason": "tool_use"}
+        if len(calls) == 2:
+            return {"output": [], "raw_content": [], "stop_reason": "end_turn"}
+        return {"output": [{"type": "message", "content": [
+            {"type": "output_text", "text": "Выручка: 123,45 KZT."}]}],
+            "raw_content": [{"type": "text", "text": "Выручка: 123,45 KZT."}],
+            "stop_reason": "end_turn"}
+
+    monkeypatch.setattr(ai, "call_response", fake_call_response)
+    result = ai.assistant(object(), object(), {
+        "agent": "rick", "question": "Сколько выручка?", "start": "2026-10-01",
+        "end": "2026-10-29", "history": [{"role": "user", "content": "Сколько выручка?"}],
+    })
+
+    assert result["answer"] == "Выручка: 123,45 KZT."
+    assert result["tools_used"] == ["get_executive_summary"]
+    assert calls[0]["tools"] and calls[2]["tools"] is None
+    assert "12345" in calls[2]["messages"][0]["content"]
