@@ -1398,7 +1398,7 @@ function ReportPage({ page, ctx }) {
       </div>
       <div className="bottom-grid profitability-grid">
         <div className="panel">
-          <div className="panel-heading"><div><h2>Прибыль по каналам</h2><span>Kaspi · WB · Ozon · Offline · B2B</span></div></div>
+          <div className="panel-heading"><div><h2>Прибыль по каналам</h2><span>Выручка и прибыль — проведённые ERP-операции; оборот Kaspi и WB из API показан выше</span></div></div>
           <Table rows={r.channel_summary || []} cols={["channel", "quantity", "revenue", "cogs", "costs", "profit"]} />
         </div>
         <div className="panel">
