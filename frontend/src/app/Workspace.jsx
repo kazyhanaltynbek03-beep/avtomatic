@@ -2241,8 +2241,8 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
   useEffect(()=>{
     if(channel!=="Kaspi"||!active||summary.data?.sync_status!=="running") return;
-    const timer=setInterval(()=>setRefresh(value=>value+1),5000);
-    return ()=>clearInterval(timer);
+    const timer=window.setInterval(()=>setRefresh(value=>value+1),5000);
+    return ()=>window.clearInterval(timer);
   },[channel,active,summary.data?.sync_status]);
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
   const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
