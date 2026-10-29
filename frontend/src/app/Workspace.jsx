@@ -2871,9 +2871,13 @@ function EditModal({ kind, item, ctx, close }) {
     if (f.type === "select")
       return (
         <select value={v} onChange={(e) => set(f.key, e.target.value)}>
-          {f.options.map((x) => (
-            <option key={x}>{x}</option>
-          ))}
+          {f.options.map((x) =>
+            Array.isArray(x) ? (
+              <option key={x[0]} value={x[0]}>{x[1]}</option>
+            ) : (
+              <option key={x} value={x}>{x}</option>
+            ),
+          )}
         </select>
       );
     if (f.type === "ref")
