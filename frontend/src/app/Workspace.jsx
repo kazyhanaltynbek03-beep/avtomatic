@@ -2233,7 +2233,7 @@ function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefres
 
 function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   const [start,setStart]=useState(ctx.start), [end,setEnd]=useState(ctx.end);
-  const [range,setRange]=useState(null), [refresh,setRefresh]=useState(0), [busy,setBusy]=useState(false), [error,setError]=useState("");
+  const [range,setRange]=useState(null), [refresh,setRefresh]=useState(0), [busy,setBusy]=useState(false), [error,setError]=useState(""), [notice,setNotice]=useState("");
   const params=new URLSearchParams({channel,start:range?.start||start,end:range?.end||end});
   if(ctx.company) params.set("company_id",ctx.company);
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
@@ -2251,8 +2251,10 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   const returns=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+returnsParams:null,refresh);
   const apiAvailable=summary.data?.api_data_available===true;
   const generate=async(event)=>{
-    event.preventDefault(); setError("");
+    event.preventDefault(); setError(""); setNotice("");
     if(!start||!end||end<start){setError("Проверьте даты: начало должно быть не позже окончания.");return;}
+    setRange({start,end});
+    setRefresh(v=>v+1);
     setBusy(true);
     try {
       if(channel==="Kaspi"&&can(ctx.auth,"accounts",true)) {
@@ -2260,10 +2262,13 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
         const results=await Promise.allSettled(targets.map(a=>api(`/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})));
         const failures=results.filter(result=>result.status==="rejected");
         const alreadyRunning=results.some(result=>result.status==="fulfilled"&&result.value?.already_running);
-        if(failures.length) {setError(`Не удалось запустить синхронизацию для ${failures.length} магазина(ов). Проверьте подключение и повторите.`);return;}
-        if(alreadyRunning) {setError("Синхронизация магазина уже выполняется. Дождитесь её завершения и нажмите «Показать отчёт» ещё раз для выбранного периода.");return;}
+        if(failures.length) {setError(`Не удалось получить статус синхронизации для ${failures.length} магазина(ов). Уже сохранённые данные отчёта всё равно показаны ниже.`);return;}
+        setNotice(alreadyRunning
+          ? "Показаны уже сохранённые данные за выбранный период. Синхронизация продолжается в фоне; итоговые цифры пока предварительные."
+          : "Показаны уже сохранённые данные за выбранный период. Если синхронизация ещё выполняется, цифры будут обновляться и останутся предварительными до подтверждения полноты.");
+      } else {
+        setNotice("Показаны сохранённые данные за выбранный период. Для Kaspi отчёт остаётся предварительным, пока полнота источника не подтверждена.");
       }
-      setRange({start,end}); setRefresh(v=>v+1);
     } finally {setBusy(false);}
   };
   const download=async()=>{
@@ -2282,11 +2287,11 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
       <button className="primary" type="submit" disabled={busy||!accounts.length}>{busy?"Готовим…":"Показать отчёт"}</button>
       {channel==="Kaspi"&&<button type="button" disabled={!range||busy||!reportReady} onClick={download}>{busy?"Формируем…":reportReady?"Скачать Excel":"Дождитесь полной синхронизации"}</button>}
     </form>
-    {error&&<ErrorBox error={error}/>}
+    {error&&<ErrorBox error={error}/>}{notice&&<p className="muted" role="status" aria-live="polite">{notice}</p>}
     {active&&<>
       {channel==="Wildberries" ? <WBFinanceReport key={`client-custom:${range.start}:${range.end}`} accounts={selectedAccount?[selectedAccount]:accounts} company={ctx.company} period="custom" start={range.start} end={range.end}/> : <>
         {summary.loading&&!summary.data?<Spinner/>:summary.error?<ErrorBox error={summary.error}/>:<>
-          <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. {summary.data?.sync_status==="running"?"Загружаем API-страницы; данные обновляются автоматически. Выгрузка станет доступна после завершения.":summary.data?.source_complete?"Обход API завершён для настроенного окна истории; обязательные данные проверены.":"Источник пока не подтверждён как полный; проверьте ошибки и повторите синхронизацию."}</p>
+          {channel==="Kaspi"&&!reportReady&&<p className="muted" role="status"><strong>Предварительный отчёт.</strong> Отображены уже сохранённые данные за выбранный период. Суммы и количество могут измениться до завершения обхода API и подтверждения полноты.</p>}\n          <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. {summary.data?.sync_status==="running"?"Загружаем API-страницы; данные обновляются автоматически. Выгрузка станет доступна после завершения.":summary.data?.source_complete?"Обход API завершён для настроенного окна истории; обязательные данные проверены.":"Источник пока не подтверждён как полный; проверьте ошибки и повторите синхронизацию."}</p>
           {summary.data?.source_quality?.progress?.map(p=><p className="muted" key={p.account_id}>Магазин #{p.account_id}: пакетов {p.batches}; страниц списка API {p.order_list_pages}; получено записей заказов {p.order_records_received} (с повторами между статусами); позиций {p.order_entries}. {p.scan_from&&`История с ${p.scan_from}; текущая граница ${p.scan_through}.`} {p.state&&`Статус ${p.state}, страница ${p.page+1}${p.page_count?` из ${p.page_count}`:""}, пакет ${p.offset||0}/${p.page_size||"—"}.`}</p>)}
           {summary.data?.source_quality&&!summary.data.source_quality.data_complete&&<p role="status">Требуется сверка: заказов с неполным составом — {summary.data.source_quality.issues.missing_entries}; без даты выдачи — {summary.data.source_quality.issues.missing_completion_date}; возвратов без даты — {summary.data.source_quality.issues.missing_return_date}; обратных доставок без даты возврата — {summary.data.source_quality.issues.missing_return_delivery_date}; некорректных позиций — {summary.data.source_quality.issues.invalid_lines}; без кода товара — {summary.data.source_quality.issues.missing_product_identity}; позиций без заказа — {summary.data.source_quality.issues.orphan_entries}. Недостающие даты возвратов нужно подтвердить отчётом Kaspi; дата продажи вместо них не используется.</p>}
           <div className="marketplace-report-summary">
