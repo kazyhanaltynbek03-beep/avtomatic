@@ -932,6 +932,32 @@ async def import_return_financial_statement(account_id: int = Form(...), mapping
             "errors":errors[:50], "message":"Данные записаны только в журнал возвратов; существующие финансовые отчёты не изменены."}
 
 
+@app.post("/api/marketplace-returns/{marketplace_return_id}/inventory-match")
+def match_marketplace_return_inventory(marketplace_return_id: int, u=Depends(current_user), db=Depends(get_db)):
+    """Read-only match to an existing ERP return; never creates stock or financial entries."""
+    require(u, "inventory")
+    observation = db.get(MarketplaceReturn, marketplace_return_id)
+    if not observation:
+        raise HTTPException(404, "Возврат маркетплейса не найден")
+    scope(u, observation.company_id)
+    account = db.get(Account, observation.account_id)
+    if not account or account.company_id != observation.company_id:
+        raise HTTPException(409, "Магазин возврата не найден")
+    matched = marketplace_returns.match_inventory_return(db, observation, account)
+    if not matched:
+        return {
+            "matched": False,
+            "message": "Не удалось однозначно сопоставить возврат с продажей и возвратом ERP. Остаток не изменён.",
+        }
+    return {
+        "matched": True,
+        "return_id": matched["id"],
+        "status": matched["status"],
+        "quantity": matched["quantity"],
+        "message": "Найден возврат ERP. Изменение остатка выполняется только через подтверждение статуса.",
+    }
+
+
 @app.get("/api/marketplace-returns")
 def get_marketplace_returns(
     marketplace: str = "all", company_id: int | None = None, account_id: int | None = None,

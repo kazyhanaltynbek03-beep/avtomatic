@@ -167,6 +167,65 @@ def discover_from_staging(db, account, after_id=0):
     return {"scanned": scanned, "found": found}
 
 
+def match_inventory_return(db, row, account):
+    """Return the unique, already-posted ERP return for an observation, if provable.
+
+    This is a read-only bridge. Unmatched or ambiguous observations never affect
+    stock; stock changes still go through the existing /api/returns status flow.
+    """
+    from .models import Sale, Return
+    from .marketplace_pipeline import reference
+
+    refs = set()
+    raw = row.raw_data or {}
+    if row.marketplace == "Wildberries":
+        srid = raw.get("srid") or raw.get("srID")
+        if srid:
+            refs.add(reference(account, "wb-sale:" + str(srid)))
+    elif row.marketplace == "Kaspi":
+        order = raw.get("order") or {}
+        entry = raw.get("entry") or {}
+        order_keys = {
+            str(value) for value in (
+                order.get("id"), order.get("order_id"), entry.get("order_id"),
+                entry.get("orderId"),
+            ) if value not in (None, "")
+        }
+        if order_keys:
+            records = db.scalars(select(MarketplaceRecord).where(
+                MarketplaceRecord.account_id == account.id,
+                MarketplaceRecord.source == "kaspi",
+                MarketplaceRecord.payload["record_type"].as_string() == "order_entry",
+                MarketplaceRecord.payload["order_id"].as_string().in_(list(order_keys)),
+            )).all()
+            refs.update(reference(account, record.external_id) for record in records)
+        for value in (entry.get("entry_id"), entry.get("external_id")):
+            if value not in (None, ""):
+                refs.add(reference(account, str(value)))
+    if not refs or row.product_id is None:
+        return None
+
+    sales = db.scalars(select(Sale).where(
+        Sale.company_id == row.company_id,
+        Sale.account_id == account.id,
+        Sale.product_id == row.product_id,
+        Sale.reference.in_(list(refs)),
+    )).all()
+    if len(sales) != 1:
+        return None
+    returns = db.scalars(select(Return).where(Return.sale_id == sales[0].id)).all()
+    if row.quantity is not None:
+        returns = [item for item in returns if item.quantity == row.quantity]
+    if len(returns) != 1:
+        return None
+    ret = returns[0]
+    return {
+        "id": ret.id,
+        "status": ret.inventory_status,
+        "quantity": ret.quantity,
+    }
+
+
 def serialize_return(row, account, product=None):
     return {
         "id": row.id, "marketplace": row.marketplace, "account_id": row.account_id,
