@@ -2423,3 +2423,23 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
   .wb-report-tabs{grid-template-columns:1fr 1fr}
   .wb-report-tabs button:last-child{grid-column:1/-1}
 }
+
+
+/* Give the orders report heading and API refresh action clear spacing on every screen. */
+.marketplace-orders-report{padding:18px}
+.marketplace-orders-report>.section-heading{align-items:flex-start;gap:14px;margin:0 0 14px;padding:0}
+.marketplace-orders-report>.section-heading>div{flex:1 1 280px;min-width:0}
+.marketplace-orders-report>.section-heading h3{margin:0}
+.marketplace-orders-report>.section-heading p{margin:7px 0 0;line-height:1.5}
+.marketplace-orders-report>.section-heading>button{flex:0 0 auto;min-height:44px;padding:9px 14px;border:1px solid #17664c;border-radius:11px;background:#17664c;color:#fff;font-size:13px;font-weight:700;line-height:1.25}
+.marketplace-orders-report>.section-heading>button:hover{background:#11553f}
+.marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]{padding:0;margin:0 0 14px}
+.marketplace-orders-report>.table-scroll{border-radius:12px;border:1px solid #e7eeea}
+.marketplace-orders-report>.table-scroll>table{margin:0}
+@media(max-width:700px){
+  .marketplace-orders-report{padding:14px}
+  .marketplace-orders-report>.section-heading{align-items:stretch;flex-direction:column;gap:10px;margin-bottom:12px}
+  .marketplace-orders-report>.section-heading>button{width:100%;min-height:44px;justify-content:center}
+  .marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]{padding:0;margin:0 0 12px}
+  .marketplace-orders-report>.table-scroll{border:0}
+}
