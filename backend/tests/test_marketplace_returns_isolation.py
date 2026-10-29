@@ -117,3 +117,31 @@ def test_statement_import_is_idempotent_and_stays_out_of_financial_report(client
         assert rows[0].financial_status == "confirmed"
         assert rows[0].accounted_status == "unverified"
     assert report_snapshot(client) == before
+
+
+def test_unmatched_marketplace_return_never_changes_stock_or_finance(client):
+    from app.models import Movement, Return
+
+    with SessionLocal() as db:
+        observed = MarketplaceReturn(
+            company_id=1, account_id=1, marketplace="Kaspi",
+            source="kaspi_orders_api", external_return_id="safe-unmatched-1",
+            external_order_id="ORDER-NOT-MAPPED", product_name="Не сопоставлен",
+            quantity=1, detected_date=date(2026, 10, 29), raw_data={},
+        )
+        db.add(observed)
+        db.commit()
+        observation_id = observed.id
+        before_movements = db.query(Movement).count()
+        before_returns = db.query(Return).count()
+
+    before_report = report(client)
+    response = client.post(f"/api/marketplace-returns/{observation_id}/inventory-match")
+    assert response.status_code == 200, response.text
+    assert response.json()["matched"] is False
+    assert "Остаток не изменён" in response.json()["message"]
+    assert report(client) == before_report
+
+    with SessionLocal() as db:
+        assert db.query(Movement).count() == before_movements
+        assert db.query(Return).count() == before_returns
