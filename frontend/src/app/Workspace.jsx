@@ -36,6 +36,7 @@ import {
   Image as ImageIcon,
   Receipt,
   Store,
+  Leaf,
 } from "lucide-react";
 import { api, setCsrf, downloadApiFile } from "../services/api";
 import { money, decimal, today } from "../utils/formatters";
@@ -308,9 +309,9 @@ export default function App() {
           className="brand"
           onClick={() => navigate("dashboard")}
         >
-          <span className="brand-mark">q</span>qor
-          <span className="brand-dot">.</span>
-          <span className="workspace-tag">BUSINESS</span>
+          <span className="brand-mark"><Leaf size={18} strokeWidth={2.4}/></span>
+          <span className="brand-word">QOR AI</span>
+          <span className="workspace-tag">BUSINESS ERP</span>
         </a>
         <div className="workspace">
           <div className="workspace-avatar">GK</div>
@@ -1177,6 +1178,59 @@ function ReportPage({ page, ctx }) {
             {detailMetric && <ReportDetails ctx={ctx} detail={detailMetric} onClose={() => setDetailMetric(null)} activeOnly={usesDashboard} />}
       </>
     );
+  if (page === "dashboard") {
+    const overviewCards = [
+      ["Выручка", r.revenue, Wallet, "За вычетом возвратов"],
+      ["Валовая прибыль", r.gross_profit, Layers, "Выручка − себестоимость"],
+      ["Чистая прибыль", r.net_profit, TrendingUp, "После учтённых расходов"],
+      ["Выплаты получено", r.cash_inflow, Receipt, "Фактические поступления"],
+    ];
+    const marketplaceColors = {Kaspi:"#ed4c4c", Wildberries:"#8c38ce", Ozon:"#2473dd"};
+    const marketplaceRows = [...dashboardChannels].sort((a,b)=>(Number(b.revenue)||0)-(Number(a.revenue)||0));
+    const topProducts = [...(r.products || [])].sort((a,b)=>(Number(b.revenue)||0)-(Number(a.revenue)||0)).slice(0,5);
+    const stockAlerts = (r.stock_alerts || []).slice(0,6);
+    return <div className="qor-overview">
+      <CostPendingNotice report={r} ctx={ctx}/>
+      <div className="qor-overview-kpis">
+        {overviewCards.map(([label,value,Icon,note])=><article className="qor-overview-kpi" key={label}>
+          <div className="qor-overview-kpi-top"><span>{label}</span><i><Icon size={18}/></i></div>
+          <strong>{value == null ? "—" : money(value)}</strong><small>{note}</small>
+        </article>)}
+      </div>
+      <div className="qor-overview-main-grid">
+        <section className="panel qor-overview-chart">
+          <div className="panel-heading"><div><h2>Продажи и прибыль</h2><span>{ctx.start} — {ctx.end}</span></div><div className="qor-chart-legend"><span><i/> Выручка</span><span><i/> Прибыль</span></div></div>
+          {r.daily?.length ? <ResponsiveContainer width="100%" height={270}><AreaChart data={r.daily} margin={{top:12,right:10,left:0,bottom:0}}>
+            <defs><linearGradient id="qorRevenueFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#0f7653" stopOpacity={.2}/><stop offset="100%" stopColor="#0f7653" stopOpacity={0}/></linearGradient></defs>
+            <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#e8eeeb"/><XAxis dataKey="date" tickFormatter={s=>s.slice(8)+"."+s.slice(5,7)} axisLine={false} tickLine={false} minTickGap={24}/><YAxis tickFormatter={n=>decimal(n/100000)+"к"} axisLine={false} tickLine={false} width={52}/><Tooltip formatter={money} labelFormatter={s=>"Дата: "+s}/>
+            <Area type="monotone" dataKey="revenue" name="Выручка" stroke="#08734f" strokeWidth={2.5} fill="url(#qorRevenueFill)"/><Area type="monotone" dataKey="profit" name="Прибыль" stroke="#9bc9a9" strokeWidth={2} fill="transparent"/>
+          </AreaChart></ResponsiveContainer> : <Empty text="За выбранный период нет операций"/>}
+        </section>
+        <section className="panel qor-marketplace-panel">
+          <div className="panel-heading"><div><h2>Продажи по маркетплейсам</h2><span>Данные подключённых каналов</span></div></div>
+          {marketplaceRows.map((row)=><article className="qor-marketplace-row" key={row.name}>
+            <span className="qor-marketplace-mark" style={{"--market-color":marketplaceColors[row.name] || "#789187"}}>{row.name === "Wildberries" ? "WB" : row.name === "Kaspi" ? "K" : row.name.slice(0,2).toUpperCase()}</span>
+            <div className="qor-marketplace-data"><div><b>{row.name}</b><strong>{row.revenue == null ? (row.apiLoading ? "Загрузка…" : "—") : money(row.revenue)}</strong></div><div className="qor-marketplace-track"><i style={{width:`${Math.max(2,Math.min(100,(Number(row.revenue)||0)/Math.max(dashboardRevenueTotal,1)*100))}%`,background:marketplaceColors[row.name] || "#789187"}}/></div><small>{row.returns == null ? "" : `Возвраты · ${money(row.returns)}`}</small></div>
+          </article>)}
+          <a className="text-button qor-marketplace-link" href="#analytics">Открыть аналитику <span>→</span></a>
+        </section>
+      </div>
+      <div className="qor-overview-bottom-grid">
+        <section className="panel"><div className="panel-heading"><div><h2>Топ товаров</h2><span>По выручке за период</span></div><button className="text-button" onClick={()=>ctx.navigate("products")}>Все товары →</button></div>
+          <div className="table-scroll"><table className="qor-overview-table"><thead><tr><th>Товар</th><th>Продажи, шт.</th><th>Выручка</th><th>Валовая прибыль</th></tr></thead><tbody>{topProducts.map((product,index)=><tr key={product.id || product.name || index}><td><b>{product.name || "Товар"}</b><small>{product.sku || "SKU не указан"}</small></td><td>{product.quantity ?? product.units ?? "—"}</td><td>{money(product.revenue)}</td><td>{product.gross_profit == null ? "—" : money(product.gross_profit)}</td></tr>)}</tbody></table></div>
+        </section>
+        <section className="panel"><div className="panel-heading"><div><h2>Низкий остаток</h2><span>{(r.stock_alerts || []).length} товаров требуют внимания</span></div><button className="text-button" onClick={()=>ctx.navigate("stock")}>Единый склад →</button></div>
+          <div className="qor-low-stock-list">{stockAlerts.map((item,index)=><article key={item.id || item.sku || index}><span className="qor-stock-icon"><Package size={16}/></span><div><b>{item.name || item.product_name || "Товар"}</b><small>SKU · {item.sku || "—"}</small></div><strong className="qor-stock-amount">{item.quantity ?? item.stock ?? 0} шт.</strong></article>)}</div>
+          {!stockAlerts.length && <Empty text="Нет товаров ниже минимального остатка"/>}
+        </section>
+      </div>
+      <section className="qor-sync-strip" aria-label="Сводки маркетплейсов">
+        {dashboardMarketplaceSources.map(({channel,state})=><article className="qor-sync-card" key={channel}><span className="qor-sync-indicator" data-state={state.error ? "error" : state.loading ? "loading" : "ready"}/><div><b>{channel}</b><small>{state.error ? "Ошибка загрузки" : state.loading ? "Синхронизация…" : `Обновлено · ${state.data?.last_sync ? new Date(state.data.last_sync).toLocaleString("ru-RU") : "данные доступны"}`}</small></div><span className="qor-sync-value">{state.data?.api_revenue == null ? "—" : money(state.data.api_revenue)}</span></article>)}
+      </section>
+      {detailMetric && <ReportDetails ctx={ctx} detail={detailMetric} onClose={()=>setDetailMetric(null)} activeOnly/>}
+      <p className="method">{r.method}. {r.scope_note}.</p>
+    </div>;
+  }
   const headline = [
     ["Оборот сегодня", dash?.today?.revenue, "На " + (dash?.as_of || "—")],
     ["Прибыль сегодня", dash?.today?.net_profit, "Чистая прибыль"],
@@ -1821,6 +1875,21 @@ function ProductCatalogCard({ product, onEdit, onDelete, onPrice, selected, onSe
       <div className="row-actions catalog-product-actions"><button className="secondary" onClick={onEdit}>Изменить / ID</button><button className="secondary" onClick={onPrice}>Цена</button>{[...new Set((product.marketplace_mappings || []).filter(m=>m.channel === "Wildberries").map(m=>m.account_id))].map(id=><button className="secondary" key={id} onClick={()=>onSync?.(id)} title="Синхронизировать связанные карточки WB">Синхр. WB · {accounts.find(a=>a.id === id)?.name || id}</button>)}<button className="icon-button danger" title="Архивировать товар" onClick={onDelete}><Trash2 size={16}/></button></div>
     </div>
   </article>;
+}
+
+function ProductCatalogTable({rows,selected,onSelect,onEdit,onPrice,onDelete,accounts}) {
+  return <div className="table-scroll"><table className="qor-master-table"><thead><tr><th></th><th>Товар / SKU</th><th>Категория</th><th>Цена</th><th>Себестоимость</th><th>Остаток</th><th>Связанные площадки</th><th>Статус</th><th>Действия</th></tr></thead><tbody>
+    {rows.map(product=>{const links=productLinkSummary(product);const inventory=product.inventory?.physical ?? product.quantity ?? product.stock ?? null;return <tr key={product.id}>
+      <td><input aria-label={`Выбрать ${product.name || product.sku}`} type="checkbox" checked={selected.includes(product.id)} onChange={()=>onSelect(product.id)}/></td>
+      <td><div className="qor-master-product"><ProductImage product={product}/><span><b>{product.name || "Товар без названия"}</b><small>SKU · {product.sku || "—"}{product.article ? ` · Артикул ${product.article}` : ""}</small></span></div></td>
+      <td>{product.category || "—"}</td><td>{Number(product.price||0)>0?money(product.price):"—"}</td><td>{Number(product.purchase_cost||0)>0?money(product.purchase_cost):"—"}</td>
+      <td><b>{inventory == null ? "—" : `${inventory} шт.`}</b>{product.min_stock != null && <small className="qor-table-sub">Мин. {product.min_stock}</small>}</td>
+      <td><div className="qor-marketplace-badges">{links.links.filter(link=>link.mapping_count>0).map(link=><span key={link.account_id} title={link.account_name} className={`qor-marketplace-badge qor-marketplace-badge--${String(link.channel).toLowerCase()}`}>{link.channel === "Wildberries" ? "WB" : link.channel}</span>)}{!links.linked&&<span className="qor-unlinked-badge">Не связано</span>}</div></td>
+      <td><span className={`badge ${product.active===false?"gray":"green"}`}>{product.active===false?"Архив":"Активен"}</span></td>
+      <td><div className="qor-table-actions"><button className="icon-button" title="Редактировать товар" onClick={()=>onEdit(product)}><Pencil size={15}/></button><button className="icon-button" title="Изменить цену" onClick={()=>onPrice(product)}><Wallet size={15}/></button><button className="icon-button danger" title="Архивировать товар" onClick={()=>onDelete(product)}><Trash2 size={15}/></button></div></td>
+    </tr>})}
+    {!rows.length&&<tr><td colSpan="9"><Empty text="Товары не найдены"/></td></tr>}
+  </tbody></table><small className="qor-catalog-store-count">Магазинов в рабочем пространстве: {accounts.length}</small></div>;
 }
 
 function SaleProductCard({ sale, product, account, onReturn }) {
@@ -2735,7 +2804,13 @@ function DataPage({ page, ctx }) {
           <ErrorBox error={state.error} />
         ) : (
           <>
-            {entity === "products" ? <div className="qor-item-grid qor-catalog-list">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} accounts={ctx.refs.accounts || []} onSync={id=>syncProductWB(product,id)} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={accountId=>ctx.open("products", accountId ? {...product,_marketplaceLinkAccountId:accountId,_openMarketplaceSetup:true} : product)} onDelete={() => remove(product)} onPrice={() => quickPrice(product)}/>)}</div> : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
+            {entity === "products" ? <>
+              <div className="qor-catalog-desktop"><ProductCatalogTable rows={catalogRows} selected={selectedProducts} onSelect={id=>setSelectedProducts(v=>v.includes(id)?v.filter(x=>x!==id):[...v,id])} onEdit={product=>ctx.open("products",product)} onPrice={quickPrice} onDelete={remove} accounts={ctx.refs.accounts || []}/></div>
+              <div className="qor-catalog-mobile qor-item-grid qor-catalog-list">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} accounts={ctx.refs.accounts || []} onSync={id=>syncProductWB(product,id)} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={accountId=>ctx.open("products", accountId ? {...product,_marketplaceLinkAccountId:accountId,_openMarketplaceSetup:true} : product)} onDelete={() => remove(product)} onPrice={() => quickPrice(product)}/>)}</div>
+            </> : entity === "sales" ? <>
+              <div className="qor-sales-desktop"><Table rows={state.data.items} cols={["date","account_id","reference","product_id","quantity","revenue","commission","logistics","status"]} refs={ctx.refs} entity="sales" actions={row=><><a className="icon-button" title="Скачать счёт" href={`/api/sales/${row.id}/invoice`}><FileText size={16}/></a>{writable&&<button className="icon-button" title="Возврат товара" onClick={()=>ctx.open("returns",{sale_id:row.id})}><RotateCcw size={16}/></button>}</>}/></div>
+              <div className="qor-sales-mobile qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div>
+            </> : <Table
               rows={state.data.items}
               cols={columns[entity] || ["id", "created_at"]}
               refs={ctx.refs}

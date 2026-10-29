@@ -98,3 +98,95 @@ table th, table td { border-bottom-color: #e8eeea; }
   .panel { padding: 10px; }
   .mobile-dock { left: 6px !important; right: 6px !important; }
 }
+
+/* Full QOR ERP screen system: real report values remain supplied by existing APIs. */
+.app > aside{background:linear-gradient(180deg,#073d31 0%,#052f27 100%);}
+.brand{gap:8px;letter-spacing:0;padding-inline:8px;}
+.brand-mark{display:grid;place-items:center;flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:#b8e6bf;color:#073d31;}
+.brand-word{font-size:18px;font-weight:800;letter-spacing:-.3px;white-space:nowrap;}
+.brand-dot{display:none;}
+.workspace-tag{font-size:8px;letter-spacing:1px;white-space:nowrap;}
+.page-heading .eyebrow{color:#739283;font-size:9px;letter-spacing:1.2px;font-weight:750;}
+.toolbar{padding:10px 12px;border:1px solid #e0e8e3;border-radius:11px;background:#fff;box-shadow:0 2px 9px rgba(20,43,32,.035);}
+.periods button.selected{background:#0b6548;color:#fff;border-color:#0b6548;}
+.qor-overview{display:grid;gap:14px;}
+.qor-overview-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
+.qor-overview-kpi{min-width:0;padding:16px;border:1px solid #e2e9e5;border-radius:11px;background:#fff;box-shadow:var(--qor-shadow);}
+.qor-overview-kpi-top{display:flex;align-items:center;justify-content:space-between;color:#69786f;font-size:12px;font-weight:650;}
+.qor-overview-kpi-top i{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:#edf6f0;color:#16704f;font-style:normal;}
+.qor-overview-kpi>strong{display:block;margin:11px 0 5px;color:#173d30;font-size:clamp(20px,2vw,27px);line-height:1.15;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+.qor-overview-kpi>small{color:#819087;font-size:11px;}
+.qor-overview-main-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);gap:14px;align-items:stretch;}
+.qor-overview-main-grid>.panel,.qor-overview-bottom-grid>.panel{margin:0;min-width:0;}
+.qor-overview-chart{min-height:350px;}
+.qor-overview-chart .recharts-responsive-container{min-height:260px;}
+.qor-chart-legend{display:flex;gap:14px;color:#687970;font-size:11px;white-space:nowrap;}
+.qor-chart-legend span{display:flex;align-items:center;gap:5px;}
+.qor-chart-legend i{width:8px;height:8px;border-radius:50%;background:#08734f;}
+.qor-chart-legend span+span i{background:#9bc9a9;}
+.qor-marketplace-panel{display:flex;flex-direction:column;}
+.qor-marketplace-row{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid #edf1ee;}
+.qor-marketplace-mark{display:grid;place-items:center;flex:0 0 38px;height:38px;border-radius:11px;background:var(--market-color);color:#fff;font-size:11px;font-weight:800;}
+.qor-marketplace-data{min-width:0;flex:1;}
+.qor-marketplace-data>div:first-child{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.qor-marketplace-data b{color:#293a31;font-size:12px;}
+.qor-marketplace-data strong{font-size:12px;color:#233a30;white-space:nowrap;}
+.qor-marketplace-data small{display:block;margin-top:5px;color:#8a978f;font-size:10px;}
+.qor-marketplace-track{height:5px;margin-top:8px;border-radius:8px;background:#edf1ee;overflow:hidden;}
+.qor-marketplace-track i{display:block;height:100%;border-radius:8px;}
+.qor-marketplace-link{margin-top:auto;padding-top:12px;align-self:flex-start;}
+.qor-overview-bottom-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,1fr);gap:14px;align-items:stretch;}
+.qor-overview-table{width:100%;border-collapse:collapse;}
+.qor-overview-table th,.qor-overview-table td{padding:10px 9px;text-align:left;border-bottom:1px solid #edf1ee;font-size:11px;}
+.qor-overview-table th{color:#748178;background:#f5f8f6;font-weight:700;}
+.qor-overview-table td b,.qor-overview-table td small{display:block;}
+.qor-overview-table td b{color:#263a30;font-size:11px;}
+.qor-overview-table td small,.qor-table-sub{margin-top:3px;color:#849189;font-size:10px;}
+.qor-low-stock-list article{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #edf1ee;}
+.qor-stock-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:#eef4f2;color:#4c7162;}
+.qor-low-stock-list article>div{min-width:0;flex:1;}
+.qor-low-stock-list b,.qor-low-stock-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.qor-low-stock-list b{color:#293a31;font-size:11px;}
+.qor-low-stock-list small{margin-top:3px;color:#839088;font-size:10px;}
+.qor-stock-amount{color:#b34b42;font-size:11px;white-space:nowrap;}
+.qor-sync-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+.qor-sync-card{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid #e1e9e4;border-radius:10px;background:#fff;}
+.qor-sync-indicator{width:9px;height:9px;border-radius:50%;background:#2c9a68;box-shadow:0 0 0 4px #eaf6ef;}
+.qor-sync-indicator[data-state="loading"]{background:#d9a633;box-shadow:0 0 0 4px #fbf4e3;}
+.qor-sync-indicator[data-state="error"]{background:#d9534f;box-shadow:0 0 0 4px #fbeceb;}
+.qor-sync-card>div{min-width:0;flex:1;}
+.qor-sync-card b,.qor-sync-card small{display:block;}
+.qor-sync-card b{font-size:11px;color:#284033;}
+.qor-sync-card small{margin-top:3px;color:#89958e;font-size:10px;}
+.qor-sync-value{font-size:11px;font-weight:700;color:#284033;text-align:right;}
+.qor-catalog-desktop,.qor-sales-desktop{display:block;}
+.qor-catalog-mobile,.qor-sales-mobile{display:none;}
+.qor-master-table{min-width:980px;}
+.qor-master-table th,.qor-master-table td{padding:9px 8px;font-size:11px;vertical-align:middle;}
+.qor-master-product{display:flex;align-items:center;gap:9px;min-width:220px;max-width:320px;}
+.qor-master-product>.qor-item-image{width:46px;height:46px;min-height:46px;flex:0 0 46px;border-radius:8px;overflow:hidden;background:#f1f5f2;}
+.qor-master-product>.qor-item-image img{width:100%;height:100%;object-fit:cover;}
+.qor-master-product b,.qor-master-product small{display:block;}
+.qor-master-product b{color:#243a30;font-size:11px;line-height:1.35;}
+.qor-master-product small{margin-top:3px;color:#809087;font-size:9px;}
+.qor-marketplace-badges{display:flex;gap:4px;flex-wrap:wrap;}
+.qor-marketplace-badge,.qor-unlinked-badge{padding:3px 6px;border-radius:5px;background:#edf2ef;color:#4c6558;font-size:9px;font-weight:750;white-space:nowrap;}
+.qor-marketplace-badge--kaspi{background:#fff0ee;color:#cf4c45;}.qor-marketplace-badge--wildberries{background:#f4eaff;color:#843abb;}.qor-marketplace-badge--ozon{background:#eaf1ff;color:#2865c7;}
+.qor-unlinked-badge{background:#fff3e2;color:#a36c14;}
+.qor-table-actions{display:flex;gap:4px;}
+.qor-table-actions .icon-button{width:29px;height:29px;min-width:29px;}
+.qor-catalog-store-count{display:block;padding:8px 3px;color:#7e8c83;font-size:10px;}
+.qor-sales-desktop .table-scroll{overflow:auto;}
+.qor-sales-desktop table{min-width:980px;}
+.qor-sales-desktop th,.qor-sales-desktop td{padding:9px 8px;font-size:10px;}
+.qor-sales-desktop .qor-item-image{display:none;}
+.qor-sales-desktop .table-scroll tbody tr:hover{background:#f8faf9;}
+
+@media(max-width:1100px){.qor-overview-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}.qor-overview-main-grid,.qor-overview-bottom-grid{grid-template-columns:1fr;}}
+@media(max-width:960px){
+  .qor-catalog-desktop,.qor-sales-desktop{display:none;}.qor-catalog-mobile,.qor-sales-mobile{display:grid;}
+  .qor-overview{gap:11px;}.qor-overview-kpis{gap:8px;}.qor-overview-kpi{padding:12px;border-radius:10px;}.qor-overview-kpi>strong{font-size:19px;}.qor-overview-kpi-top{font-size:10px;}.qor-overview-kpi-top i{width:28px;height:28px;}
+  .qor-overview-main-grid,.qor-overview-bottom-grid{gap:10px;}.qor-overview-chart{min-height:300px;}.qor-overview-chart .recharts-responsive-container{min-height:220px;}
+  .qor-sync-strip{grid-template-columns:1fr;}.qor-overview-table{min-width:620px;}.qor-overview .table-scroll{overflow-x:auto;}
+}
+@media(max-width:430px){.qor-overview-kpi{padding:10px;}.qor-overview-kpi>strong{font-size:17px;}.qor-chart-legend{gap:7px;font-size:9px;}.qor-marketplace-data strong{font-size:10px;}.qor-sync-card{padding:10px;}.qor-sync-value{max-width:42%;font-size:10px;overflow-wrap:anywhere;}}
