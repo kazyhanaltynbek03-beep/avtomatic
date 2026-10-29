@@ -50,6 +50,20 @@ table thead th { background: #f4f7f5; color: #59675f; font-size: 10px; }
 table th, table td { border-bottom-color: #e8eeea; }
 .kpi, .headline-card, .marketplace-kpis .kpi { border-radius: 10px; box-shadow: none; }
 .kpi { border-color: #e0e7e3; }
+.dashboard-headline { gap: 10px; }
+.dashboard-headline .headline-card {
+  border: 1px solid #e0e7e3;
+  border-radius: 10px;
+  background: #fff !important;
+  color: #183c30 !important;
+  box-shadow: var(--qor-shadow);
+}
+.dashboard-headline .headline-card span,
+.dashboard-headline .headline-card small { color: #6e7e75 !important; }
+.dashboard-headline .headline-card strong { color: #173d30 !important; }
+.dashboard-headline .headline-card svg { color: #177a56; }
+.dashboard-headline .headline-card::before,
+.dashboard-headline .headline-card::after { opacity: .12; }
 .qor-item-card, .qor-product-card, .stock-item-card, .product-card, .marketplace-product-card { border-color: #e0e7e3; border-radius: 11px; box-shadow: 0 2px 9px rgba(20,43,32,.04); }
 .mobile-dock { border-color: #dce5df !important; border-radius: 16px !important; box-shadow: 0 8px 24px rgba(21,49,36,.15) !important; }
 .mobile-dock button { border-radius: 11px !important; }
