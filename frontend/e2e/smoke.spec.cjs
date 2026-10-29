@@ -30,7 +30,7 @@ test("owner can log in, open core pages and log out without browser errors", asy
     await page.getByRole("button", { name: range, exact: true }).click();
   }
   for (let click = 0; click < 4; click += 1) await page.getByRole("button", { name: "Обновить", exact: true }).click();
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(2200);
   expect(await page.locator(".toolbar > .periods button.selected").innerText()).toBe("Год");
   expect(dashboardReadRequests, "rapid period/refresh taps should coalesce to one dashboard request cycle").toBeLessThanOrEqual(4);
   await expect(page.getByRole("heading", { name: "Доля по маркетплейсам" })).toBeVisible();
