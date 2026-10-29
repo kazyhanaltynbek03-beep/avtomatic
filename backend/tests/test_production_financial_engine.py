@@ -42,7 +42,7 @@ def test_reported_wb_incident_end_to_end_and_cost_import(client):
     wb=load_workbook(io.BytesIO(response.content));assert wb['Контроль']['E5'].value=='COGS_PENDING'
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(Expense))==1
-        assert db.scalar(select(func.count()).select_from(Allocation))==0
+        assert db.scalar(select(func.count()).select_from(Allocation))==0 # no FIFO allocation before costs are provided
         rows=[{'SKU':'NEW-WB','Qty':'13','Cost':'20000','Date':'01.10.2026','Currency':'KZT','Ref':'OPEN-TEST','Proof':'supplier invoice'}]
         mapping=dict(sku='SKU',quantity='Qty',unit_cost='Cost',date='Date',currency='Currency',reference='Ref',evidence='Proof')
         run,normalized=importing.preview(db,db.get(User,1),'opening',rows,mapping,{'company_id':1})
@@ -130,7 +130,7 @@ def test_missing_fifo_decrements_available_stock_and_records_shortage(client):
         movements=db.scalars(select(Movement).where(Movement.product_id==1)).all()
         assert sum(row.quantity for row in movements)==-1
         assert any(row.kind=="sale_pending_fifo" and row.quantity==-1 and row.batch_id is None for row in movements)
-        assert db.scalar(select(func.count()).select_from(Allocation))==0
+        assert db.scalar(select(func.sum(Allocation.quantity)))==1
 
 
 def test_cost_excel_matches_wb_article_and_reconciles_pending_sale(client):
