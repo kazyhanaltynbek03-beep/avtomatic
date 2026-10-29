@@ -1483,6 +1483,7 @@ function StockItemCard({row,product,company,ctx}) {
         </div>
         <span className="stock-sold-count">Продано · {row.sold ?? 0} шт.</span>
       </div>
+      {Number(row.min_stock ?? product?.min_stock ?? 0) > 0 && current <= Number(row.min_stock ?? product?.min_stock ?? 0) && <div className="stock-low-warning" role="status">{current <= 0 ? "Остаток закончился" : "Мало остатка"} · {current} шт. при минимуме {Number(row.min_stock ?? product?.min_stock ?? 0)} шт.</div>}
       {row.value != null && <div className="qor-item-price">Стоимость · {money(row.value)}</div>}
       {mode&&<form className="stock-inline-entry" onSubmit={submit}>
         <div className="stock-inline-heading"><strong>{receipt?"Новый приход":"Списание со склада"}</strong><span>{receipt?"После прихода будет "+(current+Number(quantity||0))+" шт.":"После списания останется "+Math.max(0,current-Number(quantity||0))+" шт."}</span></div>

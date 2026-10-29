@@ -3048,7 +3048,21 @@ def alerts(
             sold_by_product[pid] = sold_by_product.get(pid, 0) - int(quantity or 0)
 
     stockrows = []
-    for product in db.scalars(select(Product)):
+    products_query = scope_query(select(Product).where(Product.active.is_(True)), Product, u)
+    for product in db.scalars(products_query):
+        specs = product.specifications or {}
+        company_ids = {int(value) for value in (specs.get("_qor_company_ids") or []) if str(value).isdigit()}
+        if company_id is not None and company_ids and company_id not in company_ids:
+            continue
+        if u.role != "Owner" and company_ids and not company_ids.intersection(u.company_ids):
+            continue
+        if getattr(product, "catalog_kind", "master") != "master":
+            continue
+        minimum = int(product.min_stock or 0)
+        # A zero threshold means the owner has not configured a low-stock alert.
+        # Avoid treating every imported marketplace product with stock 0 as a warning.
+        if minimum <= 0:
+            continue
         stock = stock_by_product.get(product.id, {"quantity": 0, "value": 0})
         sold = sold_by_product.get(product.id, 0)
         quantity = stock["quantity"]
@@ -3058,7 +3072,7 @@ def alerts(
             "name": product.name,
             "quantity": quantity,
             "value": stock["value"],
-            "min_stock": product.min_stock,
+            "min_stock": minimum,
             "sold": sold,
             "unit_cost": f.rounded(stock["value"], quantity) if quantity > 0 else 0,
             "days_of_stock": round(quantity / (sold / max(1, days)), 1) if sold > 0 else None,

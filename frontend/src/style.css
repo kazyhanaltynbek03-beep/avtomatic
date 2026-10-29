@@ -2468,3 +2468,5 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
 .stock-entry-actions button{min-height:44px}
 .stock-entry-error{margin:0;padding:9px 10px;border:1px solid #f1cfc8;border-radius:10px;background:#fff4f1;color:#a6382c;font-size:12px;line-height:1.4}
 @media(max-width:600px){.stock-quantity-control>div{grid-template-columns:50px minmax(72px,1fr) 50px}.stock-step-button{width:50px;height:50px}.stock-entry-actions{display:grid;grid-template-columns:1fr 1fr}.stock-entry-actions button{width:100%;padding-inline:8px;font-size:12px}}
+
+.stock-low-warning{margin:.65rem 0;padding:.7rem .85rem;border:1px solid #f0c879;border-radius:12px;background:#fff7e5;color:#8a4b08;font-size:.9rem;font-weight:700;line-height:1.35}
