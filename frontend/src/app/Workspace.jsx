@@ -1416,7 +1416,8 @@ function Stock({ ctx }) {
       ) : (
         <div className="qor-item-grid">{displayStock.map((row) => {
           const product = ctx.refs.products?.find((p) => p.id === row.product_id);
-          return <article className="qor-item-card" key={row.product_id}><ProductImage product={product}/><div className="qor-item-body"><span className="marketplace-product-meta">SKU · {row.sku || "—"}</span><h3>{row.name || "Товар без названия"}</h3><div className="qor-item-facts"><b>Остаток · {row.quantity ?? 0} шт.</b><span>Продано · {row.sold ?? 0} шт.</span></div>{row.value != null && <div className="qor-item-price">Стоимость · {money(row.value)}</div>}</div></article>;
+          const productCompany = product?.specifications?._qor_company_ids?.[0] || ctx.company || "";
+          return <article className="qor-item-card" key={row.product_id}><ProductImage product={product}/><div className="qor-item-body"><span className="marketplace-product-meta">SKU · {row.sku || "—"}</span><h3>{row.name || "Товар без названия"}</h3><div className="qor-item-facts"><b>Остаток · {row.quantity ?? 0} шт.</b><span>Продано · {row.sold ?? 0} шт.</span></div>{row.value != null && <div className="qor-item-price">Стоимость · {money(row.value)}</div>}{can(ctx.auth, "inventory", true) && <div className="stock-item-actions"><button className="secondary" onClick={() => ctx.open("adjustments", {company_id:productCompany, product_id:row.product_id, date:today(), quantity:1, unit_cost:product?.purchase_cost || 0, kind:"receipt", reason:"Приход товара"})}><Plus size={15}/>Приход</button><button className="secondary" disabled={Number(row.quantity || 0) <= 0} onClick={() => ctx.open("adjustments", {company_id:productCompany, product_id:row.product_id, date:today(), quantity:-1, unit_cost:product?.purchase_cost || 0, kind:"writeoff", reason:"Списание товара"})}><RotateCcw size={15}/>Списание</button></div>}</div></article>;
         })}</div>
       )}
       <section className="panel stock-lot-history">
@@ -2641,7 +2642,7 @@ function EditModal({ kind, item, ctx, close }) {
   const initial = Object.fromEntries(
     fields.map((f) => [
       f.key,
-      item?.[f.key] ??
+      item?.[f.key] ?? (kind === "products" && f.key === "sku" ? `QOR-${today().replaceAll("-", "")}-${globalThis.crypto.randomUUID().slice(0, 6).toUpperCase()}` : undefined) ??
         (f.type === "checkbox"
           ? true
           : f.type === "date"
@@ -3019,7 +3020,7 @@ function EditModal({ kind, item, ctx, close }) {
         </section>}
         {kind === "products" && <label className="wide">Компания, которой принадлежит этот SKU<select required value={productCompanyId} onChange={e=>setProductCompanyId(e.target.value)}><option value="">Выберите компанию</option>{(ctx.refs.companies || []).map(company=><option key={company.id} value={company.id}>{company.name}</option>)}</select><small>Это помогает безопасно сопоставлять товар только с магазинами этой компании.</small></label>}
         <div className="form-grid">
-          {fields.map((f) => (
+          {fields.filter((f) => !(kind === "products" && f.type === "json")).map((f) => (
             <label
               key={f.key}
               className={
@@ -3035,6 +3036,7 @@ function EditModal({ kind, item, ctx, close }) {
             </label>
           ))}
         </div>
+        {kind === "products" && <p className="muted product-form-help">SKU создан автоматически — при необходимости его можно изменить. Внутренний ID назначается системой. Служебные данные карточки сохраняются автоматически; формат JSON вводить не нужно.</p>}
         {kind === "products" && <div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div>}
         {kind === "products" && <details className="product-marketplace-setup" open={Boolean(!editing || item?._openMarketplaceSetup || (editing && (item?.marketplace_mappings || []).length))}>
           <summary>
