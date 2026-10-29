@@ -3537,15 +3537,19 @@ def _auto_sync_wb_product(account_id, product_id):
 def _schedule_wb_sync_for_product(tasks, product_id, company_id=None):
     if tasks is None: return
     with SessionLocal() as db:
-        query = select(Account).join(MarketplaceProductMapping, MarketplaceProductMapping.account_id == Account.id).where(
+        query = select(Account.id).join(
+            MarketplaceProductMapping, MarketplaceProductMapping.account_id == Account.id
+        ).where(
             MarketplaceProductMapping.product_id == product_id,
-            Account.channel == "Wildberries", Account.active.is_(True))
+            Account.channel == "Wildberries", Account.active.is_(True)
+        )
         if company_id is not None: query = query.where(Account.company_id == company_id)
-        accounts = db.scalars(query.distinct()).all()
+        account_ids = set(db.scalars(query.distinct()).all())
+        if not account_ids: return
+        accounts = db.scalars(select(Account).where(Account.id.in_(account_ids))).all()
         eligible = [a.id for a in accounts if (a.integration_settings or {}).get("auto_sync")]
     for account_id in eligible:
         tasks.add_task(_auto_sync_wb_product, account_id, product_id)
-
 
 @app.get("/api/accounts/{id}/wb/warehouses")
 def wb_seller_warehouses(id: int, u=Depends(current_user), db=Depends(get_db)):
