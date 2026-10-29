@@ -15,6 +15,7 @@ const labels = {
 };
 const showDate = (value) => value ? new Date(`${value}T12:00:00+06:00`).toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty" }) : "Не подтверждено";
 const returnAmount = (value) => value == null ? "Не подтверждено" : `−${money(value)}`;
+const storeLabel = (store) => store?.store || store?.name || store?.account_name || store?.marketplace || "магазин";
 
 function Metric({ title, value, caption, tone = "", onClick, active = false }) {
   return <button type="button" className={`returns-metric ${tone} ${active ? "selected" : ""}`} onClick={onClick} aria-pressed={active}>
@@ -116,7 +117,7 @@ function ReturnRow({ item, onUpdated, allowInventory }) {
       <header><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><span className="returns-status">{labels[item.status] || item.status}</span></header>
       <div className="returns-mobile-product">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<div><strong>{title}</strong><small>{item.sku || "SKU не найден"} · {item.store}</small></div></div>
       <div className="returns-mobile-facts"><span>Заказ <b>{item.order_id || "Не подтверждено"}</b></span><span>Кол-во <b>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</b></span><span>Дата возврата <b>{showDate(item.financial_return_date)}</b></span><span>Сумма <b>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</b></span></div>
-      <ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated}/>
+      <ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/>
     </article>
   </>;
 }
@@ -211,13 +212,13 @@ export default function MarketplaceReturns({ ctx }) {
 
   return <section className="marketplace-returns-page">
     <div className="returns-intro"><div><div className="eyebrow">ОПЕРАЦИИ · ИЗОЛИРОВАННЫЙ ЖУРНАЛ</div><h2>Возвраты маркетплейсов</h2><p>Финансовая сверка остаётся отдельной. Для склада возврат нужно сопоставить с исходной ERP-продажей, затем отметить получение и результат осмотра.</p></div>
-      {wbOrKaspiStores.length > 0 && <div className="returns-sync-actions">{wbOrKaspiStores.map((store) => { const sync = progressByAccount[store.account_id]; const running = sync?.status === "running"; const resume = sync?.status === "partial"; return <button className="secondary returns-sync-button" key={store.account_id} disabled={Boolean(busyAccount || running)} onClick={() => discover(store.account_id)}><RefreshCw size={16} className={running ? "returns-spin" : ""}/>{busyAccount === store.account_id || running ? `Проверяем ${store.name}` : resume ? `Продолжить ${store.name} · ${sync.scanned}` : `Проверить ${store.name}`}</button>; })}</div>}
+      {wbOrKaspiStores.length > 0 && <div className="returns-sync-actions">{wbOrKaspiStores.map((store) => { const sync = progressByAccount[store.account_id]; const running = sync?.status === "running"; const resume = sync?.status === "partial"; return <button className="secondary returns-sync-button" key={store.account_id} disabled={Boolean(busyAccount || running)} onClick={() => discover(store.account_id)}><RefreshCw size={16} className={running ? "returns-spin" : ""}/>{busyAccount === store.account_id || running ? `Проверяем ${storeLabel(store)}` : resume ? `Продолжить ${storeLabel(store)} · ${sync.scanned}` : `Проверить ${storeLabel(store)}`}</button>; })}</div>}
     </div>
     {actionError && <ErrorBox error={actionError}/>}
-    {financeWrite && <section className="returns-import-panel">
-      <div className="returns-import-heading"><FileSpreadsheet size={19}/><div><strong>Импорт финансовой выписки</strong><small>Выписка Kaspi или финансовая детализация WB в KZT. Предпросмотр не меняет данные; подтверждённые строки попадут только в журнал возвратов.</small></div></div>
+    {financeWrite && <details className="returns-import-panel">
+      <summary className="returns-import-heading"><FileSpreadsheet size={19}/><div><strong>Импорт финансовой выписки</strong><small>Раскройте, чтобы загрузить выписку Kaspi или Wildberries. Предпросмотр безопасен.</small></div><span className="returns-disclosure-icon" aria-hidden="true">⌄</span></summary>
       <div className="returns-import-controls">
-        <label>Магазин<select value={statementAccount} onChange={(e) => { const value=e.target.value; setStatementAccount(value); setStatementPreview(null); if (statementFile && value) previewStatement(statementFile,value); }}><option value="">Выберите магазин</option>{active.map((store) => <option key={store.account_id} value={store.account_id}>{store.marketplace} · {store.name}</option>)}</select></label>
+        <label>Магазин<select value={statementAccount} onChange={(e) => { const value=e.target.value; setStatementAccount(value); setStatementPreview(null); if (statementFile && value) previewStatement(statementFile,value); }}><option value="">Выберите магазин</option>{active.map((store) => <option key={store.account_id} value={store.account_id}>{store.marketplace} · {storeLabel(store)}</option>)}</select></label>
         <label className="returns-file-picker"><Upload size={16}/><span>{statementFile?.name || "Выберите XLSX / CSV"}</span><input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(e) => { const file=e.target.files?.[0] || null; setStatementFile(file); if (file) previewStatement(file); }}/></label>
       </div>
       {statementBusy && <small className="returns-import-note">Читаем файл…</small>}
@@ -229,13 +230,13 @@ export default function MarketplaceReturns({ ctx }) {
         <small className="returns-import-note">Проверьте, что выбранная дата — дата фактической финансовой операции, а сумма относится к возврату покупателю.</small>
         <button type="button" className="primary" disabled={statementBusy || !statementAccount} onClick={importStatement}>Импортировать в отдельный журнал</button>
       </div>}
-    </section>}
+    </details>}
     <div className="returns-market-tabs" role="tablist" aria-label="Маркетплейс">
       {[ ["all", "Все"], ["Kaspi", "Kaspi"], ["Wildberries", "Wildberries"], ["Ozon", "Ozon"] ].map(([key, label]) => <button type="button" role="tab" aria-selected={marketplace === key} className={marketplace === key ? "active" : ""} key={key} onClick={() => setMarketplace(key)}>{label}</button>)}
     </div>
     {scopedStores.length > 0 && <div className="returns-store-tabs" role="group" aria-label="Магазин">
       <button type="button" className={!selectedAccountId ? "active" : ""} aria-pressed={!selectedAccountId} onClick={() => setSelectedAccountId("")}>Все магазины</button>
-      {scopedStores.map((store) => <button type="button" key={store.account_id} className={String(selectedAccountId) === String(store.account_id) ? "active" : ""} aria-pressed={String(selectedAccountId) === String(store.account_id)} onClick={() => setSelectedAccountId(String(store.account_id))}>{store.store}</button>)}
+      {scopedStores.map((store) => <button type="button" key={store.account_id} className={String(selectedAccountId) === String(store.account_id) ? "active" : ""} aria-pressed={String(selectedAccountId) === String(store.account_id)} onClick={() => setSelectedAccountId(String(store.account_id))}>{storeLabel(store)}</button>)}
     </div>}
     {marketplace !== "all" && !stores.some((x) => x.marketplace === marketplace && x.active) && <div className="returns-empty-integration"><CircleAlert size={18}/><span>Интеграция {marketplace} не подключена. Данные возвратов не подставляются.</span></div>}
     {marketplace === "Ozon" && stores.some((x) => x.marketplace === "Ozon" && x.active) && <div className="returns-empty-integration"><CircleAlert size={18}/><span>Интеграция Ozon подключена, но обнаружение возвратов ещё не настроено.</span></div>}
