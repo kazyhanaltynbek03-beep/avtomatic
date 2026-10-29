@@ -942,6 +942,11 @@ function ReportPage({ page, ctx }) {
     (usesDashboard ? "&active_only=true" : "");
   const summaryPath = "/dashboard/summary?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "");
+  const marketplaceSummaryPath = (channel) => {
+    const params = new URLSearchParams({channel, start:ctx.start, end:ctx.end});
+    if (ctx.company) params.set("company_id", ctx.company);
+    return "/marketplace-summary?" + params;
+  };
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") : null;
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
@@ -954,6 +959,10 @@ function ReportPage({ page, ctx }) {
     ctx.refresh,
     { cacheScope: ctx.auth.user.id },
   );
+  // Match Kaspi/WB turnover to the dedicated marketplace pages. Profit and cost
+  // reports continue to use the existing finance engine.
+  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id});
+  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id});
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
@@ -962,6 +971,16 @@ function ReportPage({ page, ctx }) {
     }
   }, [onNotificationCount, page, systemAlerts, systemAlertsError]);
   const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
+  const dashboardChannels = usesDashboard && r ? [
+    ...(r.channels || []).filter((row) => !["Kaspi", "Wildberries", "WB"].includes(row.name)),
+    {name:"Kaspi", revenue:dashboardKaspiSummary.data?.api_revenue, returns:dashboardKaspiSummary.data?.api_returns, apiLoading:dashboardKaspiSummary.loading, apiError:dashboardKaspiSummary.error},
+    {name:"Wildberries", revenue:dashboardWbSummary.data?.api_revenue, returns:dashboardWbSummary.data?.returns, apiLoading:dashboardWbSummary.loading, apiError:dashboardWbSummary.error},
+  ] : (r?.channels || []);
+  const dashboardRevenueTotal = dashboardChannels.reduce((total, row) => total + (Number(row.revenue) || 0), 0);
+  const dashboardMarketplaceSources = [
+    {channel:"Kaspi", state:dashboardKaspiSummary},
+    {channel:"Wildberries", state:dashboardWbSummary},
+  ];
   if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
   if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
   if (usesDashboard && !loadedReport) {
@@ -1273,13 +1292,13 @@ function ReportPage({ page, ctx }) {
           <div className="panel-heading">
             <div>
               <h2>Продажи по аккаунтам</h2>
-              <span>Выручка по проведённым операциям за период</span>
+              <span>Kaspi и Wildberries — API-итоги как на их страницах; остальные каналы — проведённые ERP-операции</span>
             </div>
-            <span className="pill">{r.channels.length} с операциями</span>
+            <span className="pill">{dashboardChannels.length} каналов</span>
           </div>
-          {r.channels.length ? (
-            r.channels
-              .sort((a, b) => b.revenue - a.revenue)
+          {dashboardChannels.length ? (
+            dashboardChannels
+              .sort((a, b) => (Number(b.revenue) || 0) - (Number(a.revenue) || 0))
               .slice(0, 7)
               .map((c, i) => (
                 <div className="channel" key={c.name}>
@@ -1290,9 +1309,9 @@ function ReportPage({ page, ctx }) {
                       </b>
                       {c.name}
                     </span>
-                    <strong>{money(c.revenue)}</strong>
+                    <strong>{c.revenue == null ? (c.apiLoading ? "Загрузка…" : c.apiError ? "Ошибка API" : "Нет данных API") : money(c.revenue)}</strong>
                   </div>
-                  <small className="channel-returns">Возвраты: {money((r.channels.find((x) => x.name === c.name)?.returns) || 0)}</small>
+                  <small className="channel-returns">Возвраты: {c.returns == null ? "—" : money(c.returns)}</small>
                   <div className="track">
                     <span
                       style={{
@@ -1301,7 +1320,7 @@ function ReportPage({ page, ctx }) {
                             0,
                             Math.min(
                               100,
-                              (c.revenue / Math.max(r.revenue, 1)) * 100,
+                              ((Number(c.revenue) || 0) / Math.max(dashboardRevenueTotal, 1)) * 100,
                             ),
                           ) + "%",
                         background: [
@@ -1321,6 +1340,40 @@ function ReportPage({ page, ctx }) {
           )}
         </div>
       </div>
+      <section className="panel dashboard-marketplace-source-panel" aria-label="Сводки маркетплейсов">
+        <div className="panel-heading">
+          <div><h2>Данные Kaspi и Wildberries</h2><span>Те же итоги и период, что в отдельных страницах маркетплейсов</span></div>
+        </div>
+        <div className="bottom-grid">
+          {dashboardMarketplaceSources.map(({channel, state}) => {
+            const data = state.data || {};
+            const metrics = channel === "Kaspi" ? [
+              ["Выручка API за вычетом возвратов", data.api_revenue == null ? "Нет подтверждённых данных" : money(data.api_revenue)],
+              ["Возвраты API", data.api_returns == null ? "—" : money(data.api_returns)],
+              ["Продано", data.api_units == null ? "—" : data.api_units + " шт."],
+              [Number(data.commission_estimated || 0) > 0 ? "Комиссия (расчётная)" : "Комиссия", money(data.commission)],
+              ["Логистика продавца", money(data.logistics)],
+              ["Доставка возврата", money(data.return_logistics)],
+              ["К получению (расчёт)", data.kaspi_estimated_proceeds == null ? "—" : money(data.kaspi_estimated_proceeds)],
+              ["Чистая прибыль", data.net_profit == null ? "—" : money(data.net_profit)],
+            ] : [
+              ["Оборот продаж WB", data.api_revenue == null ? "Нет данных" : money(data.api_revenue)],
+              ["Продано", data.api_units == null ? "—" : data.api_units + " шт."],
+              ["К перечислению по финансовому отчёту", Number(data.settlement_rows || 0) > 0 ? money(data.settlement_accrued) : "Нет данных отчёта"],
+              ["Комиссия", money(data.commission)],
+              ["Логистика продавца", money(data.logistics)],
+              ["Реклама", money(data.advertising)],
+              ["Чистая прибыль", data.net_profit == null ? "—" : money(data.net_profit)],
+            ];
+            return <div className="panel" key={channel}>
+              <div className="panel-heading"><h3>{channel}</h3><a className="text-button" href={"#" + channel}>Открыть отчёт</a></div>
+              {state.loading && !state.data ? <p className="muted">Загружаем данные…</p> :
+                state.error ? <p className="error-box" role="alert">Не удалось загрузить сводку: {state.error}</p> :
+                <div className="secondary-kpis compact-kpis">{metrics.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>}
+            </div>;
+          })}
+        </div>
+      </section>
       <div className="secondary-kpis">
         {[
           ["Продано единиц", r.units, false],
@@ -1331,8 +1384,8 @@ function ReportPage({ page, ctx }) {
           ["Деньги", r.cash, true],
           ["B2B задолженность", r.b2b_debt, true],
           ["Денежный поток", r.cash_flow, true],
-          ["Kaspi оборот", dash?.selected?.channels?.Kaspi || 0, true],
-          ["WB оборот", dash?.selected?.channels?.WB || 0, true],
+          ["Kaspi API оборот", dashboardKaspiSummary.data?.api_revenue ?? null, true],
+           ["WB API оборот", dashboardWbSummary.data?.api_revenue ?? null, true],
           ["Ozon оборот", dash?.selected?.channels?.Ozon || 0, true],
           ["Offline оборот", dash?.selected?.channels?.Offline || 0, true],
           ["B2B оборот", dash?.selected?.channels?.B2B || 0, true],
