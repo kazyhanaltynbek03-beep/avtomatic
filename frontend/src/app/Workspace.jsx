@@ -533,6 +533,8 @@ export default function App() {
             "accounting",
           ].includes(page) ? (
             <ReportPage page={page} ctx={ctx} />
+          ) : page === "marketplace-returns" ? (
+            <Suspense fallback={<Spinner />}><MarketplaceReturns ctx={ctx} /></Suspense>
           ) : page === "stock" ? (
             <Stock ctx={ctx} />
           ) : ["assistant", "content", "designer"].includes(page) ? (
@@ -1033,7 +1035,6 @@ function ReportPage({ page, ctx }) {
     );
   }
   if (page === "forecast") return <Forecast ctx={ctx} />;
-  if (page === "marketplace-returns") return <Suspense fallback={<Spinner />}><MarketplaceReturns ctx={ctx} /></Suspense>;
   if (page === "profit" || page === "accounting")
     return (
       <>
