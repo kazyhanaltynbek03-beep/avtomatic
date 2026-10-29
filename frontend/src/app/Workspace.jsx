@@ -1648,6 +1648,19 @@ function StockItemCard({row,product,company,ctx}) {
   const [busy,setBusy]=useState(false);
   const submitLock=useRef(false);
   const current=Number(row.quantity||0);
+  const linkedMarketplaceCounts = (product?.marketplace_links || []).reduce((groups, link) => {
+    if (!link.active || link.mapping_status !== "linked") return groups;
+    const channel = String(link.channel || "").toLocaleLowerCase("ru-RU");
+    const key = channel.includes("kaspi") ? "kaspi" : channel.includes("wildberries") || channel === "wb" ? "wildberries" : channel.includes("ozon") ? "ozon" : null;
+    if (key) groups[key] = (groups[key] || 0) + 1;
+    return groups;
+  }, {});
+  const marketplaceBadges = [
+    ["kaspi", "K", "Kaspi"],
+    ["wildberries", "WB", "WB"],
+    ["ozon", "O", "Ozon"],
+  ].filter(([key]) => linkedMarketplaceCounts[key])
+    .map(([key, icon, label]) => ({key, icon, label, stores:linkedMarketplaceCounts[key]}));
   const receipt=mode==="receipt";
   const open=(nextMode)=>{
     setMode(nextMode);
@@ -1685,6 +1698,10 @@ function StockItemCard({row,product,company,ctx}) {
     <div className="qor-item-body">
       <span className="marketplace-product-meta">SKU · {row.sku || "—"}</span>
       <h3>{row.name || "Товар без названия"}</h3>
+      <div className="stock-marketplace-badges" aria-label="Связанные маркетплейсы">
+        {marketplaceBadges.map(({key, icon, label, stores}) => <span key={key} className={`stock-marketplace-badge is-${key}`} aria-label={`${label}, магазинов: ${stores}`}><b aria-hidden="true">{icon}</b>{label}{stores > 1 && <small>×{stores}</small>}</span>)}
+        {!marketplaceBadges.length && <span className="stock-marketplace-unlinked">Карточки не связаны</span>}
+      </div>
       <div className="stock-quantity-control" aria-label="Остаток товара">
         <span>Остаток</span>
         <div>
