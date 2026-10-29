@@ -3060,6 +3060,7 @@ function EditModal({ kind, item, ctx, close }) {
       initial[f.key] = JSON.stringify(initial[f.key], null, 2);
   }
   const [values, setValues] = useState(initial),
+    [productWizardStep, setProductWizardStep] = useState(0),
     [outboundAllocations, setOutboundAllocations] = useState(item?.marketplace_stock_allocations || {}),
     [lines, setLines] = useState([
       { product_id: "", quantity: 1, unit_cost: "", currency: "KZT", fx_rate: "1" },
@@ -3074,6 +3075,22 @@ function EditModal({ kind, item, ctx, close }) {
     ? [{account_id:String(item._marketplaceLinkAccountId), id_type:ctx.refs.accounts?.find(a=>String(a.id)===String(item._marketplaceLinkAccountId))?.channel === "Wildberries" ? "product" : "sku", external_id:""}]
     : [{account_id:"", id_type:"sku", external_id:""}];
   const [marketplaceIdRows, setMarketplaceIdRows] = useState(initialMarketplaceIdRows);
+  const productWizardSections = [
+    { title: "Основное", fields: ["sku", "name", "description", "category", "article", "barcode", "brand", "supplier"] },
+    { title: "Фотографии", fields: [] },
+    { title: "Цена и себестоимость", fields: ["price", "purchase_cost", "min_price"] },
+    { title: "Остаток", fields: ["min_stock", "active"] },
+    { title: "Карточки площадок", fields: [] },
+  ];
+  const productWizard = kind === "products" && !editing;
+  const advanceProductWizard = () => {
+    const missing = productWizardStep === 0
+      ? (!productCompanyId ? "Выберите компанию" : !String(values.name || "").trim() ? "Укажите название товара" : !String(values.sku || "").trim() ? "Укажите SKU" : "")
+      : "";
+    if (missing) { setError(missing); return; }
+    setError("");
+    setProductWizardStep((step) => Math.min(step + 1, productWizardSections.length - 1));
+  };
   const [productCompanyId, setProductCompanyId] = useState(String(
     ctx.company || (item?.specifications?._qor_company_ids || [])[0] || ctx.refs.companies?.[0]?.id || ""
   ));
@@ -3159,6 +3176,7 @@ function EditModal({ kind, item, ctx, close }) {
   };
   const submit = async (e) => {
     e.preventDefault();
+    if (productWizard && productWizardStep < productWizardSections.length - 1) { advanceProductWizard(); return; }
     if (submitLock.current) return;
     submitLock.current = true;
     setBusy(true);
@@ -3435,17 +3453,20 @@ function EditModal({ kind, item, ctx, close }) {
             <X />
           </button>
         </div>
+        {productWizard && <div className="product-wizard-steps" aria-label="Шаги создания товара" role="list">
+          {productWizardSections.map((step, index) => <div key={step.title} className={`product-wizard-step${index === productWizardStep ? " active" : index < productWizardStep ? " done" : ""}`} role="listitem" aria-current={index === productWizardStep ? "step" : undefined}><i>{index < productWizardStep ? <CheckCircle2 size={15}/> : index + 1}</i><span>{step.title}</span></div>)}
+        </div>}
         {creatingOfflineChannel && <div className="info-banner"><Store size={18}/><span>Это внутренний канал учёта — API подключать не нужно. Укажите компанию и сохраните канал, затем нажмите «Записать офлайн-продажу» ещё раз, чтобы внести товар, количество, цену и дату.</span></div>}
-        {kind === "products" && !editing && <section className="product-ai-draft wide" aria-label="Создание товара с помощью AI">
+        {kind === "products" && !editing && productWizardStep === 0 && <section className="product-ai-draft wide" aria-label="Создание товара с помощью AI">
           <div><span className="eyebrow">AI PRODUCT STUDIO</span><h3>Заполнить черновик с AI</h3><p className="muted">Вставьте подтверждённые сведения с упаковки или от поставщика. AI предложит название, описание и характеристики; цену, себестоимость и остаток заполните сами.</p></div>
           <label>Сведения о товаре<textarea rows={3} value={aiFacts} onChange={e=>setAiFacts(e.target.value)} placeholder="Например: модель, бренд, цвет, материал и размеры с упаковки"/></label>
           <button type="button" className="secondary" onClick={generateProductDraft} disabled={aiBusy || aiFacts.trim().length < 8}>{aiBusy ? "Готовлю черновик…" : "Составить черновик с AI"}</button>
           {aiQuestions.length > 0 && <div className="product-ai-questions"><b>Проверьте и уточните перед сохранением</b><ul>{aiQuestions.map((q,i)=><li key={i}>{q}</li>)}</ul></div>}
           <small>AI только заполняет поля формы. Товар сохраняется после нажатия «Сохранить».</small>
         </section>}
-        {kind === "products" && <label className="wide">Компания, которой принадлежит этот SKU<select required value={productCompanyId} onChange={e=>setProductCompanyId(e.target.value)}><option value="">Выберите компанию</option>{(ctx.refs.companies || []).map(company=><option key={company.id} value={company.id}>{company.name}</option>)}</select><small>Это помогает безопасно сопоставлять товар только с магазинами этой компании.</small></label>}
-        <div className="form-grid">
-          {fields.filter((f) => !(kind === "products" && f.type === "json")).map((f) => (
+        {kind === "products" && (!productWizard || productWizardStep === 0) && <label className="wide">Компания, которой принадлежит этот SKU<select required value={productCompanyId} onChange={e=>setProductCompanyId(e.target.value)}><option value="">Выберите компанию</option>{(ctx.refs.companies || []).map(company=><option key={company.id} value={company.id}>{company.name}</option>)}</select><small>Это помогает безопасно сопоставлять товар только с магазинами этой компании.</small></label>}
+        {(!productWizard || productWizardStep === 0) && <div className="form-grid">
+          {fields.filter((f) => !(kind === "products" && f.type === "json") && (!productWizard || productWizardSections[0].fields.includes(f.key))).map((f) => (
             <label
               key={f.key}
               className={
@@ -3460,10 +3481,12 @@ function EditModal({ kind, item, ctx, close }) {
               {input(f)}
             </label>
           ))}
-        </div>
-        {kind === "products" && <p className="muted product-form-help">SKU создан автоматически — при необходимости его можно изменить. Внутренний ID назначается системой. Служебные данные карточки сохраняются автоматически; формат JSON вводить не нужно.</p>}
-        {kind === "products" && <div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div>}
-        {kind === "products" && <details className="product-marketplace-setup" open={Boolean(item?._openMarketplaceSetup || (editing && (item?.marketplace_mappings || []).length))}>
+        </div>}
+        {kind === "products" && (!productWizard || productWizardStep === 0) && <p className="muted product-form-help">SKU создан автоматически — при необходимости его можно изменить. Внутренний ID назначается системой. Служебные данные карточки сохраняются автоматически.</p>}
+        {kind === "products" && (!productWizard || productWizardStep === 1) && <section className="product-photo-step wide"><div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div><div className="product-photo-preview-grid">{(()=>{try{return JSON.parse(values.media || "[]").map((src,index)=><figure key={`${index}-${src.slice(0,24)}`}><img src={src} alt={`Фото товара ${index+1}`}/><button type="button" aria-label={`Удалить фото ${index+1}`} onClick={()=>set("media",JSON.stringify(JSON.parse(values.media || "[]").filter((_,i)=>i!==index)))}>×</button></figure>)}catch{return null}})()}</div></section>}
+        {kind === "products" && (!productWizard || productWizardStep === 2) && <div className="form-grid product-price-step">{fields.filter(f=>["price","purchase_cost","min_price"].includes(f.key)).map(f=><label key={f.key}>{f.label}{input(f)}</label>)}</div>}
+        {kind === "products" && (!productWizard || productWizardStep === 3) && <section className="product-stock-step wide"><div className="form-grid">{fields.filter(f=>["min_stock","active"].includes(f.key)).map(f=><label key={f.key} className={f.type === "checkbox" ? "check-label" : ""}>{f.label}{input(f)}</label>)}</div><p className="muted">Фактический первый приход и дата поступления записываются отдельной операцией в разделе «Единый склад» после сохранения карточки товара.</p></section>}
+        {kind === "products" && (!productWizard || productWizardStep === 4) && <details className="product-marketplace-setup" open={Boolean(item?._openMarketplaceSetup || (editing && (item?.marketplace_mappings || []).length) || productWizardStep === 4)}>
           <summary>
             <span><b>Связать Kaspi и Wildberries</b><small>Связь и лимит остатка сохраняются в QOR после сохранения товара. Повторно вводить их после синхронизации не нужно.</small></span>
             <span className="product-marketplace-summary-count">{(item?.marketplace_mappings || []).length ? `Связано: ${(item.marketplace_mappings || []).length}` : "Настроить"}</span>
@@ -3619,9 +3642,10 @@ function EditModal({ kind, item, ctx, close }) {
           <button type="button" className="secondary" onClick={close}>
             Отмена
           </button>
-          <button className="primary" disabled={busy}>
-            {busy ? "Сохраняем…" : editing ? "Сохранить" : creatingOfflineChannel ? "Создать канал" : "Провести"}
-          </button>
+          {productWizard && productWizardStep > 0 && <button type="button" className="secondary" disabled={busy} onClick={()=>{setError("");setProductWizardStep(step=>Math.max(0,step-1));}}>Назад</button>}
+          {productWizard && productWizardStep < productWizardSections.length - 1
+            ? <button type="button" className="primary" disabled={busy} onClick={advanceProductWizard}>Далее <span aria-hidden="true">→</span></button>
+            : <button className="primary" disabled={busy}>{busy ? "Сохраняем…" : productWizard ? "Сохранить товар" : editing ? "Сохранить" : creatingOfflineChannel ? "Создать канал" : "Провести"}</button>}
         </div>
       </form>
     </div>
