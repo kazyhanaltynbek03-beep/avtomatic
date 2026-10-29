@@ -57,7 +57,6 @@ const inventoryNext = {
 };
 
 function InventoryAction({ item, onUpdated, allowInventory }) {
-  if (!allowInventory) return null;
   const [match, setMatch] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -87,6 +86,7 @@ function InventoryAction({ item, onUpdated, allowInventory }) {
     finally { setBusy(false); }
   };
   const next = match?.matched ? inventoryNext[match.status] : null;
+  if (!allowInventory) return null;
   return <div className="returns-inventory-action" style={{ display: "grid", gap: 8, marginTop: 10, padding: "8px 0", borderTop: "1px solid #d9e3dd" }}>
     <strong>Единый склад</strong>
     {match?.matched ? <>
