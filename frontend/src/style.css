@@ -2821,3 +2821,21 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
 /* Mobile return cards must be outside table markup so browsers render them consistently. */
 .returns-mobile-list{display:none}
 @media(max-width:760px){.returns-mobile-list{display:grid;gap:10px;min-width:0}}
+
+/* Keep the accounting statement heading readable when its export controls wrap. */
+.report-grid > .panel > .panel-heading {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.report-grid > .panel > .panel-heading h2 {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.report-grid > .panel > .panel-heading .heading-actions {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+}
