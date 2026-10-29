@@ -1083,6 +1083,9 @@ function ReportPage({ page, ctx }) {
     return (
       <>
         <CostPendingNotice report={r} ctx={ctx} />
+        {page === "accounting" && <p className="panel-note amber" role="note">
+          Бухгалтерский отчёт включает операции отключённых магазинов за выбранный период. Обзор бизнеса показывает только активные магазины; из-за этого выручка и количество продаж без себестоимости могут отличаться.
+        </p>}
         <div className="report-grid">
           <div className="panel">
             <div className="panel-heading">
@@ -1302,6 +1305,9 @@ function ReportPage({ page, ctx }) {
   return (
     <>
       <CostPendingNotice report={r} ctx={ctx} />
+      <p className="panel-note amber" role="note">
+        Обзор бизнеса показывает только активные магазины. Бухгалтерский отчёт также включает операции отключённых магазинов за выбранный период; до выбора одинакового состава магазинов итоги между экранами не сверены.
+      </p>
       {!dash && (
         <p className="panel-note amber" role="status">
           {dashError ? "Краткая сводка не загрузилась. Основной отчёт доступен ниже." : "Загружается краткая сводка…"}
