@@ -203,3 +203,35 @@ def test_install_claude_skills_uploads_all_bundles_without_exposing_key(monkeypa
     assert len(result) == 11
     assert len({item["skill_id"] for item in result.values()}) == 11
     assert all(any(name.endswith("/SKILL.md") for name in paths) for _, paths in calls["post"])
+
+
+
+def test_claude_connection_check_does_not_load_or_send_erp_data(monkeypatch):
+    from app import ai
+
+    sent = {}
+
+    def fake_call_response(messages, instructions, *args, **kwargs):
+        sent.update({"messages": messages, "instructions": instructions, "args": args, "kwargs": kwargs})
+        return {"output": []}
+
+    def forbidden_report(*args, **kwargs):
+        raise AssertionError("connection check must not load ERP report")
+
+    monkeypatch.setattr(ai, "require", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai, "call_response", fake_call_response)
+    monkeypatch.setattr(ai, "report", forbidden_report)
+
+    result = ai.assistant(object(), object(), {
+        "agent": "rick",
+        "question": "Техническая проверка соединения Claude. Ответь строго: CLAUDE_OK. Не анализируй ERP.",
+        "history": [{"role": "assistant", "content": "confidential prior ERP context"}],
+        "document_ids": [123],
+    })
+
+    assert result["answer"] == "CLAUDE_OK"
+    assert result["tools_used"] == []
+    assert result["period"] is None
+    assert sent["messages"] == [{"role": "user", "content": "Reply exactly: CLAUDE_OK"}]
+    assert not sent["args"] and not sent["kwargs"]
+    assert "confidential" not in str(sent)
