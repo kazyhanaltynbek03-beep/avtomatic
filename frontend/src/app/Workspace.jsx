@@ -1933,7 +1933,7 @@ function MarketplaceInbox({ channel, ctx }) {
     ["Реклама", m.advertising, "Расход маркетплейса", {source:"ledger",metric:"advertising",title:"Расходы на рекламу"}],
     ["Чистая прибыль", incomplete ? "—" : m.net_profit, incomplete ? (fxPending ? "Прибыль ожидает курс/проведение и FIFO — ложное значение не показываем" : "Не показываем ложную прибыль: есть продажи без FIFO") : (m.margin == null ? "Маржа —" : `Маржа ${decimal(m.margin)}%`), {source:"ledger",metric:"net_profit",title:"Чистая прибыль по проведённым операциям"}],
   ];
-  return <div className="panel">
+  return <div className="panel marketplace-inbox">
     <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><span className="pill">{state.data?.total || 0} API-записей</span></div>
     {(channel === "Kaspi" || channel === "Wildberries") && <div className="row-actions" role="group" aria-label="Отчёты маркетплейса"><button type="button" className={!ordersMode?"primary":""} aria-pressed={!ordersMode} onClick={()=>setOrdersMode(false)}>Продажи и финансы</button><button type="button" className={ordersMode?"primary":""} aria-pressed={ordersMode} onClick={()=>setOrdersMode(true)}>Заказы и доставка</button></div>}
     {ordersMode ? <MarketplaceOrdersReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount} canRefresh={can(ctx.auth,"accounts",true)}/> : <>
@@ -1965,7 +1965,18 @@ function MarketplaceInbox({ channel, ctx }) {
         <div><span>{title}</span></div><strong>{typeof value==="number"?money(value):value}</strong>{note&&<small>{note}</small>}
       </button>;
       return <>
-        <div className="marketplace-report-summary">{visible.filter(isPrimary).map(renderMetric)}</div>
+        {channel === "Kaspi" ? (() => {
+          const totalMetric = visible.find(([title]) => title === "К получению (расчёт)");
+          const summaryMetrics = visible.filter(item => isPrimary(item) && item !== totalMetric);
+          return <div className="kaspi-report-overview">
+            {totalMetric && <button type="button" className="kaspi-report-total" onClick={()=>setKpiDetail({...totalMetric[3],channel,account_id:selectedAccount?.id,store:selectedAccount?.name})} title="Открыть расшифровку расчёта">
+              <span>{totalMetric[0]}</span>
+              <strong>{typeof totalMetric[1]==="number"?money(totalMetric[1]):totalMetric[1]}</strong>
+              <small>{totalMetric[2]}</small>
+            </button>}
+            <div className="kaspi-report-summary">{summaryMetrics.map(renderMetric)}</div>
+          </div>;
+        })() : <div className="marketplace-report-summary">{visible.filter(isPrimary).map(renderMetric)}</div>}
         {visible.some(item=>!isPrimary(item))&&<details className="marketplace-report-details marketplace-report-more">
           <summary><span>Расшифровка продаж и расходов</span><small>Комиссии, логистика и прибыль</small></summary>
           <div className="marketplace-report-metrics">{visible.filter(item=>!isPrimary(item)).map(renderMetric)}</div>
