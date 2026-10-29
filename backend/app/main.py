@@ -4691,10 +4691,10 @@ def ai_action_propose(p: dict, u=Depends(current_user), db=Depends(get_db)):
     return dump(row)
 
 @app.post("/api/ai/actions/{id}/confirm")
-def ai_action_confirm(id:int,u=Depends(current_user),db=Depends(get_db)):
+def ai_action_confirm(id:int,tasks:BackgroundTasks,u=Depends(current_user),db=Depends(get_db)):
     require(u,"ai",True); row=db.get(AIAction,id)
     if not row: raise HTTPException(404,"Действие не найдено")
-    return dump(action_engine.execute(db,u,row))
+    return dump(action_engine.execute(db,u,row,tasks=tasks))
 
 @app.post("/api/ai/actions/{id}/cancel")
 def ai_action_cancel(id:int,u=Depends(current_user),db=Depends(get_db)):
@@ -4715,10 +4715,10 @@ def ai_plan_propose(p: dict, u=Depends(current_user), db=Depends(get_db)):
     return dump(action_engine.propose_plan(db,u,p.get("title"),p.get("goal"),p.get("steps") or [],p.get("thread_id"),str(p.get("agent","rick"))))
 
 @app.post("/api/ai/plans/{id}/confirm")
-def ai_plan_confirm(id:int,u=Depends(current_user),db=Depends(get_db)):
+def ai_plan_confirm(id:int,tasks:BackgroundTasks,u=Depends(current_user),db=Depends(get_db)):
     require(u,"ai",True); row=db.get(AIActionPlan,id)
     if not row: raise HTTPException(404,"План не найден")
-    return dump(action_engine.execute_plan(db,u,row))
+    return dump(action_engine.execute_plan(db,u,row,tasks=tasks))
 
 @app.post("/api/ai/plans/{id}/cancel")
 def ai_plan_cancel(id:int,u=Depends(current_user),db=Depends(get_db)):
