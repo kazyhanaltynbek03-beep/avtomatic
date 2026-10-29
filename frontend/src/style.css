@@ -2443,3 +2443,28 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
   .marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]{padding:0;margin:0 0 12px}
   .marketplace-orders-report>.table-scroll{border:0}
 }
+
+/* Unified warehouse quick receipt and audited write-off controls */
+.stock-product-card .qor-item-body{gap:0}
+.stock-quantity-control{display:grid;grid-template-columns:1fr;gap:7px;margin:12px 0;padding:12px;border:1px solid #d5e6db;border-radius:14px;background:linear-gradient(120deg,#f0f8f3,#fbfdfb)}
+.stock-quantity-control>span:first-child{color:#718279;font-size:12px;font-weight:650}
+.stock-quantity-control>div{display:grid;grid-template-columns:48px minmax(90px,1fr) 48px;align-items:center;gap:8px}
+.stock-quantity-control>div>strong{color:#174b32;font-size:28px;line-height:1.1;text-align:center;font-variant-numeric:tabular-nums}
+.stock-quantity-control>div>strong small{font-size:13px}
+.stock-step-button{width:48px;height:48px;border:1px solid #cddfd4;border-radius:13px;background:#fff;color:#285d45;font-size:26px;font-weight:650;line-height:1;touch-action:manipulation}
+.stock-step-button.add{border-color:#176b50;background:#176b50;color:#fff}
+.stock-step-button:disabled{opacity:.45}
+.stock-sold-count{color:#78877e;font-size:11px}
+.stock-inline-entry{display:grid;gap:11px;margin-top:10px;padding:13px;border:1px solid #dce8e1;border-radius:14px;background:#fbfdfc}
+.stock-inline-heading{display:grid;gap:3px}
+.stock-inline-heading strong{color:#204e39;font-size:14px}
+.stock-inline-heading span{color:#77877e;font-size:11px}
+.stock-inline-entry label{display:grid;gap:6px;color:#52675b;font-size:12px;font-weight:600}
+.stock-entry-stepper{display:grid;grid-template-columns:46px minmax(60px,1fr) 46px;gap:7px}
+.stock-entry-stepper button{min-height:44px;padding:4px;font-size:21px}
+.stock-entry-stepper input{text-align:center;font-size:16px;font-variant-numeric:tabular-nums}
+.stock-inline-entry input[type=date]{min-height:46px}
+.stock-entry-actions{display:flex;gap:8px;justify-content:flex-end}
+.stock-entry-actions button{min-height:44px}
+.stock-entry-error{margin:0;padding:9px 10px;border:1px solid #f1cfc8;border-radius:10px;background:#fff4f1;color:#a6382c;font-size:12px;line-height:1.4}
+@media(max-width:600px){.stock-quantity-control>div{grid-template-columns:50px minmax(72px,1fr) 50px}.stock-step-button{width:50px;height:50px}.stock-entry-actions{display:grid;grid-template-columns:1fr 1fr}.stock-entry-actions button{width:100%;padding-inline:8px;font-size:12px}}

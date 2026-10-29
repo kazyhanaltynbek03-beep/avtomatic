@@ -1417,7 +1417,7 @@ function Stock({ ctx }) {
         <div className="qor-item-grid">{displayStock.map((row) => {
           const product = ctx.refs.products?.find((p) => p.id === row.product_id);
           const productCompany = product?.specifications?._qor_company_ids?.[0] || ctx.company || "";
-          return <article className="qor-item-card" key={row.product_id}><ProductImage product={product}/><div className="qor-item-body"><span className="marketplace-product-meta">SKU · {row.sku || "—"}</span><h3>{row.name || "Товар без названия"}</h3><div className="qor-item-facts"><b>Остаток · {row.quantity ?? 0} шт.</b><span>Продано · {row.sold ?? 0} шт.</span></div>{row.value != null && <div className="qor-item-price">Стоимость · {money(row.value)}</div>}{can(ctx.auth, "inventory", true) && <div className="stock-item-actions"><button className="secondary" onClick={() => ctx.open("adjustments", {company_id:productCompany, product_id:row.product_id, date:today(), quantity:1, unit_cost:product?.purchase_cost || 0, kind:"receipt", reason:"Приход товара"})}><Plus size={15}/>Приход</button><button className="secondary" disabled={Number(row.quantity || 0) <= 0} onClick={() => ctx.open("adjustments", {company_id:productCompany, product_id:row.product_id, date:today(), quantity:-1, unit_cost:product?.purchase_cost || 0, kind:"writeoff", reason:"Списание товара"})}><RotateCcw size={15}/>Списание</button></div>}</div></article>;
+          return <StockItemCard key={row.product_id} row={row} product={product} company={productCompany} ctx={ctx}/>;
         })}</div>
       )}
       <section className="panel stock-lot-history">
@@ -1427,6 +1427,81 @@ function Stock({ ctx }) {
     </div>
   );
 }
+function StockItemCard({row,product,company,ctx}) {
+  const [mode,setMode]=useState("");
+  const [quantity,setQuantity]=useState("1");
+  const [date,setDate]=useState(today());
+  const [unitCost,setUnitCost]=useState("");
+  const [reason,setReason]=useState("");
+  const [error,setError]=useState("");
+  const [busy,setBusy]=useState(false);
+  const submitLock=useRef(false);
+  const current=Number(row.quantity||0);
+  const receipt=mode==="receipt";
+  const open=(nextMode)=>{
+    setMode(nextMode);
+    setQuantity("1");
+    setDate(today());
+    setUnitCost(product?.purchase_cost>0?String(product.purchase_cost/100):"");
+    setReason(nextMode==="receipt"?"Приход товара":"");
+    setError("");
+  };
+  const submit=async e=>{
+    e.preventDefault();
+    if(submitLock.current||busy)return;
+    const amount=Number(quantity);
+    const cost=Number(String(unitCost).replace(",","."));
+    if(!Number.isInteger(amount)||amount<1){setError("Введите целое количество не меньше 1");return;}
+    if(!date){setError("Выберите дату движения");return;}
+    if(receipt&&(!Number.isFinite(cost)||cost<0||unitCost==="")){setError("Укажите себестоимость за единицу, чтобы партия корректно участвовала в расчёте себестоимости");return;}
+    if(!receipt&&amount>current){setError("Нельзя списать больше текущего остатка");return;}
+    if(!receipt&&reason.trim().length<5){setError("Укажите причину списания не короче 5 символов");return;}
+    submitLock.current=true;setBusy(true);setError("");
+    try{
+      await api("/post/adjustments",{method:"POST",body:{
+        company_id:Number(company),product_id:Number(row.product_id),date,
+        quantity:receipt?amount:-amount,unit_cost:receipt?Math.round(cost*100):0,
+        kind:receipt?"receipt":"writeoff",reason:reason.trim(),
+        reference:"stock-"+(receipt?"receipt":"writeoff")+":"+globalThis.crypto.randomUUID()
+      }});
+      ctx.notify(receipt?"Приход "+amount+" шт. сохранён":"Списание "+amount+" шт. сохранено");
+      setMode("");
+    }catch(e){setError(e.message||"Не удалось сохранить складское движение");}
+    finally{submitLock.current=false;setBusy(false);}
+  };
+  return <article className="qor-item-card stock-product-card">
+    <ProductImage product={product}/>
+    <div className="qor-item-body">
+      <span className="marketplace-product-meta">SKU · {row.sku || "—"}</span>
+      <h3>{row.name || "Товар без названия"}</h3>
+      <div className="stock-quantity-control" aria-label="Остаток товара">
+        <span>Остаток</span>
+        <div>
+          <button type="button" className="stock-step-button" aria-label={current>0?"Списать товар":"Списание недоступно"} disabled={!can(ctx.auth,"inventory",true)||current<=0||busy} onClick={()=>open("writeoff")}>−</button>
+          <strong>{current}<small> шт.</small></strong>
+          <button type="button" className="stock-step-button add" aria-label="Добавить приход" disabled={!can(ctx.auth,"inventory",true)||busy} onClick={()=>open("receipt")}>+</button>
+        </div>
+        <span className="stock-sold-count">Продано · {row.sold ?? 0} шт.</span>
+      </div>
+      {row.value != null && <div className="qor-item-price">Стоимость · {money(row.value)}</div>}
+      {mode&&<form className="stock-inline-entry" onSubmit={submit}>
+        <div className="stock-inline-heading"><strong>{receipt?"Новый приход":"Списание со склада"}</strong><span>{receipt?"После прихода будет "+(current+Number(quantity||0))+" шт.":"После списания останется "+Math.max(0,current-Number(quantity||0))+" шт."}</span></div>
+        <label>Количество, шт.
+          <div className="stock-entry-stepper">
+            <button type="button" className="secondary" aria-label="Уменьшить количество" disabled={Number(quantity)<=1} onClick={()=>setQuantity(String(Math.max(1,Number(quantity||1)-1)))}>−</button>
+            <input type="number" min="1" max={receipt?undefined:current} step="1" value={quantity} onChange={e=>setQuantity(e.target.value)} required/>
+            <button type="button" className="secondary" aria-label="Увеличить количество" disabled={!receipt&&Number(quantity)>=current} onClick={()=>setQuantity(String(Number(quantity||0)+1))}>+</button>
+          </div>
+        </label>
+        <label>{receipt?"Дата прихода":"Дата списания"}<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label>
+        {receipt?<label>Себестоимость за единицу · ₸<input type="number" min="0" step="0.01" value={unitCost} onChange={e=>setUnitCost(e.target.value)} placeholder="Введите себестоимость" required/></label>:<label>Причина списания<textarea rows="2" minLength="5" value={reason} onChange={e=>setReason(e.target.value)} placeholder="Например: передача товара или брак" required/></label>}
+        {error&&<p className="stock-entry-error" role="alert">{error}</p>}
+        <div className="stock-entry-actions"><button type="button" className="secondary" onClick={()=>setMode("")} disabled={busy}>Отмена</button><button type="submit" className="primary" disabled={busy}>{busy?"Сохраняем…":receipt?"Сохранить приход":"Сохранить списание"}</button></div>
+      </form>}
+    </div>
+  </article>;
+}
+
 function MarketplaceProductCard({ p, channel }) {
   const candidates = Array.from(new Set([p.image_url, ...(p.images || [])].filter(Boolean)));
   const [imageIndex, setImageIndex] = useState(0);
