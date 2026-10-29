@@ -974,9 +974,13 @@ function ReportPage({ page, ctx }) {
   const dashboardChannels = usesDashboard && r ? [
     ...(r.channels || []).filter((row) => !["Kaspi", "Wildberries", "WB"].includes(row.name)),
     {name:"Kaspi", revenue:dashboardKaspiSummary.data?.api_revenue, returns:dashboardKaspiSummary.data?.api_returns, apiLoading:dashboardKaspiSummary.loading, apiError:dashboardKaspiSummary.error},
-    {name:"Wildberries", revenue:dashboardWbSummary.data?.api_revenue, returns:dashboardWbSummary.data?.api_returns, apiLoading:dashboardWbSummary.loading, apiError:dashboardWbSummary.error},
+    {name:"Wildberries", revenue:dashboardWbSummary.data?.api_revenue, returns:dashboardWbSummary.data?.returns, apiLoading:dashboardWbSummary.loading, apiError:dashboardWbSummary.error},
   ] : (r?.channels || []);
   const dashboardRevenueTotal = dashboardChannels.reduce((total, row) => total + (Number(row.revenue) || 0), 0);
+  const dashboardMarketplaceSources = [
+    {channel:"Kaspi", state:dashboardKaspiSummary},
+    {channel:"Wildberries", state:dashboardWbSummary},
+  ];
   if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
   if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
   if (usesDashboard && !loadedReport) {
@@ -1336,6 +1340,40 @@ function ReportPage({ page, ctx }) {
           )}
         </div>
       </div>
+      <section className="panel dashboard-marketplace-source-panel" aria-label="Сводки маркетплейсов">
+        <div className="panel-heading">
+          <div><h2>Данные Kaspi и Wildberries</h2><span>Те же итоги и период, что в отдельных страницах маркетплейсов</span></div>
+        </div>
+        <div className="bottom-grid">
+          {dashboardMarketplaceSources.map(({channel, state}) => {
+            const data = state.data || {};
+            const metrics = channel === "Kaspi" ? [
+              ["Выручка API за вычетом возвратов", data.api_revenue == null ? "Нет подтверждённых данных" : money(data.api_revenue)],
+              ["Возвраты API", data.api_returns == null ? "—" : money(data.api_returns)],
+              ["Продано", data.api_units == null ? "—" : data.api_units + " шт."],
+              [Number(data.commission_estimated || 0) > 0 ? "Комиссия (расчётная)" : "Комиссия", money(data.commission)],
+              ["Логистика продавца", money(data.logistics)],
+              ["Доставка возврата", money(data.return_logistics)],
+              ["К получению (расчёт)", data.kaspi_estimated_proceeds == null ? "—" : money(data.kaspi_estimated_proceeds)],
+              ["Чистая прибыль", data.net_profit == null ? "—" : money(data.net_profit)],
+            ] : [
+              ["Оборот продаж WB", data.api_revenue == null ? "Нет данных" : money(data.api_revenue)],
+              ["Продано", data.api_units == null ? "—" : data.api_units + " шт."],
+              ["К перечислению по финансовому отчёту", Number(data.settlement_rows || 0) > 0 ? money(data.settlement_accrued) : "Нет данных отчёта"],
+              ["Комиссия", money(data.commission)],
+              ["Логистика продавца", money(data.logistics)],
+              ["Реклама", money(data.advertising)],
+              ["Чистая прибыль", data.net_profit == null ? "—" : money(data.net_profit)],
+            ];
+            return <div className="panel" key={channel}>
+              <div className="panel-heading"><h3>{channel}</h3><a className="text-button" href={"#" + channel}>Открыть отчёт</a></div>
+              {state.loading && !state.data ? <p className="muted">Загружаем данные…</p> :
+                state.error ? <p className="error-box" role="alert">Не удалось загрузить сводку: {state.error}</p> :
+                <div className="secondary-kpis compact-kpis">{metrics.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>}
+            </div>;
+          })}
+        </div>
+      </section>
       <div className="secondary-kpis">
         {[
           ["Продано единиц", r.units, false],
