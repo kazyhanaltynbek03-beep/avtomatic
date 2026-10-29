@@ -1903,6 +1903,20 @@ function SaleProductCard({ sale, product, account, onReturn }) {
   </article>;
 }
 
+function MarketplaceIntegrationCard({row,busy,onConfigure,onSync,onEdit,onDelete}) {
+  const channel=String(row.channel||"");
+  const state=String(row.sync_status||"never").toLowerCase();
+  const disconnected=row.active===false;
+  const status=disconnected?"Отключён":state==="running"?"Синхронизация":state==="failed"?"Требует внимания":state==="done"?"Подключён":"Подключён · ещё не синхронизирован";
+  const marketplaceClass=channel.toLowerCase()==="wildberries"?"wildberries":channel.toLowerCase();
+  return <article className={`qor-integration-card ${disconnected?"is-disconnected":""} ${state==="failed"?"has-error":""}`}>
+    <header><span className={`qor-marketplace-mark qor-marketplace-mark--${marketplaceClass}`}>{channel==="Wildberries"?"WB":channel==="Kaspi"?"K":channel.slice(0,2).toUpperCase()}</span><div><b>{channel}</b><small>{row.name || "Магазин"} · {row.company_name || "Компания"}</small></div><span className={`qor-integration-status status-${disconnected?"off":state==="failed"?"error":state==="running"?"running":"ready"}`}><i/>{status}</span></header>
+    <div className="qor-integration-facts"><div><span>Последняя синхронизация</span><b>{row.last_sync?new Date(row.last_sync).toLocaleString("ru-RU"):"—"}</b></div><div><span>Статус процесса</span><b>{state==="never"?"Нет запусков":state==="done"?"Завершено":state==="running"?"Выполняется":state==="failed"?"Ошибка":state}</b></div></div>
+    {row.sync_error&&<p className="qor-integration-error">{row.sync_error}</p>}
+    <footer><button type="button" className="secondary" onClick={()=>onConfigure(row)}>{disconnected?"Подключить магазин":"Настроить"}</button><button type="button" className="primary" disabled={busy||disconnected} onClick={()=>onSync(row)}><RefreshCw size={14}/>{busy&&state==="running"?"Синхронизация…":"Синхронизировать"}</button><button type="button" className="icon-button" title="Изменить магазин" onClick={()=>onEdit(row)}><Pencil size={15}/></button><button type="button" className="icon-button danger" title="Удалить магазин" onClick={()=>onDelete(row)}><Trash2 size={15}/></button></footer>
+  </article>;
+}
+
 function ProductOperationModal({ operation, company, onClose, onSaved }) {
   const product = operation.product;
   const [value, setValue] = useState(operation.kind === "price" ? String((product.price || 0) / 100) : String(product.inventory?.physical ?? 0));
@@ -2810,7 +2824,8 @@ function DataPage({ page, ctx }) {
             </> : entity === "sales" ? <>
               <div className="qor-sales-desktop"><Table rows={state.data.items} cols={["date","account_id","reference","product_id","quantity","revenue","commission","logistics","status"]} refs={ctx.refs} entity="sales" actions={row=><><a className="icon-button" title="Скачать счёт" href={`/api/sales/${row.id}/invoice`}><FileText size={16}/></a>{writable&&<button className="icon-button" title="Возврат товара" onClick={()=>ctx.open("returns",{sale_id:row.id})}><RotateCcw size={16}/></button>}</>}/></div>
               <div className="qor-sales-mobile qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div>
-            </> : <Table
+            </> : entity === "accounts" ? <section className="qor-integration-grid" aria-label="Подключённые магазины">
+              {state.data.items.filter(row=>["Kaspi","Wildberries","Ozon"].includes(row.channel)).map(row=><MarketplaceIntegrationCard key={row.id} row={row} busy={busy} onConfigure={openIntegration} onSync={sync} onEdit={item=>ctx.open("accounts",item)} onDelete={remove}/>)}</section> : <Table
               rows={state.data.items}
               cols={columns[entity] || ["id", "created_at"]}
               refs={ctx.refs}
