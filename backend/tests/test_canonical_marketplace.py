@@ -330,6 +330,7 @@ def test_wb_pagination_sale_return_and_stock_identity(monkeypatch):
     def request(url,method='GET',payload=None,interval=0):
         calls.append((url,payload))
         if 'orders/new' in url:return {'orders':[]}
+        if '/api/v3/orders?' in url:return {'orders':[],'next':0}
         if '/supplier/orders' in url:return []
         if '/supplier/sales' in url:
             start=parse_qs(urlparse(url).query)['dateFrom'][0]
