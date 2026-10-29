@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react"
 import {
   AreaChart,
   Area,
+  PieChart,
+  Pie,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -364,6 +367,10 @@ export default function App() {
           >
             <Menu />
           </button>
+          <a className="mobile-brand" href="#dashboard" onClick={() => navigate("dashboard")} aria-label="QOR AI — главная">
+            <span className="mobile-brand-mark"><Leaf size={20} strokeWidth={2.4}/></span>
+            <span><b>QOR AI</b><small>BUSINESS ERP</small></span>
+          </a>
           <div className="breadcrumb">
             Рабочее пространство <span>/</span> <strong>{current[1]}</strong>
           </div>
@@ -1199,8 +1206,24 @@ function ReportPage({ page, ctx }) {
       ["Чистая прибыль", r.net_profit, TrendingUp, "После учтённых расходов"],
       ["Выплаты получено", r.cash_inflow, Receipt, "Фактические поступления"],
     ];
-    const marketplaceColors = {Kaspi:"#ed4c4c", Wildberries:"#8c38ce", Ozon:"#2473dd"};
-    const marketplaceRows = [...dashboardChannels].sort((a,b)=>(Number(b.revenue)||0)-(Number(a.revenue)||0));
+    const marketplaceColors = {kaspi:"#ed4c4c", wildberries:"#8c38ce", ozon:"#2473dd", offline:"#40856a", b2b:"#d5a426"};
+    const marketplaceColor = (name) => marketplaceColors[String(name || "").toLowerCase()] || "#789187";
+    const marketplaceRows = ["Kaspi", "Wildberries", "Ozon"].map((channel) => {
+      const related = dashboardChannels.filter((row) => String(row.name || "").split("·")[0].trim().toLowerCase() === channel.toLowerCase());
+      const direct = related.find((row) => String(row.name || "").trim().toLowerCase() === channel.toLowerCase());
+      const detailRows = related.filter((row) => row !== direct);
+      const selected = direct?.revenue != null ? [direct] : detailRows.length ? detailRows : related;
+      const revenueRows = selected.filter((row) => row.revenue != null);
+      const returnRows = selected.filter((row) => row.returns != null);
+      return {
+        name: channel,
+        revenue: revenueRows.length ? revenueRows.reduce((sum, row) => sum + (Number(row.revenue) || 0), 0) : null,
+        returns: returnRows.length ? returnRows.reduce((sum, row) => sum + (Number(row.returns) || 0), 0) : null,
+        apiLoading: selected.some((row) => row.apiLoading),
+      };
+    });
+    const marketplaceChartRows = marketplaceRows.map((row) => ({...row, chartRevenue:Math.max(0, Number(row.revenue) || 0)})).filter((row) => row.chartRevenue > 0);
+    const marketplaceShareBase = marketplaceChartRows.reduce((sum, row) => sum + row.chartRevenue, 0);
     const topProducts = [...(r.products || [])].sort((a,b)=>(Number(b.revenue)||0)-(Number(a.revenue)||0)).slice(0,5);
     const stockAlerts = (r.stock_alerts || []).slice(0,6);
     return <div className="qor-overview">
@@ -1211,6 +1234,14 @@ function ReportPage({ page, ctx }) {
           <strong>{value == null ? "—" : money(value)}</strong><small>{note}</small>
         </article>)}
       </div>
+      <section className="qor-marketplace-cards" aria-label="Продажи по маркетплейсам">
+        {marketplaceRows.map((row) => <article className="qor-marketplace-summary-card" key={row.name} style={{"--market-color":marketplaceColor(row.name)}}>
+          <div className="qor-marketplace-summary-top"><span className="qor-marketplace-mark">{String(row.name).toLowerCase()==="wildberries"?"WB":String(row.name).slice(0,2).toUpperCase()}</span><b>{row.name}</b></div>
+          <strong>{row.revenue == null ? (row.apiLoading ? "Загрузка…" : "—") : money(row.revenue)}</strong>
+          <small>{row.returns == null ? "Продажи за выбранный период" : `Возвраты · ${money(row.returns)}`}</small>
+          <div className="qor-marketplace-track"><i style={{width:`${Math.max(2,Math.min(100,(Number(row.revenue)||0)/Math.max(marketplaceShareBase,1)*100))}%`}}/></div>
+        </article>)}
+      </section>
       <div className="qor-overview-main-grid">
         <section className="panel qor-overview-chart">
           <div className="panel-heading"><div><h2>Продажи и прибыль</h2><span>{ctx.start} — {ctx.end}</span></div><div className="qor-chart-legend"><span><i/> Выручка</span><span><i/> Прибыль</span></div></div>
@@ -1221,11 +1252,16 @@ function ReportPage({ page, ctx }) {
           </AreaChart></ResponsiveContainer> : <Empty text="За выбранный период нет операций"/>}
         </section>
         <section className="panel qor-marketplace-panel">
-          <div className="panel-heading"><div><h2>Продажи по маркетплейсам</h2><span>Данные подключённых каналов</span></div></div>
-          {marketplaceRows.map((row)=><article className="qor-marketplace-row" key={row.name}>
-            <span className="qor-marketplace-mark" style={{"--market-color":marketplaceColors[row.name] || "#789187"}}>{row.name === "Wildberries" ? "WB" : row.name === "Kaspi" ? "K" : row.name.slice(0,2).toUpperCase()}</span>
-            <div className="qor-marketplace-data"><div><b>{row.name}</b><strong>{row.revenue == null ? (row.apiLoading ? "Загрузка…" : "—") : money(row.revenue)}</strong></div><div className="qor-marketplace-track"><i style={{width:`${Math.max(2,Math.min(100,(Number(row.revenue)||0)/Math.max(dashboardRevenueTotal,1)*100))}%`,background:marketplaceColors[row.name] || "#789187"}}/></div><small>{row.returns == null ? "" : `Возвраты · ${money(row.returns)}`}</small></div>
-          </article>)}
+          <div className="panel-heading"><div><h2>Доля по маркетплейсам</h2><span>Распределение выручки за период</span></div></div>
+          {marketplaceChartRows.length ? <>
+            <div className="qor-share-chart"><ResponsiveContainer width="100%" height={190}><PieChart>
+              <Pie data={marketplaceChartRows} dataKey="chartRevenue" nameKey="name" innerRadius={54} outerRadius={78} paddingAngle={3} stroke="none">
+                {marketplaceChartRows.map((row) => <Cell key={row.name} fill={marketplaceColor(row.name)}/>) }
+              </Pie>
+              <Tooltip formatter={money}/>
+            </PieChart></ResponsiveContainer></div>
+            <div className="qor-share-legend">{marketplaceChartRows.map((row) => <div key={row.name}><span><i style={{background:marketplaceColor(row.name)}}/>{row.name}</span><b>{marketplaceShareBase ? decimal(row.chartRevenue / marketplaceShareBase * 100) : "0"}%</b><strong>{money(row.chartRevenue)}</strong></div>)}</div>
+          </> : <Empty text="Нет данных о продажах по маркетплейсам"/>}
           <a className="text-button qor-marketplace-link" href="#analytics">Открыть аналитику <span>→</span></a>
         </section>
       </div>
