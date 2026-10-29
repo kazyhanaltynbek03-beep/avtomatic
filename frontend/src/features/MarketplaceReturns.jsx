@@ -131,6 +131,8 @@ export default function MarketplaceReturns({ ctx }) {
   const [busyAccount, setBusyAccount] = useState(null);
   const [actionError, setActionError] = useState("");
   const [pollTick, setPollTick] = useState(0);
+  const [listRefreshTick, setListRefreshTick] = useState(0);
+  const [pendingAccounts, setPendingAccounts] = useState([]);
   const [statementFile, setStatementFile] = useState(null);
   const [statementAccount, setStatementAccount] = useState("");
   const [statementPreview, setStatementPreview] = useState(null);
@@ -140,6 +142,7 @@ export default function MarketplaceReturns({ ctx }) {
   const fileRef = useRef(null);
   const lock = useRef(false);
   const autoStarted = useRef(new Set());
+  const wasRunning = useRef(false);
   const notify = ctx.notify;
   const params = useMemo(() => {
     const p = new URLSearchParams({ marketplace, offset: String(offset), limit: "30", start: ctx.start, end: ctx.end, search });
@@ -152,7 +155,7 @@ export default function MarketplaceReturns({ ctx }) {
     if (selectedMetric === "unknown") p.set("unknown_only", "true");
     return p.toString();
   }, [marketplace, offset, ctx.start, ctx.end, ctx.company, search, selectedAccountId, selectedMetric]);
-  const { data, error, loading } = useLoad(`/marketplace-returns?${params}`, `${ctx.refresh}:${pollTick}`);
+  const { data, error, loading } = useLoad(`/marketplace-returns?${params}`, `${ctx.refresh}:${listRefreshTick}`);
   const { data: syncData } = useLoad(`/marketplace-returns/sync-status${ctx.company ? `?company_id=${ctx.company}` : ""}`, `${ctx.refresh}:${pollTick}`);
   const records = data?.items || [];
   const summary = data?.summary || {};
@@ -163,11 +166,31 @@ export default function MarketplaceReturns({ ctx }) {
 
   useEffect(() => { setOffset(0); }, [marketplace, search, ctx.company, ctx.start, ctx.end, selectedAccountId, selectedMetric]);
   useEffect(() => { setSelectedAccountId(""); setSelectedMetric(""); }, [marketplace]);
+  const syncRunning = (syncData?.items || []).some((x) => x.status === "running");
   useEffect(() => {
-    if (!(syncData?.items || []).some((x) => x.status === "running")) return undefined;
-    const timer = window.setInterval(() => setPollTick((n) => n + 1), 2500);
+    if (!syncRunning && !pendingAccounts.length) return undefined;
+    const timer = window.setInterval(() => setPollTick((n) => n + 1), 5000);
     return () => window.clearInterval(timer);
-  }, [syncData?.items]);
+  }, [syncRunning, pendingAccounts.length]);
+
+  useEffect(() => {
+    const completed = pendingAccounts.filter(({ accountId, requestedAt }) => {
+      const sync = progressByAccount[accountId];
+      const startedAt = Date.parse(sync?.started_at || "");
+      return Number.isFinite(startedAt) && startedAt >= requestedAt - 10000 && sync.status !== "running";
+    });
+    if (!completed.length) return;
+    const completedIds = new Set(completed.map((x) => x.accountId));
+    setPendingAccounts((current) => current.filter((x) => !completedIds.has(x.accountId)));
+    setListRefreshTick((n) => n + 1);
+  }, [pendingAccounts, progressByAccount]);
+
+  useEffect(() => {
+    if (wasRunning.current && !syncRunning && pendingAccounts.length === 0) {
+      setListRefreshTick((n) => n + 1);
+    }
+    wasRunning.current = syncRunning;
+  }, [syncRunning, pendingAccounts.length]);
 
   const discover = useCallback(async (accountId, silent = false) => {
     if (lock.current) return;
@@ -175,7 +198,11 @@ export default function MarketplaceReturns({ ctx }) {
     setBusyAccount(accountId);
     setActionError("");
     try {
-      await api("/marketplace-returns/discover", { method: "POST", body: { account_id: accountId } });
+      const requestedAt = Date.now();
+      const result = await api("/marketplace-returns/discover", { method: "POST", body: { account_id: accountId } });
+      if (!result?.already_running) {
+        setPendingAccounts((current) => [...current.filter((x) => x.accountId !== Number(accountId)), { accountId: Number(accountId), requestedAt }]);
+      }
       setPollTick((n) => n + 1);
       if (!silent) notify("Проверка сохранённых данных возвратов запущена");
     } catch (e) { setActionError(e.message); }
