@@ -228,7 +228,8 @@ def match_inventory_return(db, row, account):
 
 def serialize_return(row, account, product=None):
     return {
-        "id": row.id, "marketplace": row.marketplace, "account_id": row.account_id,
+        "id": row.id, "external_return_id": row.external_return_id, "product_id": row.product_id,
+        "marketplace": row.marketplace, "account_id": row.account_id,
         "store": account.name if account else "Магазин", "order_id": row.external_order_id,
         "product_name": row.product_name or (product.name if product else "Товар не сопоставлен"),
         "sku": row.sku or (product.sku if product else ""),
