@@ -754,26 +754,79 @@ function CostPendingNotice({ report, ctx }) {
   );
 }
 function ExpenseSummary({ ctx }) {
+  const [channelFilter, setChannelFilter] = useState("all");
   const params = new URLSearchParams({start:ctx.start, end:ctx.end});
   if (ctx.company) params.set("company_id", ctx.company);
   const {data, error, loading} = useLoad(`/expenses/summary?${params}`, ctx.refresh);
   if (loading) return <section className="panel expense-summary"><Spinner/></section>;
   if (error) return <section className="panel expense-summary"><ErrorBox error={error}/></section>;
   const summary = data || {};
+  const channels = Array.isArray(summary.channels) ? summary.channels : [];
+  const channelOptions = [...new Map(channels.map((row) => [row.channel, row.channel_label || row.channel])).entries()];
+  const activeFilter = channelFilter !== "all" && !channelOptions.some(([key]) => key === channelFilter) ? "all" : channelFilter;
+  const selectedChannels = activeFilter === "all" ? channels : channels.filter((row) => row.channel === activeFilter);
+  const total = activeFilter === "all" ? Number(summary.total || 0) : selectedChannels.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const posted = activeFilter === "all" ? Number(summary.posted_total || 0) : selectedChannels.reduce((sum, row) => sum + Number(row.posted_total || 0), 0);
+  const estimated = activeFilter === "all" ? Number(summary.commission_estimated || 0) : selectedChannels.reduce((sum, row) => sum + Number(row.estimated_total || 0), 0);
+  const details = selectedChannels.flatMap((row) => {
+    const breakdown = row.category_breakdown || Object.fromEntries(
+      Object.entries(row.categories || {}).map(([category, amount]) => [category, {posted_total: amount, estimated_total: 0, total: amount}]),
+    );
+    return Object.entries(breakdown).map(([category, values]) => ({
+      channel: row.channel_label || row.channel,
+      account: row.account_name || "—",
+      category,
+      posted_total: Number(values.posted_total || 0),
+      estimated_total: Number(values.estimated_total || 0),
+      total: Number(values.total ?? (Number(values.posted_total || 0) + Number(values.estimated_total || 0))),
+    }));
+  });
+  const kpis = [
+    [activeFilter === "all" ? "Всего с расчётными комиссиями" : `Всего · ${channelOptions.find(([key]) => key === activeFilter)?.[1] || activeFilter}`, total],
+    ["Проведено в учёте", posted],
+    ["Расчётная комиссия / оценка", estimated],
+    [activeFilter === "all" ? "Записей" : "Магазинов", activeFilter === "all" ? Number(summary.records || 0) : selectedChannels.length],
+  ];
   return <section className="panel expense-summary" aria-label="Расходы по источникам и категориям">
     <div className="panel-heading"><div><h2>Расходы за период</h2><p className="muted">{ctx.start} — {ctx.end} · маркетплейсы, офлайн и B2B</p></div></div>
     <div className="secondary-kpis compact-kpis">
-      <div><span>Всего с расчётными комиссиями</span><strong>{money(summary.total || 0)}</strong></div>
-      <div><span>Проведено в учёте</span><strong>{money(summary.posted_total || 0)}</strong></div>
-      <div><span>Расчётная комиссия Kaspi</span><strong>{money(summary.commission_estimated || 0)}</strong></div>
-      <div><span>Записей</span><strong>{summary.records || 0}</strong></div>
+      {kpis.map(([label, amount]) => <div key={label}><span>{label}</span><strong>{typeof amount === "number" && label !== "Записей" && label !== "Магазинов" ? money(amount) : amount}</strong></div>)}
     </div>
     {summary.commission_estimate_warning && <p className="panel-note amber">Есть фактические комиссии Kaspi. Расчёт по ставке не добавлен, чтобы не задвоить расходы.</p>}
-      <div className="expense-summary-grid">
-      <div><h3>По маркетплейсам и каналам</h3><Table rows={summary.channels || []} cols={["channel_label","account_name","posted_total","estimated_total","total"]}/></div>
-      <div><h3>По назначению</h3><Table rows={summary.categories || []} cols={["category","posted_total","estimated_total","total"]}/></div>
+    <div className="expense-channel-selector" role="group" aria-label="Фильтр расходов по маркетплейсу">
+      <button type="button" className={activeFilter === "all" ? "active" : ""} aria-pressed={activeFilter === "all"} onClick={() => setChannelFilter("all")}>Все каналы</button>
+      {channelOptions.map(([key, label]) => <button key={key} type="button" className={activeFilter === key ? "active" : ""} aria-pressed={activeFilter === key} onClick={() => setChannelFilter(key)}>{label}</button>)}
     </div>
-    <p className="panel-note">Проведено — подтверждённые операции расходов и продаж. Расчётная комиссия показана отдельно и не является фактическим удержанием или выплатой.</p>
+    <div className="expense-breakdown-panel">
+      <h3>{activeFilter === "all" ? "Расходы по магазинам и статьям" : `Расходы · ${channelOptions.find(([key]) => key === activeFilter)?.[1] || activeFilter}`}</h3>
+      {details.length ? <>
+        <div className="expense-breakdown-desktop">
+          <table>
+            <thead><tr><th>Канал</th><th>Магазин</th><th>Статья расхода</th><th>Проведено</th><th>Расчётная оценка</th><th>Всего</th></tr></thead>
+            <tbody>{details.map((row, index) => <tr key={`${row.channel}-${row.account}-${row.category}-${index}`}>
+              <td>{row.channel}</td><td>{row.account}</td><td className="strong">{row.category}</td>
+              <td>{money(row.posted_total)}</td><td>{money(row.estimated_total)}</td><td className="strong">{money(row.total)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <div className="expense-breakdown-mobile">
+          {selectedChannels.map((channel) => {
+            const breakdown = channel.category_breakdown || Object.fromEntries(Object.entries(channel.categories || {}).map(([category, amount]) => [category, {posted_total: amount, estimated_total: 0, total: amount}]));
+            const rows = Object.entries(breakdown);
+            return <article className="expense-market-card" key={`${channel.channel}-${channel.account_id || channel.account_name}`}>
+              <header><div><strong>{channel.channel_label || channel.channel}</strong><span>{channel.account_name || "—"}</span></div><b>{money(channel.total || 0)}</b></header>
+              <div className="expense-market-card-totals"><span>Проведено<strong>{money(channel.posted_total || 0)}</strong></span><span>Расчётное<strong>{money(channel.estimated_total || 0)}</strong></span></div>
+              <div className="expense-market-categories">{rows.map(([category, values]) => <div className="expense-market-category" key={category}>
+                <strong>{category}</strong><span>Проведено <b>{money(values.posted_total || 0)}</b></span>
+                {Number(values.estimated_total || 0) > 0 && <span>Расчётное <b>{money(values.estimated_total)}</b></span>}
+                <span>Всего <b>{money(values.total ?? (Number(values.posted_total || 0) + Number(values.estimated_total || 0)))}</b></span>
+              </div>)}</div>
+            </article>;
+          })}
+        </div>
+      </> : <Empty text="За выбранный период расходов по этому каналу нет."/>}
+    </div>
+    <p className="panel-note">Проведено — подтверждённые операции из учёта. Расчётная комиссия показана отдельно и не является фактическим удержанием или выплатой.</p>
   </section>;
 }
 function ReportPage({ page, ctx }) {

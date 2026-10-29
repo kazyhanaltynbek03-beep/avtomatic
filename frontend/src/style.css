@@ -2470,3 +2470,42 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
 @media(max-width:600px){.stock-quantity-control>div{grid-template-columns:50px minmax(72px,1fr) 50px}.stock-step-button{width:50px;height:50px}.stock-entry-actions{display:grid;grid-template-columns:1fr 1fr}.stock-entry-actions button{width:100%;padding-inline:8px;font-size:12px}}
 
 .stock-low-warning{margin:.65rem 0;padding:.7rem .85rem;border:1px solid #f0c879;border-radius:12px;background:#fff7e5;color:#8a4b08;font-size:.9rem;font-weight:700;line-height:1.35}
+
+/* Expenses: selectable marketplace summary and readable detail table/cards. */
+.expense-channel-selector{display:flex;flex-wrap:wrap;gap:8px}
+.expense-channel-selector button{border:1px solid #d6e2dc;background:#f8fbf9;color:#355849;border-radius:999px;padding:9px 15px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
+.expense-channel-selector button:hover{border-color:#6e9b82;background:#eef7f1}
+.expense-channel-selector button.active{background:#183d31;color:#fff;border-color:#183d31;box-shadow:0 3px 10px rgba(24,61,49,.16)}
+.expense-channel-selector button:focus-visible{outline:3px solid #77aa8d;outline-offset:2px}
+.expense-breakdown-panel{min-width:0;padding:16px;border:1px solid var(--line,#dce7e1);border-radius:16px;background:var(--surface,#fff)}
+.expense-breakdown-panel h3{margin:0 0 12px;font-size:16px;color:#24483a}
+.expense-breakdown-desktop{max-width:100%;overflow-x:auto}
+.expense-breakdown-desktop table{width:100%;min-width:700px;border-collapse:collapse}
+.expense-breakdown-desktop th,.expense-breakdown-desktop td{padding:11px 12px;border-bottom:1px solid #e8efeb;text-align:left;vertical-align:top}
+.expense-breakdown-desktop th{color:#71827a;font-size:11px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.expense-breakdown-desktop td:nth-last-child(-n+3){text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.expense-breakdown-desktop tbody tr:last-child td{border-bottom:0}
+.expense-breakdown-desktop tbody tr:hover{background:#f8fbf9}
+.expense-breakdown-mobile{display:none}
+@media(max-width:760px){
+ .expense-channel-selector{flex-wrap:nowrap;overflow-x:auto;padding:2px 1px 7px;scrollbar-width:thin}
+ .expense-channel-selector button{flex:0 0 auto;padding:10px 15px}
+ .expense-breakdown-panel{padding:12px}
+ .expense-breakdown-desktop{display:none}
+ .expense-breakdown-mobile{display:grid;gap:10px}
+ .expense-market-card{min-width:0;border:1px solid #dce7e1;border-radius:14px;padding:13px;background:#fff}
+ .expense-market-card>header{height:auto;padding:0 0 11px;border-bottom:1px solid #e8efeb;display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+ .expense-market-card>header>div{display:grid;gap:3px;min-width:0}
+ .expense-market-card>header>div strong{font-size:15px;color:#183d31}
+ .expense-market-card>header>div span{font-size:12px;color:#73837a;overflow-wrap:anywhere}
+ .expense-market-card>header>b{font-size:15px;color:#183d31;text-align:right;white-space:nowrap}
+ .expense-market-card-totals{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px 0;border-bottom:1px solid #e8efeb}
+ .expense-market-card-totals span{display:grid;gap:3px;font-size:11px;color:#71827a}
+ .expense-market-card-totals strong{font-size:14px;color:#304a3e;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+ .expense-market-categories{display:grid}
+ .expense-market-category{display:grid;grid-template-columns:1fr auto;gap:5px 12px;padding:10px 0;border-bottom:1px solid #eef2ef}
+ .expense-market-category:last-child{border-bottom:0;padding-bottom:0}
+ .expense-market-category>strong{grid-column:1/-1;color:#26483b;font-size:13px;line-height:1.35;overflow-wrap:anywhere}
+ .expense-market-category>span{display:flex;justify-content:space-between;gap:8px;color:#7a8982;font-size:11px}
+ .expense-market-category>span b{color:#334d41;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+}

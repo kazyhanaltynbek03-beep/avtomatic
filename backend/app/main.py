@@ -1420,11 +1420,15 @@ def expense_summary(start: date, end: date, company_id: int | None = None,
         channel_key = (channel, account_id)
         channel_row = by_channel.setdefault(channel_key, {"channel": channel, "channel_label": channel_label,
             "account_id": account_id, "account_name": account_name, "total": 0,
-            "posted_total": 0, "estimated_total": 0, "categories": {}})
+            "posted_total": 0, "estimated_total": 0, "categories": {}, "category_breakdown": {}})
         channel_row["total"] += amount
         channel_row["estimated_total" if source == "estimate" else "posted_total"] += amount
         label = category_labels.get(category, category or "Прочие расходы")
         channel_row["categories"][label] = channel_row["categories"].get(label, 0) + amount
+        category_detail = channel_row["category_breakdown"].setdefault(label, {
+            "posted_total": 0, "estimated_total": 0, "total": 0})
+        category_detail["estimated_total" if source == "estimate" else "posted_total"] += amount
+        category_detail["total"] += amount
         category_row = by_category.setdefault(label, {"category": label, "total": 0,
             "posted_total": 0, "estimated_total": 0})
         category_row["total"] += amount
