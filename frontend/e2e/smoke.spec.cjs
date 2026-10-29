@@ -48,10 +48,13 @@ test("owner can log in, open core pages and log out without browser errors", asy
   await expect(page.locator(".mobile-brand")).toBeVisible();
   const periodStyle = await page.locator(".toolbar > .periods").evaluate((element) => ({
     display: getComputedStyle(element).display,
-    overflowX: getComputedStyle(element).overflowX,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+    choices: element.querySelectorAll("button").length,
   }));
-  expect(periodStyle.display).toBe("flex");
-  expect(["auto", "scroll"]).toContain(periodStyle.overflowX);
+  expect(periodStyle.display).toBe("grid");
+  expect(periodStyle.scrollWidth).toBeLessThanOrEqual(periodStyle.clientWidth);
+  expect(periodStyle.choices).toBe(10);
   await page.setViewportSize({ width: 1280, height: 900 });
   expect(consoleErrors, `API responses with errors: ${failedApi.join(", ")}`).toEqual([]);
   expect(failedApi).toEqual([]);
