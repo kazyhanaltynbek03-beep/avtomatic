@@ -2376,3 +2376,50 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
 .stock-item-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
 .stock-item-actions button{min-height:38px;padding:7px 11px;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px}
 @media(max-width:600px){.stock-item-actions button{flex:1;min-height:42px}}
+
+
+/* Marketplace report controls: aligned cards with room between every action. */
+.marketplace-inbox>.section-heading{align-items:flex-start;gap:12px}
+.marketplace-inbox>.section-heading>div{flex:1 1 280px;min-width:0}
+.marketplace-inbox>.section-heading>.pill{flex:0 0 auto;align-self:flex-start;margin-top:2px}
+.marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:10px;margin:10px 14px 14px;padding:0}
+.marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]>button{width:100%;min-width:0;min-height:48px;padding:10px 12px;border:1px solid #dce7e1;border-radius:12px;background:#f5f8f6;color:#315345;font-size:13px;font-weight:700;line-height:1.25;text-align:center;white-space:normal;overflow-wrap:anywhere}
+.marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]>button.primary{border-color:#17664c;background:#17664c;color:#fff}
+.marketplace-inbox>.kaspi-report-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:10px;margin:0 14px 16px;padding:0}
+.marketplace-inbox>.kaspi-report-controls>button{width:100%;min-width:0;min-height:48px;padding:10px 12px;border:1px solid #dce7e1;border-radius:12px;background:#fff;color:#315345;font-size:13px;font-weight:700;line-height:1.25;text-align:center;white-space:normal;overflow-wrap:anywhere}
+.marketplace-inbox>.kaspi-report-controls>button.primary{border-color:#17664c;background:#17664c;color:#fff}
+.marketplace-inbox>.kaspi-report-controls>.muted{grid-column:1/-1;margin:0;padding-top:2px;font-size:12px;line-height:1.45}
+.marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:14px 16px 0;margin:0 0 14px}
+.marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]>button{width:100%;min-width:0;min-height:44px;padding:8px 10px;border:1px solid #dce6e0;border-radius:12px;background:#f6f8f7;color:#415b4e;font-size:13px;font-weight:700;line-height:1.25;text-align:center;white-space:normal;overflow-wrap:anywhere}
+.marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]>button[aria-pressed="true"]{border-color:#17664c;background:#17664c;color:#fff;box-shadow:0 3px 9px rgba(23,102,76,.14)}
+.wb-report-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:14px 0 18px;padding:0 14px}
+.wb-report-tabs button{min-width:0;min-height:46px;padding:9px 12px;border:1px solid #d6e2db;border-radius:12px;background:#f6f9f7;color:#315345;font-size:13px;font-weight:700;line-height:1.25;white-space:normal}
+.wb-report-tabs button.active{border-color:#17664c;background:#17664c;color:#fff}
+.wb-weekly-controls{display:flex;flex-wrap:wrap;align-items:end;gap:10px;padding:0 16px 12px}
+.wb-weekly-controls label{flex:1 1 180px;min-width:0}
+.wb-weekly-controls button{flex:0 1 auto;min-height:42px;padding:9px 13px;border:1px solid #d6e2db;border-radius:11px;background:#f7faf8;color:#315345;font-weight:700}
+.wb-weekly-controls button.primary{border-color:#17664c;background:#17664c;color:#fff}
+.wb-report-range-note{margin:14px;padding:13px 15px;line-height:1.5}
+@media(max-width:700px){
+  .marketplace-inbox>.section-heading{padding:15px 14px 12px}
+  .marketplace-inbox>.section-heading>div{flex-basis:100%}
+  .marketplace-inbox>.section-heading>.pill{margin:0}
+  .marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]{gap:8px;margin:4px 14px 14px}
+  .marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]>button{min-height:50px;padding:9px 8px;font-size:12px}
+  .marketplace-inbox>.kaspi-report-controls{gap:8px;margin:0 14px 14px}
+  .marketplace-inbox>.kaspi-report-controls>button{min-height:48px;padding:9px 8px;font-size:12px}
+  .marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px 14px 0}
+  .marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]>button{min-height:46px;padding:8px 7px;font-size:12px}
+  .wb-report-tabs{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:12px 0 16px;padding:0 12px}
+  .wb-report-tabs button{min-height:44px;padding:8px 5px;font-size:12px}
+  .wb-weekly-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:0 12px 12px}
+  .wb-weekly-controls label{min-width:0}
+  .wb-weekly-controls>button{grid-column:1/-1;width:100%;justify-content:center}
+}
+@media(max-width:380px){
+  .marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]{grid-template-columns:1fr}
+  .marketplace-inbox>.kaspi-report-controls{grid-template-columns:1fr}
+  .marketplace-orders-report>.row-actions[aria-label="Фильтр статуса заказа"]{grid-template-columns:1fr}
+  .wb-report-tabs{grid-template-columns:1fr 1fr}
+  .wb-report-tabs button:last-child{grid-column:1/-1}
+}

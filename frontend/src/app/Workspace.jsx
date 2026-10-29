@@ -1574,23 +1574,8 @@ function ProductOperationModal({ operation, company, onClose, onSaved }) {
   </form></div>;
 }
 
-function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
-  const inputDate = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  const mondayOfLastWeek = () => {
-    const d = new Date();
-    d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7);
-    return inputDate(d);
-  };
-  const lastCompletedWeek = mondayOfLastWeek();
-  const initialAnchor = () => {
-    const d = new Date();
-    if (initialPeriod === "daily") d.setDate(d.getDate() - 1);
-    else if (initialPeriod === "monthly") { d.setDate(1); d.setMonth(d.getMonth() - 1); }
-    else return mondayOfLastWeek();
-    return inputDate(d);
-  };
-  const [week, setWeek] = useState(initialAnchor);
-  const [period, setPeriod] = useState(initialPeriod);
+function WBFinanceReport({ accounts, company, period, start, end }) {
+  const range = {start, end};
   const [accountId, setAccountId] = useState("");
   const activeAccountId = accounts.length === 1 ? String(accounts[0].id) : accountId;
   const [search, setSearch] = useState("");
@@ -1605,31 +1590,11 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
   const [downloadingExcel, setDownloadingExcel] = useState(false);
   const [excelError, setExcelError] = useState("");
   useEffect(() => {
-    if (period === "weekly" && week > lastCompletedWeek) setWeek(lastCompletedWeek);
-  }, [period, week, lastCompletedWeek]);
-  useEffect(() => {
     if (accounts.length && !accounts.some(a=>String(a.id)===String(accountId))) setAccountId(String(accounts[0].id));
     else if (!accounts.length && accountId) setAccountId("");
   }, [accounts, accountId]);
-  const periodRange = () => {
-    if (period === "daily") return {start:week,end:week};
-    if (period === "monthly") {
-      const [year,month] = week.slice(0,7).split("-").map(Number);
-      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-      const now = new Date();
-      const monthStart = `${year}-${String(month).padStart(2,"0")}-01`;
-      if (year === now.getFullYear() && month === now.getMonth()+1 && now.getDate() > 1) {
-        const yesterday = new Date(now); yesterday.setDate(yesterday.getDate()-1);
-        return {start:monthStart,end:inputDate(yesterday)};
-      }
-      return {start:monthStart,end:`${year}-${String(month).padStart(2,"0")}-${String(lastDay).padStart(2,"0")}`};
-    }
-    const reportWeek = period === "weekly" && week > lastCompletedWeek ? lastCompletedWeek : week;
-    return {start:reportWeek,end:new Date(new Date(`${reportWeek}T00:00:00Z`).getTime()+6*86400000).toISOString().slice(0,10)};
-  };
-  const range = periodRange();
-  useEffect(() => setOpPage(0), [week, activeAccountId, period]);
-  useEffect(() => { setSyncing(false); setSyncStartedAt(0); }, [week, activeAccountId, period]);
+  useEffect(() => setOpPage(0), [start, end, activeAccountId, period]);
+  useEffect(() => { setSyncing(false); setSyncStartedAt(0); }, [start, end, activeAccountId, period]);
   const params = new URLSearchParams({ period, start:range.start, end:range.end });
   if (activeAccountId) params.set("account_id", activeAccountId);
   if (company) params.set("company_id", company);
@@ -1760,8 +1725,6 @@ function WBFinanceReport({ accounts, company, initialPeriod = "weekly" }) {
     <div className="section-heading"><div><h3>{periodLabel} финансовый отчёт</h3><p className="muted">Источник — Finance API WB. Основа расчёта — сумма к перечислению; месячный итог агрегируется из дневных строк WB. Это начисление WB, не подтверждение банковского зачисления.</p></div><span className={`pill wb-weekly-status ${data.status === "готов" ? "ready" : ""}`}>{statusText}</span></div>
     <div className="row-actions wb-weekly-controls">
       {accounts.length > 1 && <label>Аккаунт WB<select value={accountId} onChange={(e)=>setAccountId(e.target.value)}>{accounts.map((a)=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>}
-      <label>{period === "daily" ? "День отчёта" : period === "monthly" ? "Месяц отчёта" : "Неделя с понедельника"}<input type={period === "monthly" ? "month" : "date"} max={period === "weekly" ? lastCompletedWeek : undefined} value={period === "monthly" ? week.slice(0,7) : week} onChange={(e)=>{if(period === "monthly"){setWeek(`${e.target.value}-01`);return;}const d=new Date(`${e.target.value}T12:00:00`);if(period === "weekly") d.setDate(d.getDate()-((d.getDay()+6)%7));const monday=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);setWeek(period === "weekly" && monday > lastCompletedWeek ? lastCompletedWeek : monday);}}/></label>
-      <label>Тип отчёта<select value={period} onChange={(e)=>{const next=e.target.value;setPeriod(next);if(next==="weekly")setWeek(mondayOfLastWeek());else if(next==="daily"){const d=new Date();d.setDate(d.getDate()-1);setWeek(inputDate(d));}else{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);setWeek(inputDate(d));}}}><option value="daily">Финансы за день</option><option value="weekly">Финансы за неделю</option><option value="monthly">Итог за месяц</option></select></label>
       <label>Поиск товара<input type="search" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Артикул или название"/></label>
       <label>Операции<select value={kind} onChange={(e)=>setKind(e.target.value)}><option value="all">Все</option><option value="sales">Продажи</option><option value="returns">Есть возвраты</option></select></label>
       <button type="button" disabled={!activeAccountId || syncing} onClick={startReportSync}>{syncing ? "Проверяем WB…" : "Проверить WB сейчас"}</button>
@@ -1826,7 +1789,7 @@ function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefres
 }
 
 function MarketplaceInbox({ channel, ctx }) {
-  const [wbTab,setWbTab] = useState("weekly");
+  const [wbTab,setWbTab] = useState("finance");
   const [ordersMode,setOrdersMode] = useState(false);
   const [kaspiReportMode,setKaspiReportMode] = useState("issued");
   const [summaryReload,setSummaryReload] = useState(0);
@@ -1912,6 +1875,38 @@ function MarketplaceInbox({ channel, ctx }) {
   if (ctx.company) productParams.set("company_id", ctx.company);
   if (selectedAccount) productParams.set("account_id", String(selectedAccount.id));
   const marketplaceProducts = useLoad("/marketplace-products?" + productParams, ctx.refresh);
+  const wbReportRange = (() => {
+    if (channel !== "Wildberries") return null;
+    const todayKey = today();
+    const asDate = value => new Date(`${value}T00:00:00Z`);
+    const shift = (value, days) => {
+      const d = asDate(value);
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10);
+    };
+    const yesterdayKey = shift(todayKey, -1);
+    let reportEnd = ctx.end;
+    if (ctx.start === ctx.end && ctx.end === todayKey) {
+      return {error:"Финансовые строки WB доступны после закрытия дня. Выберите «Вчера» или завершённый период."};
+    }
+    if (ctx.end === todayKey && ctx.start.slice(0, 7) === todayKey.slice(0, 7) && ctx.start.endsWith("-01")) {
+      reportEnd = yesterdayKey;
+    }
+    if (ctx.start === reportEnd && reportEnd < todayKey) {
+      return {period:"daily", start:ctx.start, end:reportEnd};
+    }
+    const startDate = asDate(ctx.start);
+    if (startDate.getUTCDay() === 1 && shift(ctx.start, 6) === reportEnd && reportEnd < todayKey) {
+      return {period:"weekly", start:ctx.start, end:reportEnd};
+    }
+    const nextMonth = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 1));
+    const lastDay = new Date(nextMonth.getTime() - 86400000).toISOString().slice(0, 10);
+    const sameMonth = reportEnd.slice(0, 7) === ctx.start.slice(0, 7);
+    if (startDate.getUTCDate() === 1 && sameMonth && reportEnd < todayKey && (reportEnd === lastDay || reportEnd === yesterdayKey)) {
+      return {period:"monthly", start:ctx.start, end:reportEnd};
+    }
+    return {error:"Отчёт WB по API доступен за один завершённый день, полную прошлую неделю или месяц. Выберите такой период сверху."};
+  })();
 
   useEffect(()=>setOffset(0), [ctx.company,channel,status,selectedAccountId]);
   const run = async (fn) => { setBusy(true);setError("");try{await fn();}catch(e){setError(e.message);}finally{setBusy(false);} };
@@ -1955,9 +1950,9 @@ function MarketplaceInbox({ channel, ctx }) {
       </>}
     </> : null}
     {channel === "Kaspi" && m.sync_in_progress && !m.sync_errors?.length && kaspiReportMode === "issued" && <p className="muted" role="status">Обновляем выбранный период Kaspi в фоне. Страница продолжает показывать сохранённые итоги.</p>}
-    {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи по дням"],["daily_finance","Финансы за день"],["weekly","Итог за неделю"],["monthly","Итог за месяц"],["products","Товары"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
+    {channel === "Wildberries" && <div className="wb-report-tabs" role="tablist" aria-label="Раздел Wildberries">{[["daily","Продажи"],["finance","Финансы"],["products","Товары"]].map(([id,label])=><button type="button" role="tab" aria-selected={wbTab===id} className={wbTab===id?"active":""} key={id} onClick={()=>setWbTab(id)}>{label}</button>)}</div>}
     {(channel !== "Wildberries" || wbTab === "daily") && !(channel === "Kaspi" && kaspiReportMode === "created") && (summary.loading ? <Spinner/> : summary.error ? <ErrorBox error={summary.error}/> : (() => {
-      const visible = marketplaceKpis.filter(([title])=>channel!=="Wildberries" || (wbTab==="daily" ? ["Оборот продаж WB","Продано"].includes(title) : ["К перечислению по отчёту","Себестоимость FIFO","Комиссия","Логистика продавца","Реклама","Чистая прибыль"].includes(title)));
+      const visible = marketplaceKpis.filter(([title])=>channel!=="Wildberries" || ["Оборот продаж WB","Продано"].includes(title));
       const isPrimary = ([title]) => channel==="Kaspi"
         ? ["Выручка API за вычетом возвратов","К получению (расчёт)","Продано","Чистая прибыль"].includes(title)
         : channel==="Wildberries" ? ["Оборот продаж WB","Продано"].includes(title)
@@ -1984,7 +1979,7 @@ function MarketplaceInbox({ channel, ctx }) {
         </details>}
       </>;
     })())}
-    {channel === "Wildberries" && ["daily_finance","weekly","monthly"].includes(wbTab) && <WBFinanceReport key={wbTab} accounts={scopedAccounts} company={ctx.company} initialPeriod={wbTab === "daily_finance" ? "daily" : wbTab}/> }
+    {channel === "Wildberries" && wbTab === "finance" && (wbReportRange?.period ? <WBFinanceReport key={`${wbReportRange.period}:${wbReportRange.start}:${wbReportRange.end}`} accounts={scopedAccounts} company={ctx.company} {...wbReportRange}/> : <div className="info-banner wb-report-range-note" role="status">{wbReportRange?.error}</div>)}
     {(channel !== "Wildberries" || wbTab === "products") && <><div className="section-heading"><div><h3>Товары маркетплейса</h3><p className="muted">Продажи и прибыль связаны с товаром QOR по SKU. Себестоимость и остаток меняются в единой карточке «Товары / SKU».</p></div><span className="pill">{marketplaceProducts.data?.total || 0} товаров</span></div>
     {marketplaceProducts.error ? <ErrorBox error={marketplaceProducts.error}/> : marketplaceProducts.loading ? <Spinner/> : <div className="marketplace-product-grid">
       {(marketplaceProducts.data?.items || []).slice(0,60).map(p=><MarketplaceProductCard key={p.id} p={p} channel={channel}/>)}
