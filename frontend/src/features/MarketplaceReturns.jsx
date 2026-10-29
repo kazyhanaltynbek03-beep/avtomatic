@@ -56,7 +56,7 @@ const inventoryNext = {
   defective: ["written_off", "Списать брак"],
 };
 
-function InventoryAction({ item, onUpdated }) {
+function InventoryAction({ item, onUpdated, allowInventory }) {\n  if (!allowInventory) return null;
   const [match, setMatch] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -99,7 +99,7 @@ function InventoryAction({ item, onUpdated }) {
   </div>;
 }
 
-function ReturnRow({ item, onUpdated }) {
+function ReturnRow({ item, onUpdated, allowInventory }) {
   const title = item.product_name || "Товар не сопоставлен";
   return <>
     <tr className="returns-desktop-row">
@@ -109,7 +109,7 @@ function ReturnRow({ item, onUpdated }) {
       <td>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</td>
       <td>{item.financial_return_date ? showDate(item.financial_return_date) : "Не подтверждено"}</td>
       <td>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</td>
-      <td><span className="returns-status">{labels[item.status] || item.status}</span><small className="returns-muted">{item.financial_status === "confirmed" ? "Финансы подтверждены" : "Ожидает финансового подтверждения"}</small><ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated}/></td>
+      <td><span className="returns-status">{labels[item.status] || item.status}</span><small className="returns-muted">{item.financial_status === "confirmed" ? "Финансы подтверждены" : "Ожидает финансового подтверждения"}</small><ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/></td>
     </tr>
     <article className="returns-mobile-card">
       <header><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><span className="returns-status">{labels[item.status] || item.status}</span></header>
@@ -205,7 +205,7 @@ export default function MarketplaceReturns({ ctx }) {
   const wbOrKaspiStores = channelStores.filter((x) => ["Kaspi", "Wildberries"].includes(x.marketplace));
   const pageCount = Math.ceil((data?.total || 0) / 30);
   const currentPage = Math.floor(offset / 30) + 1;
-  const financeWrite = can(ctx.auth, "finance", true);
+  const financeWrite = can(ctx.auth, "finance", true);\n  const inventoryWrite = can(ctx.auth, "inventory", true);
 
   return <section className="marketplace-returns-page">
     <div className="returns-intro"><div><div className="eyebrow">ОПЕРАЦИИ · ИЗОЛИРОВАННЫЙ ЖУРНАЛ</div><h2>Возвраты маркетплейсов</h2><p>Финансовая сверка остаётся отдельной. Для склада возврат нужно сопоставить с исходной ERP-продажей, затем отметить получение и результат осмотра.</p></div>
@@ -248,7 +248,7 @@ export default function MarketplaceReturns({ ctx }) {
     </div>
     <section className="returns-reconciliation"><div className="returns-reconciliation-title"><PackageCheck size={18}/><strong>Финансовая сверка возвратов</strong><span>Тестовый режим</span></div><div className="returns-reconciliation-grid"><div><small>Текущая сумма отчёта</small><strong>Требует выбора финансового источника</strong></div><div><small>Подтверждённые возвраты за период</small><strong>{summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"}</strong></div><div><small>Уже учтено / ещё не учтено</small><strong>{summary.accounted_amount || summary.not_accounted_amount ? `${money(summary.accounted_amount)} / ${money(summary.not_accounted_amount)}` : "Сверка не выполнена"}</strong></div><div><small>Отдельный скорректированный итог</small><strong>Не рассчитывается автоматически</strong></div></div><p>Автовычитание отключено: возврат не уменьшается повторно, если он уже есть в отчёте. Выручка, прибыль, выплата и денежный поток сверяются отдельно.</p></section>
     {loading && !data ? <Spinner/> : error ? <ErrorBox error={error}/> : records.length ? <>
-      <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={item.id} item={item} onUpdated={() => setPollTick((n) => n + 1)}/>)}</tbody></table></div>
+      <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={`${item.id}:${pollTick}`} item={item} onUpdated={() => setPollTick((n) => n + 1)} allowInventory={inventoryWrite}/>)}</tbody></table></div>
       <div className="returns-pagination"><span>{data.total} записей · страница {currentPage} из {Math.max(pageCount, 1)}</span><div><button disabled={!offset} aria-label="Предыдущая страница" onClick={() => setOffset(Math.max(0, offset - 30))}><ChevronLeft size={18}/></button><button disabled={offset + 30 >= data.total} aria-label="Следующая страница" onClick={() => setOffset(offset + 30)}><ChevronRight size={18}/></button></div></div>
     </> : <div className="returns-empty"><Clock3 size={24}/><strong>Возвраты пока не найдены</strong><span>Записи появятся после проверки сохранённых данных маркетплейса. Открытие страницы не запускает полную синхронизацию.</span></div>}
   </section>;
