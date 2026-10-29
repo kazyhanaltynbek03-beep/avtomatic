@@ -1,6 +1,6 @@
 from datetime import timedelta
 from app.db import SessionLocal
-from app.models import Batch, Movement, Product, business_today
+from app.models import Account, Batch, Movement, Product, business_today, now
 
 
 def test_product_editor_saves_fields_and_rejects_stale_version(client):
@@ -192,6 +192,33 @@ def test_marketplace_ids_map_different_platform_ids_to_one_qor_product(client):
         assert {(m.account_id, m.external_key) for m in mappings} == {
             (1, "product:kaspi-item-771"), (4, "product:wb-nmid-992"),
         }
+
+
+def test_marketplace_mapping_rejects_active_sync_but_recovers_stale_sync(client):
+    from datetime import timedelta
+
+    with SessionLocal() as db:
+        account = db.get(Account, 1)
+        account.sync_status = "running"
+        account.last_sync = now()
+        account.sync_error = "KASPI_PERIOD_SYNC"
+        db.commit()
+
+    active = client.post("/api/products/1/marketplace-mappings", json={
+        "account_id": 1, "id_type": "product", "external_id": "kaspi-active-sync",
+    })
+    assert active.status_code == 409
+
+    with SessionLocal() as db:
+        account = db.get(Account, 1)
+        account.last_sync = now() - timedelta(minutes=6)
+        db.commit()
+
+    recovered = client.post("/api/products/1/marketplace-mappings", json={
+        "account_id": 1, "id_type": "product", "external_id": "kaspi-stale-sync",
+    })
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["external_key"] == "product:kaspi-stale-sync"
 
 
 def test_mapping_save_reprocesses_pending_rows_and_delete_preserves_stock(client, monkeypatch):
