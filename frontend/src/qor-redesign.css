@@ -331,3 +331,118 @@ table td {vertical-align:middle}
   .qor-catalog-list>.qor-item-card>.qor-item-image,.qor-stock-list>.qor-item-card>.qor-item-image {height:132px!important;min-height:132px;border-radius:14px 14px 0 0}
 }
 
+/* Final visual pass for every QOR workspace section. */
+.app > aside {width:220px}
+.main-shell {margin-left:220px}
+header {position:sticky;top:0;z-index:20}
+main[data-page] {--page-gutter:clamp(18px,2.5vw,38px)}
+main[data-page]>.page-heading {min-height:76px;align-items:center}
+main[data-page]>.page-heading>div {min-width:0}
+main[data-page]>.page-heading>button {flex:none}
+main[data-page]>.toolbar {display:flex;align-items:center;gap:10px;min-height:54px;margin:0 0 14px;padding:9px 11px}
+main[data-page]>.toolbar>.filter-company {flex:0 1 240px;min-width:175px}
+main[data-page]>.toolbar>.periods {display:flex;flex:1 1 auto;min-width:0;flex-wrap:wrap}
+main[data-page]>.toolbar>.refresh {flex:none;width:40px;height:40px;background:#f8fbf9;border:1px solid var(--qor-line)}
+main[data-page]>.dates {display:flex;flex-wrap:wrap;gap:10px;padding:12px 14px;margin:0 0 14px;border:1px solid var(--qor-line);border-radius:13px;background:#fff}
+main[data-page]>.dates label {display:flex;align-items:center;gap:8px;color:var(--qor-muted);font-size:12px}
+main[data-page]>.dates input {min-height:38px}
+main[data-page] .section-heading {align-items:center;justify-content:space-between}
+main[data-page] .section-heading h2,main[data-page] .section-heading h3 {margin-bottom:4px}
+.dashboard-headline {gap:11px;margin:0 0 12px}
+.headline-card {min-height:122px;padding:17px 18px;border:1px solid rgba(255,255,255,.08);background:linear-gradient(145deg,#073c2f,#0b5842)}
+.headline-card strong {font-variant-numeric:tabular-nums;letter-spacing:-.04em}
+.kpis {gap:11px}
+.kpi {min-height:112px;padding:16px}
+.kpi>strong {line-height:1.15}
+.charts-grid {grid-template-columns:minmax(0,1.55fr) minmax(280px,.85fr);gap:14px}
+.chart-panel,.channel-panel,.category-profit-panel {padding:17px}
+.chart-panel h2,.channel-panel h2,.category-profit-panel h2 {font-size:16px}
+main[data-page="sales"] .qor-sales-grid {grid-template-columns:minmax(0,1fr);gap:10px}
+main[data-page="sales"] .qor-sale-card {grid-template-columns:112px minmax(0,1fr);min-height:156px;border-radius:14px}
+main[data-page="sales"] .qor-sale-card .qor-item-image {min-height:156px}
+main[data-page="sales"] .qor-sale-card .qor-item-body {padding:14px 16px}
+main[data-page="marketplace-products"] .marketplace-product-grid {grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px;padding-inline:0}
+main[data-page="marketplace-products"] .marketplace-product-card {border-radius:15px}
+main[data-page="marketplace-returns"] .returns-intro {background:linear-gradient(135deg,#fff,#f7fbf8)}
+main[data-page="marketplace-returns"] .returns-table-wrap {border-radius:14px}
+main[data-page="marketplace-returns"] .returns-table th {position:sticky;top:0;z-index:2}
+main[data-page="marketplace-returns"] .returns-table td {padding:10px 11px;line-height:1.4}
+main[data-page="expenses"] .expense-summary-grid {grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+main[data-page="expenses"] .expense-operation-filters {gap:9px}
+main[data-page="expenses"] .expense-operation-search {min-height:42px}
+main[data-page="expenses"] .expense-operation-count {padding:6px 10px;border-radius:999px;background:#edf5ef;color:#245a3e}
+main[data-page="accounting"] .secondary-kpis,main[data-page="cash"] .secondary-kpis {gap:11px}
+main[data-page="accounting"] .data-table,main[data-page="cash"] .data-table {min-width:760px}
+main[data-page="imports"] .import-steps {gap:0;justify-content:space-between}
+main[data-page="imports"] .dropzone {min-height:190px;display:grid;place-content:center;text-align:center}
+main[data-page="imports"] .import-top {align-items:center}
+main[data-page="assistant"] .chat-shell {grid-template-columns:minmax(190px,230px) minmax(0,1fr) minmax(170px,195px);gap:10px;min-height:650px}
+main[data-page="assistant"] .chat-sidebar,main[data-page="assistant"] .chat-main,main[data-page="assistant"] .chat-agents {border-radius:15px}
+main[data-page="assistant"] .chat-head select {max-width:210px;min-width:0}
+main[data-page="assistant"] .ai-control-center {width:100%;max-width:none;margin:8px auto}
+main[data-page="assistant"] .ai-workflows {grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+main[data-page="assistant"] .ai-workflow-card {min-height:120px;padding:12px;border-radius:13px}
+main[data-page="accounts"] .integration-create-box,main[data-page="settings"] .integration-create-box {margin-top:10px}
+main[data-page="accounts"] .data-table,main[data-page="users"] .data-table,main[data-page="roles"] .data-table {min-width:760px}
+.returns-metric,.expense-market-card,.expense-operation-card {transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
+.returns-metric:focus-visible,.returns-mobile-card:focus-within,.expense-channel-selector button:focus-visible {outline:3px solid #8bc6a0;outline-offset:2px}
+.stock-marketplace-badge b {display:inline-grid;width:18px;height:18px;margin-right:4px;place-items:center;border-radius:5px;background:#fff;font-size:10px}
+.product-ai-draft {border:1px solid #d7e6dc;border-radius:15px;background:linear-gradient(145deg,#f2f8f4,#fbfdfb);padding:16px}
+.product-ai-draft h3 {margin:5px 0 6px}
+.product-ai-draft .eyebrow {color:#698b77}
+.product-marketplace-setup {border:1px solid var(--qor-line);border-radius:14px;background:#fbfdfb}
+.product-marketplace-setup>summary {padding:13px 15px}
+.product-marketplace-setup[open] {padding-bottom:12px}
+.product-marketplace-setup[open]>.marketplace-sync-settings {margin:0 12px}
+.form-grid label {font-weight:650;color:#3c5a4c}
+.form-grid input,.form-grid select,.form-grid textarea {min-height:42px}
+.modal-heading {padding-bottom:12px;border-bottom:1px solid #edf2ee}
+.modal-heading .eyebrow {font-size:9px;letter-spacing:.13em;color:#718a7c}
+.modal-footer {display:flex;justify-content:flex-end;gap:8px}
+.modal-footer .primary,.modal-footer .secondary {min-width:112px}
+.mobile-dock {padding:6px!important;border:1px solid #dce8e1!important;background:rgba(255,255,255,.95)!important;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.mobile-dock button {border-radius:14px!important}
+@media(max-width:1200px) {
+  .app > aside {width:220px}
+  .main-shell {margin-left:220px}
+  .charts-grid {grid-template-columns:minmax(0,1.25fr) minmax(250px,.8fr)}
+}
+@media(max-width:960px) {
+  .app > aside {width:min(300px,86vw)}
+  .main-shell {margin-left:0}
+  main[data-page]>.toolbar {align-items:stretch;flex-wrap:wrap}
+  main[data-page]>.toolbar>.periods {flex:1 1 100%;order:3}
+  main[data-page]>.toolbar>.filter-company {flex:1 1 auto}
+  .charts-grid {grid-template-columns:minmax(0,1fr)}
+  main[data-page="expenses"] .expense-summary-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+  main[data-page="assistant"] .chat-shell {grid-template-columns:200px minmax(0,1fr);min-height:580px}
+  main[data-page="assistant"] .chat-agents {display:none}
+}
+@media(max-width:700px) {
+  main[data-page]>.page-heading {min-height:0;align-items:flex-start}
+  main[data-page]>.page-heading>button {margin-left:auto}
+  main[data-page]>.toolbar {display:grid;grid-template-columns:minmax(0,1fr) 42px;gap:8px}
+  main[data-page]>.toolbar>.filter-company {grid-column:1;min-width:0;width:100%}
+  main[data-page]>.toolbar>.refresh {grid-column:2;grid-row:1;width:42px;height:42px}
+  main[data-page]>.toolbar>.periods {grid-column:1/-1;grid-row:2;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+  main[data-page]>.toolbar>.periods button {min-width:0;min-height:39px;padding:6px 4px;font-size:10px;white-space:normal}
+  main[data-page]>.dates {display:grid;grid-template-columns:1fr 1fr}
+  main[data-page]>.dates label {display:grid;gap:5px}
+  .dashboard-headline {display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none}
+  .dashboard-headline::-webkit-scrollbar {display:none}
+  .headline-card {flex:0 0 min(78vw,290px);scroll-snap-align:start}
+  .charts-grid {grid-template-columns:minmax(0,1fr)}
+  main[data-page="sales"] .qor-sale-card {grid-template-columns:92px minmax(0,1fr);min-height:0}
+  main[data-page="sales"] .qor-sale-card .qor-item-image {min-height:145px}
+  main[data-page="expenses"] .expense-summary-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+  main[data-page="assistant"] .chat-shell {display:block;height:calc(100dvh - 160px);min-height:430px}
+  main[data-page="assistant"] .chat-sidebar,main[data-page="assistant"] .chat-agents {display:none}
+  main[data-page="assistant"] .chat-main {height:100%;border:1px solid var(--qor-line)}
+  main[data-page="assistant"] .ai-workflows {grid-template-columns:repeat(2,minmax(0,1fr))}
+  main[data-page="assistant"] .chat-head {align-items:flex-start;flex-wrap:wrap}
+  main[data-page="assistant"] .chat-head select {max-width:48%;min-width:0}
+  main[data-page="imports"] .import-steps {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .modal-footer {display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .modal-footer .primary,.modal-footer .secondary {min-width:0;width:100%}
+}
+
