@@ -505,17 +505,39 @@ def _data_quality_summary(db, user, snapshot, account_id=None):
             "unmapped_operations":int(pending.get(a.id,0))} for a in accounts]}
 
 
+def _is_claude_connection_check(question):
+    normalized = " ".join(str(question or "").casefold().replace("_", " ").split())
+    return any(phrase in normalized for phrase in (
+        "техническая проверка соединения claude",
+        "проверка соединения claude",
+        "проверка подключения claude",
+        "claude ok",
+        "claude test",
+    ))
+
+
 def assistant(db, user, payload):
     require(user, "ai")
     require(user, "analytics")
-    start = date.fromisoformat(payload.get("start", str(business_today().replace(day=1))))
-    end = date.fromisoformat(payload.get("end", str(business_today())))
-    snapshot = report(db, user, start, end, payload.get("company_id"), payload.get("account_id"))
     question = str(payload.get("question", ""))[:3000]
     agent_id = str(payload.get("agent", "rick"))
     agent = AI_AGENTS.get(agent_id)
     if not agent:
         raise HTTPException(422, "Неизвестный AI-сотрудник")
+    if _is_claude_connection_check(question):
+        # Health checks must not load or transmit the ERP snapshot, chat history, or attachments.
+        call_response(
+            [{"role": "user", "content": "Reply exactly: CLAUDE_OK"}],
+            "You are checking Claude API availability only. Do not access ERP data or tools. Reply exactly: CLAUDE_OK.",
+        )
+        return {
+            "agent": agent_id, "agent_name": agent["name"], "answer": "CLAUDE_OK",
+            "tools_used": [], "source": "Claude API connection check",
+            "period": None, "notice": "Проверка соединения не читает данные ERP.",
+        }
+    start = date.fromisoformat(payload.get("start", str(business_today().replace(day=1))))
+    end = date.fromisoformat(payload.get("end", str(business_today())))
+    snapshot = report(db, user, start, end, payload.get("company_id"), payload.get("account_id"))
     allowed = AGENT_TOOLS[agent_id]
     tools = [_tool_schema(name) for name in allowed] + _action_tools(agent_id)
     instructions = agent["prompt"] + (
