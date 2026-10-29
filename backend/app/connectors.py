@@ -212,10 +212,11 @@ class KaspiConnector(Connector):
                 ) from exc
             raise
         data = payload.get("data") or []
-        # Checkpoint every 20 strict-scan orders. The API page itself remains
-        # capped at 100; a larger local batch avoids repeating the same list
-        # request five orders at a time while keeping retries bounded.
-        selected = data[offset:offset+(20 if strict_scan else (100 if status_only else 10))]
+        # Consume a complete API page per strict-scan checkpoint. Re-fetching
+        # the same 100-row page for each 20-order slice multiplied list calls
+        # fivefold; API page size remains capped at 100 by Kaspi.
+        batch_limit = params["page[size]"] if strict_scan else (100 if status_only else 10)
+        selected = data[offset:offset + batch_limit]
         page_count = (payload.get("meta") or {}).get("pageCount")
         if strict_scan and not data and page_count is not None and page < int(page_count):
             raise AccessRequired("Kaspi: пустая страница до конца выдачи; повторите загрузку")
