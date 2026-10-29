@@ -206,7 +206,8 @@ export default function MarketplaceReturns({ ctx }) {
   const wbOrKaspiStores = channelStores.filter((x) => ["Kaspi", "Wildberries"].includes(x.marketplace));
   const pageCount = Math.ceil((data?.total || 0) / 30);
   const currentPage = Math.floor(offset / 30) + 1;
-  const financeWrite = can(ctx.auth, "finance", true);\n  const inventoryWrite = can(ctx.auth, "inventory", true);
+  const financeWrite = can(ctx.auth, "finance", true);
+  const inventoryWrite = can(ctx.auth, "inventory", true);
 
   return <section className="marketplace-returns-page">
     <div className="returns-intro"><div><div className="eyebrow">ОПЕРАЦИИ · ИЗОЛИРОВАННЫЙ ЖУРНАЛ</div><h2>Возвраты маркетплейсов</h2><p>Финансовая сверка остаётся отдельной. Для склада возврат нужно сопоставить с исходной ERP-продажей, затем отметить получение и результат осмотра.</p></div>
