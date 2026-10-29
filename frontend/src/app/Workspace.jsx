@@ -2275,7 +2275,7 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   };
   const reportReady=channel!=="Kaspi"||(summary.data?.sync_status==="done"&&summary.data?.source_complete===true);
   return <section className="panel marketplace-client-report" aria-label={`Отдельный отчёт ${channel}`}>
-    <div className="section-heading"><div><h3>Отдельный отчёт {channel}</h3><p className="muted">Собирает страницы и Excel за выбранные даты. Источник — сохранённые записи API и действующие отчёты QOR.</p></div></div>
+    <div className="section-heading"><div><h3>Отдельный отчёт {channel}</h3><p className="muted">Для Kaspi это отчёт по заказам/позициям API, не финансовая выписка Kaspi Pay. Для точной сверки выплат, фактических возвратов и комиссии загрузите официальный XLSX через «Импорт → Отчёт маркетплейса».</p></div></div>
     <form className="row-actions" onSubmit={generate}>
       <label>С<input type="date" value={start} onChange={e=>setStart(e.target.value)} required/></label>
       <label>По<input type="date" value={end} onChange={e=>setEnd(e.target.value)} required/></label>
@@ -2287,8 +2287,8 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
       {channel==="Wildberries" ? <WBFinanceReport key={`client-custom:${range.start}:${range.end}`} accounts={selectedAccount?[selectedAccount]:accounts} company={ctx.company} period="custom" start={range.start} end={range.end}/> : <>
         {summary.loading&&!summary.data?<Spinner/>:summary.error?<ErrorBox error={summary.error}/>:<>
           <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. {summary.data?.sync_status==="running"?"Загружаем API-страницы; данные обновляются автоматически. Выгрузка станет доступна после завершения.":summary.data?.source_complete?"Обход API завершён для настроенного окна истории; обязательные данные проверены.":"Источник пока не подтверждён как полный; проверьте ошибки и повторите синхронизацию."}</p>
-          {summary.data?.source_quality?.progress?.map(p=><p className="muted" key={p.account_id}>Магазин #{p.account_id}: обработано пакетов {p.batches}, записей {p.records}. {p.scan_from&&`История с ${p.scan_from}; текущая граница ${p.scan_through}.`} {p.state&&`Состояние ${p.state}, страница ${p.page+1}.`}</p>)}
-          {summary.data?.source_quality&&!summary.data.source_quality.data_complete&&<p role="status">Требуется сверка: заказов с неполным составом — {summary.data.source_quality.issues.missing_entries}; без даты выдачи — {summary.data.source_quality.issues.missing_completion_date}; возвратов без даты — {summary.data.source_quality.issues.missing_return_date}; некорректных позиций — {summary.data.source_quality.issues.invalid_lines}; без кода товара — {summary.data.source_quality.issues.missing_product_identity}; позиций без заказа — {summary.data.source_quality.issues.orphan_entries}. Недостающие даты возвратов нужно подтвердить выпиской; дата продажи вместо них не используется.</p>}
+          {summary.data?.source_quality?.progress?.map(p=><p className="muted" key={p.account_id}>Магазин #{p.account_id}: пакетов {p.batches}; страниц списка API {p.order_list_pages}; получено записей заказов {p.order_records_received} (с повторами между статусами); позиций {p.order_entries}. {p.scan_from&&`История с ${p.scan_from}; текущая граница ${p.scan_through}.`} {p.state&&`Статус ${p.state}, страница ${p.page+1}${p.page_count?` из ${p.page_count}`:""}, пакет ${p.offset||0}/${p.page_size||"—"}.`}</p>)}
+          {summary.data?.source_quality&&!summary.data.source_quality.data_complete&&<p role="status">Требуется сверка: заказов с неполным составом — {summary.data.source_quality.issues.missing_entries}; без даты выдачи — {summary.data.source_quality.issues.missing_completion_date}; возвратов без даты — {summary.data.source_quality.issues.missing_return_date}; обратных доставок без даты возврата — {summary.data.source_quality.issues.missing_return_delivery_date}; некорректных позиций — {summary.data.source_quality.issues.invalid_lines}; без кода товара — {summary.data.source_quality.issues.missing_product_identity}; позиций без заказа — {summary.data.source_quality.issues.orphan_entries}. Недостающие даты возвратов нужно подтвердить отчётом Kaspi; дата продажи вместо них не используется.</p>}
           <div className="marketplace-report-summary">
         {[ ["Продажи API",apiAvailable?summary.data?.api_gross_revenue:null], ["Продажи после возвратов",apiAvailable?summary.data?.api_revenue:null], ["Единиц продано",!apiAvailable?"Нет данных":summary.data?.api_units==null?"—":`${summary.data.api_units} шт.`], ["Возвраты",!apiAvailable?"Нет данных":summary.data?.api_returns==null?"—":summary.data.api_returns], ["Единиц возврата",!apiAvailable?"Нет данных":summary.data?.api_return_units==null?"—":`${summary.data.api_return_units} шт.`] ].map(([label,value])=><article className="kpi" key={label}><span>{label}</span><strong>{typeof value==="number"?money(value):value??"Нет подтверждённых данных"}</strong></article>)}
           </div>
@@ -4181,7 +4181,8 @@ function prepareKaspiReportRows(rows, headers, accountId) {
   const operationCol = find(["тип операции","операция","вид операции","тип транзакции","operation","transaction type"]);
   const skuCol = find(["артикул продавца","артикул","sku","vendor code","код товара"]);
   const lineCol = find(["id позиции","код позиции","номер позиции","order entry id","entry id","line id"]);
-  const dateCol = find(["дата изменения статуса","дата выдачи","дата продажи","дата завершения заказа","дата завершения","дата операции","sale date","completion date","дата заказа","дата","order date"]);
+  const returnDateCol = find(["дата возврата","дата возврата средств","дата возврата товара","return date","refund date"]);
+  const dateCol = find(["дата выдачи","дата продажи","дата завершения заказа","дата завершения","дата операции","sale date","completion date","дата заказа","дата","order date"]);
   const qtyCol = find(["количество","кол во","qty","quantity","саны"]);
   const totalSaleCol = find(["сумма продажи","сумма товара","стоимость товара","сумма по позиции","итого по товару","line total","total price","totalprice","сумма заказа","сумма"]);
   const unitSaleCol = find(["цена за единицу","цена товара","цена продажи","unit price","unit_price","price"]);
@@ -4218,7 +4219,7 @@ function prepareKaspiReportRows(rows, headers, accountId) {
       __qor_quantity: quantity,
       __qor_unit_price: unitPrice,
       __qor_discount: discount,
-      __qor_refund: refundCol ? Math.abs(numeric(row[refundCol])) : amount,
+      __qor_refund: refundCol ? Math.abs(numeric(row[refundCol])) : null,
       __qor_sale_reference: "Kaspi:" + accountId + ":" + lineId,
     };
     const cancelled = /(отмен|cancel|cancell)/.test(status);
@@ -4228,7 +4229,7 @@ function prepareKaspiReportRows(rows, headers, accountId) {
     if (cancelled) {
       out.push({...base,__qor_event_type:"order",__qor_external_id:lineId});
     } else if (returned) {
-      out.push({...base,__qor_event_type:"return",__qor_external_id:lineId+":return"});
+      out.push({...base,__qor_date:returnDateCol ? (row[returnDateCol] || "") : "",__qor_event_type:"return",__qor_external_id:lineId+":return"});
     } else if (completed || isSaleReportRow) {
       out.push({...base,__qor_event_type:"sale",__qor_external_id:lineId});
     } else {

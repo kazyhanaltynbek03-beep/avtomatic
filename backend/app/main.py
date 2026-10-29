@@ -1222,7 +1222,10 @@ def marketplace_record_details(
                     include = False
             elif kind in {"delivery_charge", "return_delivery_charge"} and metric == "logistics":
                 include = True
-                event_date = p.get("completed_date") or p.get("completion_date") or p.get("returned_date") or p.get("order_creation_date") or p.get("creation_date")
+                if kind == "return_delivery_charge":
+                    event_date = p.get("returned_date") or p.get("return_date")
+                else:
+                    event_date = p.get("completed_date") or p.get("completion_date")
                 operation = "Обратная доставка" if kind == "return_delivery_charge" else "Доставка"
                 amount = p.get("amount")
                 status = str(p.get("order_status") or status).upper()
@@ -4121,8 +4124,26 @@ def _stage_marketplace_records(db, acc, result):
         payload = jsonable_encoder(item)
         if row:
             old_payload = {k:v for k,v in (row.payload or {}).items() if not k.startswith('_qor_')}
-            if old_payload != payload:
-                row.payload = payload
+            # Kaspi list responses can omit event fields that were present in a
+            # code lookup. Keep established source facts when a later response
+            # sends null; never synthesize one event date from another.
+            merged = dict(old_payload)
+            merged.update(payload)
+            for field in (
+                "completion_date", "completed_date", "returned_date", "return_date",
+                "creation_date", "order_creation_date", "entries_complete", "entries_count",
+                "quantity", "total_price", "sku", "external_product_id", "product_name",
+            ):
+                if payload.get(field) is None and old_payload.get(field) is not None:
+                    merged[field] = old_payload[field]
+            old_raw = old_payload.get("raw_attributes")
+            new_raw = payload.get("raw_attributes")
+            if isinstance(old_raw, dict) and isinstance(new_raw, dict):
+                raw = dict(old_raw)
+                raw.update({k: v for k, v in new_raw.items() if v is not None})
+                merged["raw_attributes"] = raw
+            if old_payload != merged:
+                row.payload = merged
                 # Revalidate revisions through canonical identity checks, never
                 # leave a changed source silently marked as projected.
                 row.status = 'received'
@@ -4302,12 +4323,20 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                 settings = dict(acc.integration_settings or {})
                 settings["kaspi_period_progress"] = dict(progress)
                 position = json.loads(cursor) if cursor else {}
+                type_counts = {}
+                for record in result.records:
+                    record_type = str(record.get("record_type") or "other")
+                    type_counts[record_type] = type_counts.get(record_type, 0) + 1
                 job.update(status="running", batches=int(job.get("batches") or 0)+1,
                            records=int(job.get("records") or 0)+len(result.records),
+                           order_list_pages=int(job.get("order_list_pages") or 0)+1,
+                           order_records_received=int(job.get("order_records_received") or 0)+type_counts.get("order", 0),
+                           order_entries=int(job.get("order_entries") or 0)+type_counts.get("order_entry", 0),
                            scan_from=str(sync_start),
                            scan_through=datetime.fromtimestamp(position.get("until_ms", int(local_end.timestamp()*1000))/1000, ZoneInfo("Asia/Almaty")).date().isoformat(),
                            state=("ARCHIVE", "NEW", "SIGN_REQUIRED", "PICKUP", "DELIVERY", "KASPI_DELIVERY")[int(position.get("state_index") or 0)],
-                           page=position.get("page", 0))
+                           page=position.get("page", 0), page_count=position.get("page_count"),
+                           offset=position.get("offset", 0), page_size=position.get("page_size"))
                 settings["kaspi_period_job"] = dict(job)
                 acc.integration_settings = settings
                 db.commit()

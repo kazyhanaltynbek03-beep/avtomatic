@@ -14,7 +14,8 @@ def source_quality(accounts, rows, start, end):
     orders, entries = {}, {}
     issues = {"missing_entries": 0, "missing_completion_date": 0,
               "missing_return_date": 0, "invalid_lines": 0,
-              "missing_product_identity": 0, "orphan_entries": 0}
+              "missing_product_identity": 0, "orphan_entries": 0,
+              "missing_return_delivery_date": 0}
     for account_id, payload in rows:
         p = payload or {}
         key = (account_id, str(p.get("order_id") or ""))
@@ -22,6 +23,9 @@ def source_quality(accounts, rows, start, end):
             orders[key] = p
         elif p.get("record_type") == "order_entry":
             entries.setdefault(key, []).append(p)
+        elif p.get("record_type") == "return_delivery_charge" and p.get("amount") not in (None, "", 0, "0"):
+            if not (p.get("returned_date") or p.get("return_date")):
+                issues["missing_return_delivery_date"] += 1
     for key, order in orders.items():
         status = str(order.get("status") or "").upper()
         if status not in {"COMPLETED", "RETURNED"}:
@@ -62,8 +66,13 @@ def source_quality(accounts, rows, start, end):
         progress.append({"account_id": account.id, "status": job.get("status", "not_requested"),
                          "start": job.get("start"), "end": job.get("end"),
                          "batches": job.get("batches", 0), "records": job.get("records", 0),
+                         "order_list_pages": job.get("order_list_pages", 0),
+                         "order_records_received": job.get("order_records_received", 0),
+                         "order_entries": job.get("order_entries", 0),
                          "scan_from": job.get("scan_from"), "scan_through": job.get("scan_through"),
-                         "state": job.get("state"), "page": job.get("page", 0)})
+                         "state": job.get("state"), "page": job.get("page", 0),
+                         "page_count": job.get("page_count"), "offset": job.get("offset", 0),
+                         "page_size": job.get("page_size")})
     return {"coverage_complete": bool(accounts) and all(coverage),
             "issues": issues, "progress": progress,
             "data_complete": not any(issues.values())}

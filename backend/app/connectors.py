@@ -212,7 +212,10 @@ class KaspiConnector(Connector):
                 ) from exc
             raise
         data = payload.get("data") or []
-        selected = data[offset:offset+(5 if strict_scan else (100 if status_only else 10))]
+        # Checkpoint every 20 strict-scan orders. The API page itself remains
+        # capped at 100; a larger local batch avoids repeating the same list
+        # request five orders at a time while keeping retries bounded.
+        selected = data[offset:offset+(20 if strict_scan else (100 if status_only else 10))]
         page_count = (payload.get("meta") or {}).get("pageCount")
         if strict_scan and not data and page_count is not None and page < int(page_count):
             raise AccessRequired("Kaspi: пустая страница до конца выдачи; повторите загрузку")
@@ -373,6 +376,7 @@ class KaspiConnector(Connector):
             "start_ms": initial_start_ms if status_only else int(window_start.timestamp() * 1000),
             "until_ms": int(until.timestamp() * 1000),
             "page": page, "offset": 0,
+            "page_count": page_count, "page_size": params["page[size]"],
             "extra_ids": state.get("extra_ids") or [],
             "extra_offset": max(0, int(state.get("extra_offset") or 0)),
             "known_order_ids": state.get("known_order_ids") or [],
@@ -442,7 +446,9 @@ class KaspiConnector(Connector):
             raise AccessRequired("Kaspi: неполные детали страницы; " + "; ".join(errors)[:350])
         next_cursor = json.dumps(next_state,separators=(",",":")) if next_state else None
         return SyncResult('kaspi', list(records.values()),
-            f'Kaspi: {len(records)} записей, {pages} страниц, обработано до 10 заказов.', next_cursor=next_cursor, warnings=errors)
+            f'Kaspi: обработан пакет из {len(selected)} заказов; API-страница {page}'
+            + (f' из {page_count}' if page_count is not None else '') + '.',
+            next_cursor=next_cursor, warnings=errors)
 
     def update_order(self, order_id, status, code=None, cancellation_reason=None, cancellation_comment=None, number_of_space=None, security_code=None, send_code=False):
         state=self.connection_status()
