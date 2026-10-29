@@ -3,14 +3,85 @@ from decimal import Decimal, InvalidOperation
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from . import schemas as s, finance as f
-from .models import AIAction, AIActionPlan, Product, Counterparty, GeneratedDocument, ProductCardVersion, Account, MarketplaceProductMapping, MarketplaceProductCost
+from .models import AIAction, AIActionPlan, Product, Counterparty, GeneratedDocument, ProductCardVersion, Account, MarketplaceProductMapping, MarketplaceProductCost, MarketplaceRecord, Return, Sale
 from .security import require, scope, audit
 from sqlalchemy import select, func
 from .product_studio import assess_performance, next_experiment
 
 OPERATION_ACTIONS={"post_purchase":(s.PurchaseIn,f.purchase,"inventory"),"post_sale":(s.SaleIn,f.sale,"sales"),"post_return":(s.ReturnIn,f.return_sale,"sales"),"post_expense":(s.ExpenseIn,f.expense,"finance"),"post_cash":(s.CashIn,f.payment,"finance"),"post_adjustment":(s.AdjustIn,f.adjust,"inventory")}
 MASTER_ACTIONS={"create_product":(Product,s.ProductIn,"catalog"),"create_counterparty":(Counterparty,s.CounterpartyIn,"finance"),"create_document":(GeneratedDocument,s.GeneratedDocumentIn,"documents")}
-def catalog(): return {"post_purchase":"Провести закуп","post_sale":"Провести продажу","post_return":"Провести возврат","post_expense":"Провести расход","post_cash":"Провести движение денег","post_adjustment":"Корректировать склад","create_product":"Создать товар","set_marketplace_cost":"Установить себестоимость товара","create_counterparty":"Создать контрагента","create_document":"Создать документ","create_product_card":"Создать версию карточки товара","validate_product_card":"Проверить карточку marketplace","prepare_product_card_publish":"Подготовить карточку к публикации","optimize_product_card":"Создать следующую оптимизационную версию"}
+ROLE_ACTIONS={
+    "rick": None,  # None means all actions returned by catalog().
+    "finance": ("post_expense","post_cash","create_counterparty","create_document","set_marketplace_cost"),
+    "analyst": (),
+    "buyer": ("post_purchase","post_adjustment","create_product","set_marketplace_cost","link_marketplace_listing","set_product_min_stock","set_return_inventory_status"),
+    "marketing": ("create_product_card","validate_product_card","prepare_product_card_publish","optimize_product_card"),
+    "content": ("create_product_card","validate_product_card"),
+}
+
+def _check_agent_action(agent, kind):
+    if kind not in catalog():
+        raise HTTPException(422,"Это действие AI не разрешено")
+    if agent not in ROLE_ACTIONS:
+        raise HTTPException(422,"Неизвестная роль AI")
+    allowed=ROLE_ACTIONS[agent]
+    if allowed is not None and kind not in allowed:
+        raise HTTPException(403,"Это действие не входит в полномочия выбранного AI-сотрудника")
+
+def catalog(): return {"post_purchase":"Провести закуп","post_sale":"Провести продажу","post_return":"Провести возврат","post_expense":"Провести расход","post_cash":"Провести движение денег","post_adjustment":"Корректировать склад","create_product":"Создать товар","set_marketplace_cost":"Установить себестоимость товара","link_marketplace_listing":"Связать карточку магазина с товаром QOR","set_product_min_stock":"Установить порог предупреждения об остатке","set_return_inventory_status":"Изменить внутренний статус проверки возврата","create_counterparty":"Создать контрагента","create_document":"Создать документ","create_product_card":"Создать версию карточки товара","validate_product_card":"Проверить карточку marketplace","prepare_product_card_publish":"Подготовить карточку к публикации","optimize_product_card":"Создать следующую оптимизационную версию"}
+
+def _validate_inventory_ai_action(db, user, kind, payload):
+    require(user, "inventory", True)
+    if kind == "link_marketplace_listing":
+        try:
+            account = db.get(Account, int(payload.get("account_id") or 0))
+            product = db.get(Product, int(payload.get("product_id") or 0))
+            id_type = str(payload.get("id_type") or "sku").strip().lower()
+            external_id = str(payload.get("external_id") or "").strip()
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Нужны магазин, товар и ID карточки")
+        if not account or not account.active or account.channel not in {"Kaspi", "Wildberries", "Ozon"}:
+            raise HTTPException(404, "Активный магазин маркетплейса не найден")
+        if not product or not product.active or product.catalog_kind != "master":
+            raise HTTPException(404, "Активный master-товар QOR не найден")
+        scope(user, account.company_id)
+        company_ids = {int(x) for x in ((product.specifications or {}).get("_qor_company_ids") or []) if str(x).isdigit()}
+        if company_ids and account.company_id not in company_ids:
+            raise HTTPException(422, "Товар и магазин должны принадлежать одной компании")
+        if id_type not in {"sku", "product", "barcode", "size"} or not external_id or any(ch.isspace() for ch in external_id):
+            raise HTTPException(422, "Укажите точный тип и ID карточки без пробелов")
+        external_key = f"{id_type}:{external_id}"
+        old = db.scalar(select(MarketplaceProductMapping).where(MarketplaceProductMapping.account_id == account.id, MarketplaceProductMapping.external_key == external_key))
+        if old and old.product_id != product.id:
+            raise HTTPException(409, "Карточка уже привязана к другому товару; сначала проверьте конфликт вручную")
+        return {"account_id":account.id,"account_name":account.name,"channel":account.channel,"company_id":account.company_id,"product_id":product.id,"product_name":product.name,"product_sku":product.sku,"id_type":id_type,"external_id":external_id,"external_key":external_key}, account.company_id
+    if kind == "set_product_min_stock":
+        try:
+            product = db.get(Product, int(payload.get("product_id") or 0)); threshold = int(payload.get("min_stock"))
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Нужны товар и целевой порог остатка")
+        if not product or not product.active or product.catalog_kind != "master": raise HTTPException(404, "Активный master-товар QOR не найден")
+        if threshold < 0 or threshold > 1000000000: raise HTTPException(422, "Порог должен быть от 0 до 1 000 000 000")
+        company_ids = {int(x) for x in ((product.specifications or {}).get("_qor_company_ids") or []) if str(x).isdigit()}
+        if company_ids:
+            for cid in company_ids: scope(user, cid)
+            cid = next(iter(company_ids))
+        else:
+            if user.role != "Owner": raise HTTPException(403, "Товар без привязки к компании доступен для изменения только Owner")
+            cid = None
+        return {"product_id":product.id,"product_name":product.name,"sku":product.sku,"old_min_stock":int(product.min_stock or 0),"min_stock":threshold,"company_id":cid}, cid
+    try:
+        ret = db.get(Return, int(payload.get("return_id") or 0))
+        status = str(payload.get("status") or "")
+        reason = str(payload.get("reason") or "").strip()
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Нужны возврат и новый статус")
+    if not ret: raise HTTPException(404, "Возврат не найден")
+    scope(user, ret.company_id)
+    transitions = {"requested":{"approved"},"approved":{"in_transit"},"in_transit":{"received"},"received":{"inspection"},"inspection":{"restocked","defective"},"defective":{"written_off"},"restocked":set(),"written_off":set()}
+    if status not in transitions.get(ret.inventory_status, set()): raise HTTPException(409, "Недопустимый переход внутреннего статуса возврата")
+    if status in {"defective", "written_off"} and len(reason) < 3: raise HTTPException(422, "Для брака и списания укажите причину")
+    return {"return_id":ret.id,"company_id":ret.company_id,"sale_id":ret.sale_id,"from_status":ret.inventory_status,"status":status,"reason":reason}, ret.company_id
 
 def _validate_marketplace_cost(db, user, payload):
     require(user, "finance", True)
@@ -77,6 +148,8 @@ def _validate(db,user,kind,payload):
         _,schema,cap=MASTER_ACTIONS[kind]; require(user,cap,True); obj=schema.model_validate(payload)
     elif kind == "set_marketplace_cost":
         return _validate_marketplace_cost(db,user,payload)
+    elif kind in {"link_marketplace_listing", "set_product_min_stock", "set_return_inventory_status"}:
+        return _validate_inventory_ai_action(db,user,kind,payload)
     elif kind in {"create_product_card","validate_product_card","prepare_product_card_publish","optimize_product_card"}:
         return _validate_card_action(db,user,kind,payload)
     else: raise HTTPException(422,"Это действие AI не разрешено")
@@ -84,14 +157,21 @@ def _validate(db,user,kind,payload):
     if cid: scope(user,cid)
     return obj,cid
 def propose(db,user,kind,payload,thread_id=None,agent="rick"):
+    _check_agent_action(agent,kind)
     obj,cid=_validate(db,user,kind,payload); normalized=obj if isinstance(obj,dict) else obj.model_dump(mode="json")
     warning = "Изменение ERP будет выполнено только после подтверждения пользователя."
     if kind == "set_marketplace_cost":
         warning += " Цена применяется только к продажам маркетплейса без FIFO-себестоимости с указанной даты; закупочные FIFO-партии и проведённые движения склада не переписываются."
+    if kind == "link_marketplace_listing":
+        warning += " Связывается только указанный ID одной карточки. После сохранения сопоставление повторно обработает совпадающие ожидающие записи источника; продажи и финансовые итоги не создаются вручную. Для нескольких магазинов подготовьте отдельные шаги плана."
+    if kind == "set_product_min_stock":
+        warning += " Меняется только порог предупреждения. Фактический остаток и финансовые расчёты не меняются; нулевой порог отключает предупреждение по этому товару."
+    if kind == "set_return_inventory_status":
+        warning += " Это внутренний статус осмотра/склада QOR, не команда площадке и не подтверждение возврата денег. Статус restocked добавит товар в доступный остаток через действующий FIFO-механизм."
     preview={"title":catalog()[kind],"action_type":kind,"payload":normalized,"requires_confirmation":True,"warning":warning}
     row=AIAction(user_id=user.id,company_id=cid,thread_id=thread_id,agent=agent,action_type=kind,payload=normalized,preview=preview,risk="high",status="pending")
     db.add(row); db.flush(); audit(db,user,"ai_action_proposed","ai_actions",row.id,{"type":kind}); db.commit(); db.refresh(row); return row
-def execute(db,user,row):
+def execute(db,user,row,tasks=None):
     if row.user_id != user.id and user.role != "Owner": raise HTTPException(403,"Действие недоступно")
     if row.status != "pending": raise HTTPException(409,"Действие уже обработано")
     parsed,_=_validate(db,user,row.action_type,row.payload); row.confirmed_at=datetime.now(timezone.utc); row.status="confirmed"; db.flush()
@@ -121,6 +201,36 @@ def execute(db,user,row):
                 "unit_cost":p["unit_cost"],"currency":"KZT",
                 "product_name":p["product_name"],"product_sku":p["product_sku"],"store":p["account_name"],
                 "effective_from":p["effective_from"],"external_keys":p["external_keys"]}
+        elif row.action_type == "link_marketplace_listing":
+            p=parsed; account=db.get(Account,p["account_id"]); product=db.get(Product,p["product_id"])
+            mapping=db.scalar(select(MarketplaceProductMapping).where(MarketplaceProductMapping.account_id==account.id,MarketplaceProductMapping.external_key==p["external_key"]))
+            if not mapping:
+                mapping=MarketplaceProductMapping(company_id=account.company_id,account_id=account.id,channel=account.channel,external_key=p["external_key"],product_id=product.id); db.add(mapping); db.flush()
+                audit(db,user,"mapping","products",product.id,{"account_id":account.id,"channel":account.channel,"external_key":p["external_key"],"source":"ai_confirmed"})
+            from . import marketplace_pipeline
+            candidates=db.scalars(select(MarketplaceRecord).where(MarketplaceRecord.account_id==account.id,MarketplaceRecord.company_id==account.company_id,MarketplaceRecord.stage_status=="pending_mapping")).all()
+            matching=[x for x in candidates if p["external_key"] in marketplace_pipeline.identifiers(x.payload or {})]
+            projected=pending=0
+            for candidate in matching:
+                ok,_=marketplace_pipeline.project_record(db,user,account,candidate); projected+=int(ok); pending+=int(candidate.stage_status in {"pending_fifo","pending_fx","pending_mapping"})
+            result={"product_id":product.id,"product_name":product.name,"account_id":account.id,"store":account.name,"channel":account.channel,"external_key":p["external_key"],"reprocessed_records":len(matching),"projected_records":projected,"still_pending_records":pending}
+            if account.channel=="Wildberries" and tasks is not None:
+                from .main import _schedule_wb_sync_for_product
+                _schedule_wb_sync_for_product(tasks,product.id,account.company_id)
+        elif row.action_type == "set_product_min_stock":
+            p=parsed; product=db.get(Product,p["product_id"]); old=int(product.min_stock or 0); product.min_stock=p["min_stock"]
+            audit(db,user,"update","products",product.id,{"field":"min_stock","from":old,"to":product.min_stock,"source":"ai_confirmed"})
+            result={"product_id":product.id,"sku":product.sku,"min_stock":product.min_stock,"alerts_enabled":product.min_stock>0}
+        elif row.action_type == "set_return_inventory_status":
+            p=parsed; ret=db.scalar(select(Return).where(Return.id==p["return_id"]).with_for_update()); before=ret.inventory_status; ret.inventory_status=p["status"]
+            audit(db,user,"inventory_status","returns",ret.id,{"from":before,"to":p["status"],"reason":p["reason"],"source":"ai_confirmed"})
+            if p["status"]=="restocked":
+                from . import finance as finance_ops
+                finance_ops.restock_return_inventory(db,user,ret)
+                if tasks is not None:
+                    from .main import _schedule_wb_sync_for_product
+                    _schedule_wb_sync_for_product(tasks,db.get(Sale,ret.sale_id).product_id,ret.company_id)
+            result={"return_id":ret.id,"from_status":before,"status":ret.inventory_status,"inventory_changed":p["status"]=="restocked","external_marketplace_status_changed":False}
         elif row.action_type in MASTER_ACTIONS:
             model,_,_=MASTER_ACTIONS[row.action_type]
             data=parsed.model_dump(exclude={"version","description","barcode","purchase_cost","custom_fields","marketplace_stock_allocations"})
@@ -168,6 +278,7 @@ def propose_plan(db,user,title,goal,steps,thread_id=None,agent="rick"):
     # Validate every step before storing anything executable.
     for i,step in enumerate(steps,1):
         kind=str((step or {}).get("action_type", "")); payload=(step or {}).get("payload") or {}
+        _check_agent_action(agent,kind)
         obj,cid=_validate(db,user,kind,payload); data=obj if isinstance(obj,dict) else obj.model_dump(mode="json")
         if cid: company_ids.add(cid)
         normalized.append({"order":i,"action_type":kind,"title":catalog()[kind],"payload":data,"status":"waiting"})
@@ -176,7 +287,7 @@ def propose_plan(db,user,title,goal,steps,thread_id=None,agent="rick"):
     row=AIActionPlan(user_id=user.id,company_id=cid,thread_id=thread_id,agent=agent,title=str(title or "AI-план")[:180],goal=str(goal or "")[:4000],steps=normalized,status="pending",progress=0,result={})
     db.add(row); db.flush(); audit(db,user,"ai_plan_proposed","ai_action_plans",row.id,{"steps":len(normalized),"goal":row.goal[:300]}); db.commit(); db.refresh(row); return row
 
-def execute_plan(db,user,plan):
+def execute_plan(db,user,plan,tasks=None):
     if plan.user_id != user.id and user.role != "Owner": raise HTTPException(403,"План недоступен")
     if plan.status != "pending": raise HTTPException(409,"План уже обработан")
     plan.status="running"; plan.confirmed_at=datetime.now(timezone.utc); db.commit()
@@ -184,7 +295,7 @@ def execute_plan(db,user,plan):
     try:
         for idx,step in enumerate(step_states):
             action=propose(db,user,step["action_type"],step["payload"],plan.thread_id,plan.agent); action_ids.append(action.id)
-            action=execute(db,user,action); results.append({"action_id":action.id,"action_type":action.action_type,"result":action.result})
+            action=execute(db,user,action,tasks=tasks); results.append({"action_id":action.id,"action_type":action.action_type,"result":action.result})
             step_states[idx]={**step,"status":"executed","action_id":action.id}; plan=db.get(AIActionPlan,plan.id); plan.steps=list(step_states); plan.action_ids=list(action_ids); plan.progress=idx+1; db.commit()
         plan=db.get(AIActionPlan,plan.id); plan.status="executed"; plan.result={"steps":results,"completed":len(results)}; plan.executed_at=datetime.now(timezone.utc); audit(db,user,"ai_plan_executed","ai_action_plans",plan.id,{"steps":len(results)}); db.commit(); db.refresh(plan); return plan
     except Exception as exc:
