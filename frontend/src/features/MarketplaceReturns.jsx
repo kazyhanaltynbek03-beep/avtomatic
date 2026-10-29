@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, RefreshCw, ChevronLeft, ChevronRight, Clock3, CircleAlert, PackageCheck, Upload, FileSpreadsheet } from "lucide-react";
 import { api } from "../services/api";
 import { useLoad } from "../hooks/useLoad";
@@ -156,10 +156,9 @@ export default function MarketplaceReturns({ ctx }) {
   const records = data?.items || [];
   const summary = data?.summary || {};
   const stores = data?.integrations || [];
-  const active = stores.filter((x) => x.active && x.mode === "api");
-  const autoEligible = active.filter((x) => x.marketplace === "Kaspi" || x.marketplace === "Wildberries");
-  const autoEligibleKey = autoEligible.map((x) => x.account_id).join(",");
-  const progressByAccount = Object.fromEntries((syncData?.items || []).map((x) => [x.account_id, x]));
+  const active = useMemo(() => stores.filter((x) => x.active && x.mode === "api"), [stores]);
+  const autoEligible = useMemo(() => active.filter((x) => x.marketplace === "Kaspi" || x.marketplace === "Wildberries"), [active]);
+  const progressByAccount = useMemo(() => Object.fromEntries((syncData?.items || []).map((x) => [x.account_id, x])), [syncData?.items]);
 
   useEffect(() => { setOffset(0); }, [marketplace, search, ctx.company, ctx.start, ctx.end, selectedAccountId, selectedMetric]);
   useEffect(() => { setSelectedAccountId(""); setSelectedMetric(""); }, [marketplace]);
@@ -169,7 +168,7 @@ export default function MarketplaceReturns({ ctx }) {
     return () => window.clearInterval(timer);
   }, [syncData?.items]);
 
-  const discover = async (accountId, silent = false) => {
+  const discover = useCallback(async (accountId, silent = false) => {
     if (lock.current) return;
     lock.current = true;
     setBusyAccount(accountId);
@@ -196,7 +195,7 @@ export default function MarketplaceReturns({ ctx }) {
     };
     startOnce();
     return () => { cancelled = true; };
-  }, [data, syncData, autoEligibleKey, ctx.company]);
+  }, [data, syncData, autoEligible, progressByAccount, discover]);
 
   const previewStatement = async (file, accountId = statementAccount) => {
     if (!file || !accountId) return;
