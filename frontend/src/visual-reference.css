@@ -239,3 +239,27 @@ main[data-page="accounts"] .info-banner{border:1px solid #e1e9e4;background:#f2f
 .product-photo-preview-grid button{position:absolute;top:5px;right:5px;display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:50%;background:#073d31;color:#fff;font-size:17px;cursor:pointer;}
 .product-stock-step>p{margin:10px 0 0;padding:11px 13px;border:1px solid #dce9e1;border-radius:11px;background:#f5faf7;line-height:1.5;}
 @media(max-width:700px){.product-wizard-steps{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:8px 5px;}.product-wizard-step{flex-direction:column;justify-content:flex-start;gap:4px;text-align:center;font-size:8px;line-height:1.2;}.product-wizard-step i{flex-basis:26px;width:26px;height:26px;}.product-wizard-step span{width:100%;white-space:normal;overflow:visible;text-overflow:clip;}.product-photo-preview-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
+
+
+/* Keep the period controls swipeable on phones; later redesign styles used to turn them back into a grid. */
+@media (max-width: 700px) {
+  .toolbar > .periods {
+    display: flex !important;
+    grid-template-columns: none !important;
+    flex-wrap: nowrap !important;
+    justify-content: flex-start !important;
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .toolbar > .periods::-webkit-scrollbar { display: none; }
+  .toolbar > .periods button {
+    flex: 0 0 auto !important;
+    min-width: max-content !important;
+    min-height: 38px;
+    white-space: nowrap !important;
+    scroll-snap-align: start;
+  }
+}

@@ -937,6 +937,7 @@ function ExpensesPage({ ctx }) {
 
 function ReportPage({ page, ctx }) {
   const [detailMetric, setDetailMetric] = useState(null), [alertRetry, setAlertRetry] = useState(0);
+  const [dashboardStalled, setDashboardStalled] = useState(false);
   const usesDashboard = page === "dashboard" || page === "analytics";
   const reportPath = page === "alerts" || page === "forecast" ? null : "/report?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") +
@@ -982,7 +983,20 @@ function ReportPage({ page, ctx }) {
     {channel:"Kaspi", state:dashboardKaspiSummary},
     {channel:"Wildberries", state:dashboardWbSummary},
   ];
-  if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
+  useEffect(() => {
+    setDashboardStalled(false);
+    if (!usesDashboard || !dashLoading || loadedReport) return;
+    const timer = window.setTimeout(() => setDashboardStalled(true), 12000);
+    return () => window.clearTimeout(timer);
+  }, [usesDashboard, dashLoading, loadedReport, page, ctx.start, ctx.end, ctx.company, ctx.refresh]);
+  if (usesDashboard && dashLoading && !loadedReport) {
+    if (!dashboardStalled) return <Spinner />;
+    return <section className="panel dashboard-load-warning" role="status">
+      <strong>Обзор загружается дольше обычного</strong>
+      <p>Сервер пока не вернул данные. Попробуйте обновить обзор; расчёты отчётов не менялись.</p>
+      <button className="secondary" type="button" onClick={() => { setDashboardStalled(false); ctx.reload(); }}>Повторить загрузку</button>
+    </section>;
+  }
   if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
   if (usesDashboard && !loadedReport) {
     const fast = dash?.report || {};
