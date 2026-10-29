@@ -942,6 +942,11 @@ function ReportPage({ page, ctx }) {
     (usesDashboard ? "&active_only=true" : "");
   const summaryPath = "/dashboard/summary?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "");
+  const marketplaceSummaryPath = (channel) => {
+    const params = new URLSearchParams({channel, start:ctx.start, end:ctx.end});
+    if (ctx.company) params.set("company_id", ctx.company);
+    return "/marketplace-summary?" + params;
+  };
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") : null;
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
@@ -954,6 +959,10 @@ function ReportPage({ page, ctx }) {
     ctx.refresh,
     { cacheScope: ctx.auth.user.id },
   );
+  // Match Kaspi/WB turnover to the dedicated marketplace pages. Profit and cost
+  // reports continue to use the existing finance engine.
+  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id});
+  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id});
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
@@ -962,6 +971,11 @@ function ReportPage({ page, ctx }) {
     }
   }, [onNotificationCount, page, systemAlerts, systemAlertsError]);
   const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
+  const dashboardChannels = usesDashboard && r ? [
+    ...(r.channels || []).filter((row) => !["Kaspi", "Wildberries", "WB"].includes(row.name)),
+    {name:"Kaspi", revenue:dashboardKaspiSummary.data?.api_revenue, returns:dashboardKaspiSummary.data?.api_returns, apiLoading:dashboardKaspiSummary.loading, apiError:dashboardKaspiSummary.error},
+    {name:"Wildberries", revenue:dashboardWbSummary.data?.api_revenue, returns:dashboardWbSummary.data?.api_returns, apiLoading:dashboardWbSummary.loading, apiError:dashboardWbSummary.error},
+  ] : (r?.channels || []);
   if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
   if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
   if (usesDashboard && !loadedReport) {
@@ -1273,13 +1287,13 @@ function ReportPage({ page, ctx }) {
           <div className="panel-heading">
             <div>
               <h2>Продажи по аккаунтам</h2>
-              <span>Выручка по проведённым операциям за период</span>
+              <span>Kaspi и Wildberries — API-итоги как на их страницах; остальные каналы — проведённые ERP-операции</span>
             </div>
-            <span className="pill">{r.channels.length} с операциями</span>
+            <span className="pill">{dashboardChannels.length} каналов</span>
           </div>
-          {r.channels.length ? (
-            r.channels
-              .sort((a, b) => b.revenue - a.revenue)
+          {dashboardChannels.length ? (
+            dashboardChannels
+              .sort((a, b) => (Number(b.revenue) || 0) - (Number(a.revenue) || 0))
               .slice(0, 7)
               .map((c, i) => (
                 <div className="channel" key={c.name}>
@@ -1290,9 +1304,9 @@ function ReportPage({ page, ctx }) {
                       </b>
                       {c.name}
                     </span>
-                    <strong>{money(c.revenue)}</strong>
+                    <strong>{c.revenue == null ? (c.apiLoading ? "Загрузка…" : c.apiError ? "Ошибка API" : "Нет данных API") : money(c.revenue)}</strong>
                   </div>
-                  <small className="channel-returns">Возвраты: {money((r.channels.find((x) => x.name === c.name)?.returns) || 0)}</small>
+                  <small className="channel-returns">Возвраты: {c.returns == null ? "—" : money(c.returns)}</small>
                   <div className="track">
                     <span
                       style={{
@@ -1301,7 +1315,7 @@ function ReportPage({ page, ctx }) {
                             0,
                             Math.min(
                               100,
-                              (c.revenue / Math.max(r.revenue, 1)) * 100,
+                              ((Number(c.revenue) || 0) / Math.max(r.revenue, 1)) * 100,
                             ),
                           ) + "%",
                         background: [
@@ -1331,8 +1345,8 @@ function ReportPage({ page, ctx }) {
           ["Деньги", r.cash, true],
           ["B2B задолженность", r.b2b_debt, true],
           ["Денежный поток", r.cash_flow, true],
-          ["Kaspi оборот", dash?.selected?.channels?.Kaspi || 0, true],
-          ["WB оборот", dash?.selected?.channels?.WB || 0, true],
+          ["Kaspi API оборот", dashboardKaspiSummary.data?.api_revenue ?? null, true],
+           ["WB API оборот", dashboardWbSummary.data?.api_revenue ?? null, true],
           ["Ozon оборот", dash?.selected?.channels?.Ozon || 0, true],
           ["Offline оборот", dash?.selected?.channels?.Offline || 0, true],
           ["B2B оборот", dash?.selected?.channels?.B2B || 0, true],
