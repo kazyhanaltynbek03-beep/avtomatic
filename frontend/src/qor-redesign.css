@@ -269,3 +269,65 @@ table td {vertical-align:middle}
   .modal,.dialog,.edit-modal {width:calc(100vw - 12px);max-width:calc(100vw - 12px)}
 }
 
+/* Dense, full-width inventory/catalog rows matching the approved ERP mockups. */
+.qor-catalog-list,.qor-stock-list {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:10px;
+  padding:4px 0 18px;
+}
+.qor-catalog-list>.qor-item-card,.qor-stock-list>.qor-item-card {
+  display:grid;
+  grid-template-columns:190px minmax(0,1fr);
+  align-items:stretch;
+  min-height:220px;
+  border-radius:15px;
+}
+.qor-catalog-list>.qor-item-card>.qor-item-image,.qor-stock-list>.qor-item-card>.qor-item-image {
+  height:100%!important;
+  min-height:220px;
+  border-radius:14px 0 0 14px;
+}
+.qor-catalog-list>.qor-item-card>.qor-item-body,.qor-stock-list>.qor-item-card>.qor-item-body {
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  min-width:0;
+  padding:17px 20px;
+}
+.qor-catalog-list .catalog-product-title {font-size:18px!important}
+.qor-catalog-list .catalog-primary-facts {grid-template-columns:repeat(2,minmax(120px,180px));gap:8px}
+.qor-catalog-list .catalog-link-details {margin-top:9px}
+.qor-stock-list .stock-quantity-control {
+  grid-template-columns:auto minmax(180px,270px) auto;
+  align-items:center;
+  gap:14px;
+  max-width:560px;
+  margin:9px 0;
+  padding:9px 12px;
+}
+.qor-stock-list .stock-quantity-control>div {grid-column:2;grid-row:1;grid-template-columns:46px minmax(80px,1fr) 46px}
+.qor-stock-list .stock-quantity-control>span:first-child {grid-column:1;grid-row:1}
+.qor-stock-list .stock-sold-count {grid-column:3;grid-row:1;white-space:nowrap}
+.qor-stock-list .stock-item-actions,.qor-stock-list .stock-actions {margin-top:8px}
+.stock-marketplace-badges {display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.stock-marketplace-badge {min-height:26px;padding:4px 9px;border:1px solid transparent;border-radius:8px;font-size:11px;font-weight:700}
+.stock-marketplace-badge.is-kaspi {background:#fff0ed;border-color:#f6d2c9;color:#d24d3c}
+.stock-marketplace-badge.is-wildberries {background:#f8edff;border-color:#e9d6f3;color:#8d39a8}
+.stock-marketplace-badge.is-ozon {background:#fff6db;border-color:#f0e0a8;color:#846a19}
+.stock-step-button {font-size:22px;box-shadow:0 2px 5px rgba(10,62,43,.08)}
+@media(max-width:700px) {
+  .qor-catalog-list>.qor-item-card,.qor-stock-list>.qor-item-card {grid-template-columns:108px minmax(0,1fr);min-height:0}
+  .qor-catalog-list>.qor-item-card>.qor-item-image,.qor-stock-list>.qor-item-card>.qor-item-image {min-height:100%;height:auto!important;border-radius:14px 0 0 14px}
+  .qor-catalog-list>.qor-item-card>.qor-item-body,.qor-stock-list>.qor-item-card>.qor-item-body {padding:12px;justify-content:flex-start}
+  .qor-catalog-list .catalog-primary-facts {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .qor-stock-list .stock-quantity-control {grid-template-columns:1fr;max-width:none;gap:6px;padding:9px}
+  .qor-stock-list .stock-quantity-control>span:first-child,.qor-stock-list .stock-quantity-control>div,.qor-stock-list .stock-sold-count {grid-column:1;grid-row:auto}
+  .qor-stock-list .stock-quantity-control>div {grid-template-columns:40px minmax(60px,1fr) 40px}
+  .qor-stock-list .stock-sold-count {white-space:normal}
+}
+@media(max-width:430px) {
+  .qor-catalog-list>.qor-item-card,.qor-stock-list>.qor-item-card {grid-template-columns:1fr}
+  .qor-catalog-list>.qor-item-card>.qor-item-image,.qor-stock-list>.qor-item-card>.qor-item-image {height:132px!important;min-height:132px;border-radius:14px 14px 0 0}
+}
+
