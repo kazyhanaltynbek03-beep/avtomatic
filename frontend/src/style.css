@@ -2778,3 +2778,7 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
 .chat-markdown strong{color:#183e2f}
 .chat-history-close{cursor:pointer}
 .chat-history-toggle{cursor:pointer}
+
+/* Mobile return cards must be outside table markup so browsers render them consistently. */
+.returns-mobile-list{display:none}
+@media(max-width:760px){.returns-mobile-list{display:grid;gap:10px;min-width:0}}
