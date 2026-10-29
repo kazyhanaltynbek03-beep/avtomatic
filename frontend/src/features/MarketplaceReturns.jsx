@@ -15,7 +15,7 @@ const labels = {
 };
 const showDate = (value) => value ? new Date(`${value}T12:00:00+06:00`).toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty" }) : "Не подтверждено";
 const returnAmount = (value) => value == null ? "Не подтверждено" : `−${money(value)}`;
-const returnDate = (item) => item.request_date || item.financial_return_date || item.detected_date;
+const returnDate = (item) => item.request_date || item.financial_return_date;
 const storeLabel = (store) => store?.store || store?.name || store?.account_name || store?.marketplace || "магазин";
 
 function Metric({ title, value, caption, tone = "", onClick, active = false }) {
