@@ -543,6 +543,7 @@ export default function App() {
               page={page}
               ctx={ctx}
               enabled={settings.ai_enabled}
+              claudeSkills={settings.claude_skills}
             />
           ) : page === "calculator" ? (
             <Calculator />
@@ -557,6 +558,7 @@ export default function App() {
               settings={settings}
               ctx={ctx}
               onLogout={() => setAuth(null)}
+              onSkillsUpdated={setSettings}
             />
           ) : page === "expenses" ? (
             <ExpensesPage ctx={ctx}/>
@@ -1608,7 +1610,7 @@ function StockItemCard({row,product,company,ctx}) {
     const cost=Number(String(unitCost).replace(",","."));
     if(!Number.isInteger(amount)||amount<1){setError("Введите целое количество не меньше 1");return;}
     if(!date){setError("Выберите дату движения");return;}
-    if(receipt&&(!Number.isFinite(cost)||cost<0||unitCost==="")){setError("Укажите себестоимость за единицу, чтобы партия корректно участвовала в расчёте себестоимости");return;}
+    if(receipt&&(!Number.isFinite(cost)||cost<=0||unitCost==="")){setError("Укажите себестоимость за единицу больше 0 ₸, чтобы партия корректно участвовала в расчёте себестоимости");return;}
     if(!receipt&&amount>current){setError("Нельзя списать больше текущего остатка");return;}
     if(!receipt&&reason.trim().length<5){setError("Укажите причину списания не короче 5 символов");return;}
     submitLock.current=true;setBusy(true);setError("");
@@ -3432,7 +3434,7 @@ function EditModal({ kind, item, ctx, close }) {
     </div>
   );
 }
-function AIWorkspace({ ctx, enabled }) {
+function AIWorkspace({ ctx, enabled, claudeSkills }) {
   const [agents,setAgents]=useState([]),[threads,setThreads]=useState([]),[thread,setThread]=useState(null),[messages,setMessages]=useState([]);
   const [text,setText]=useState(""),[files,setFiles]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(""),[actions,setActions]=useState([]),[plans,setPlans]=useState([]),[jobState,setJobState]=useState(null),[accountId,setAccountId]=useState("");
   const agent=thread?.agent||"rick";
@@ -3446,7 +3448,7 @@ function AIWorkspace({ ctx, enabled }) {
   const newChat=async(a="rick")=>{const t=await api("/ai/threads",{method:"POST",body:{agent:a,company_id:ctx.company?Number(ctx.company):null}});setThread(t);setMessages([]);reloadThreads()};
   const chooseAgent=async(a)=>{if(!thread)return newChat(a);const t=await api(`/ai/threads/${thread.id}`,{method:"PATCH",body:{agent:a}});setThread(t);reloadThreads()};
   const uploadFiles=async(list)=>{if(!ctx.company){setError("Сначала выберите компанию");return}setBusy(true);try{const out=[];for(const file of Array.from(list).slice(0,8)){const fd=new FormData();fd.append("company_id",ctx.company);fd.append("file",file);out.push(await api("/documents/upload",{method:"POST",body:fd}))}setFiles(f=>[...f,...out].slice(0,8))}catch(e){setError(e.message)}finally{setBusy(false)}};
-  const send=async(e)=>{e.preventDefault();if((!text.trim()&&!files.length)||busy)return;if(!enabled){setError("AI API не подключён. Настройте OPENAI_API_KEY на сервере.");return}setError("");setBusy(true);try{let t=thread;if(!t)t=await api("/ai/threads",{method:"POST",body:{agent:"rick",company_id:ctx.company?Number(ctx.company):null}});
+  const send=async(e)=>{e.preventDefault();if((!text.trim()&&!files.length)||busy)return;if(!enabled){setError("Claude API не подключён. Настройте ANTHROPIC_API_KEY на сервере.");return}setError("");setBusy(true);try{let t=thread;if(!t)t=await api("/ai/threads",{method:"POST",body:{agent:"rick",company_id:ctx.company?Number(ctx.company):null}});
     const attachments=files.map(f=>({document_id:f.id,name:f.name,mime:f.mime}));const userMsg=await api(`/ai/threads/${t.id}/messages`,{method:"POST",body:{role:"user",content:text||"Проанализируй вложения",attachments}});
     setThread(t);setMessages(m=>[...m,userMsg]);const history=[...messages.slice(-12),userMsg].map(m=>({role:m.role,content:m.content}));
     let j=await api("/jobs",{method:"POST",body:{kind:"assistant",payload:{question:text||"Проанализируй приложенные материалы",agent:t.agent,company_id:ctx.company?Number(ctx.company):null,account_id:accountId?Number(accountId):null,start:ctx.start,end:ctx.end,thread_id:t.id,history,document_ids:attachments.map(x=>x.document_id)}}});
@@ -3461,8 +3463,9 @@ function AIWorkspace({ ctx, enabled }) {
   const planAct=async(id,verb)=>{setError("");try{await api(`/ai/plans/${id}/${verb}`,{method:"POST"});await Promise.all([reloadPlans(),reloadActions()]);ctx.bump?.()}catch(e){setError(e.message)}};
   return <div className="chat-shell">
     <aside className="chat-sidebar panel"><button className="primary chat-new" onClick={()=>newChat(agent)}><Plus size={17}/>Новый чат</button><div className="chat-history"><span className="eyebrow">ИСТОРИЯ</span>{threads.map(t=><button key={t.id} className={`chat-thread ${thread?.id===t.id?"active":""}`} onClick={()=>setThread(t)}><MessageSquare size={15}/><span><b>{t.title}</b><small>{agents.find(a=>a.id===t.agent)?.name||t.agent}</small></span></button>)}</div></aside>
-    <section className="chat-main panel"><header className="chat-head"><div><span className="eyebrow">QOR AI WORKSPACE</span><h2>{agents.find(a=>a.id===agent)?.name||"Рик"} · {agents.find(a=>a.id===agent)?.title||"AI-руководитель"}</h2></div><div className="chat-head-controls"><select aria-label="Магазины для анализа AI" value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Все магазины выбранной компании</option>{aiAccounts.map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select><select aria-label="AI-специалист" value={agent} onChange={e=>chooseAgent(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name} — {a.title}</option>)}</select></div></header>
-      {!enabled&&<div className="info-banner">Для живых ответов подключите OPENAI_API_KEY на сервере.</div>}
+    <section className="chat-main panel"><header className="chat-head"><div><span className="eyebrow">QOR AI WORKSPACE</span><h2>{agents.find(a=>a.id===agent)?.name||"Арман"} · {agents.find(a=>a.id===agent)?.title||"AI-руководитель"}</h2></div><div className="chat-head-controls"><select aria-label="Магазины для анализа AI" value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Все магазины выбранной компании</option>{aiAccounts.map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select><select aria-label="AI-специалист" value={agent} onChange={e=>chooseAgent(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name} — {a.title}</option>)}</select></div></header>
+      {!enabled&&<div className="info-banner">Для живых ответов подключите ANTHROPIC_API_KEY на сервере.</div>}
+      {enabled&&<div className="chat-skill-status">Навыки Claude: {claudeSkills?.enabled?`${claudeSkills.configured}/${claudeSkills.required} подключено`:`не подключены · ${claudeSkills?.configured||0}/${claudeSkills?.required||11}`}</div>}
       {(actions.length>0||plans.length>0)&&<div className="ai-approval-summary"><ShieldCheck size={17}/><span><b>{actions.length+plans.length} ожидают решения</b><small>AI подготовил изменения; проверьте и подтвердите их ниже.</small></span></div>}
       {jobState&&["queued","running"].includes(jobState.status)&&<div className="info-banner">Задание #{jobState.id} выполняется в фоне. Страница остаётся доступной.</div>}<div className="chat-messages">{!messages.length&&<div className="chat-empty ai-control-center"><div className="ai-welcome"><div className="ai-orb"><Sparkles size={28}/></div><div><span className="eyebrow">QOR AI · КОМАНДА БИЗНЕСА</span><h2>Управляйте бизнесом через один чат</h2><p>Финансы, продажи, товары и маркетплейсы. AI готовит анализ и действия на основе данных ERP; изменения проходят проверку и ваше подтверждение.</p></div></div><div className="ai-workflows"><button className="ai-workflow-card" onClick={()=>setText("Подготовь ежедневный отчёт руководителю: продажи, прибыль, выплаты, изменения по Kaspi и Wildberries, проблемы и что требует моего решения. Используй текущий выбранный период и укажи, если данных не хватает.")}><span className="ai-workflow-icon"><TrendingUp size={19}/></span><b>Отчёт руководителю</b><small>Продажи, прибыль, каналы и важные отклонения</small><em>Подготовить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Проверь товары и остатки: что быстро продаётся, что заканчивается, что продаётся медленно. Дай приоритетный список и объясни выводы только по подтверждённым данным QOR.")}><span className="ai-workflow-icon"><Package size={19}/></span><b>Контроль товаров</b><small>Остатки, темп продаж и товары для внимания</small><em>Проверить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Проанализируй закупки по каждому SKU отдельно для Kaspi и Wildberries: сколько реально продано за выбранный период, какой подтверждённый остаток сейчас, какой темп продаж и стоит ли пополнить. Назови причины рекомендации и отдельно перечисли товары, которые не стоит закупать. Если данные ERP не связывают SKU с конкретным каналом или не подтверждают остаток, напиши «Не подтверждено» и не угадывай количество.")}><span className="ai-workflow-icon"><Package size={19}/></span><b>Что закупить?</b><small>Рекомендации по Kaspi и Wildberries с объяснением</small><em>Получить список →</em></button><button className="ai-workflow-card" onClick={()=>setText("Сверь продажи Kaspi и Wildberries за выбранный период. Покажи показатели каждого канала отдельно, найденные расхождения и ограничения данных. Не меняй отчёты и не пересчитывай финансовые показатели.")}><span className="ai-workflow-icon"><ShieldCheck size={19}/></span><b>Проверка каналов</b><small>Kaspi и Wildberries по данным ERP</small><em>Сверить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Подготовь финансовую сводку за выбранный период для бухгалтера: выручка, расходы, прибыль, деньги и выплаты, расшифровки по каналам и список недостающих данных. Ничего не проводи автоматически.")}><span className="ai-workflow-icon"><FileText size={19}/></span><b>Сводка бухгалтеру</b><small>Проверяемые цифры и пояснения</small><em>Подготовить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Помоги сопоставить товары QOR с карточками Kaspi и Wildberries по артикулу, SKU и штрихкоду. Покажи только точные и неоднозначные совпадения отдельно; не создавай автоматические связи без подтверждения.")}><span className="ai-workflow-icon"><Sparkles size={19}/></span><b>Сопоставить карточки</b><small>Поиск общих SKU между площадками</small><em>Начать →</em></button><button className="ai-workflow-card" onClick={()=>setText("У меня новый товар. Помоги подготовить карточку товара QOR: приложу фото и характеристики. Сначала извлеки только видимые/указанные сведения, отметь неизвестное и подготовь черновик для моей проверки.")}><span className="ai-workflow-icon"><ImageIcon size={19}/></span><b>Новый товар по фото</b><small>Черновик из изображения и характеристик</small><em>Подготовить →</em></button></div><div className="ai-control-footer"><span><b>{agents.length||6} AI-специалистов</b><small>Руководитель · финансы · аналитика · товары · маркетинг · контент</small></span><a className="secondary" href={`/api/reports/executive.xlsx?start=${ctx.start}&end=${ctx.end}${ctx.company?`&company_id=${ctx.company}`:""}${accountId?`&account_id=${accountId}`:""}`}><Download size={16}/>Отчёт Excel</a></div></div>}
         {messages.map(m=><div key={m.id} className={`chat-row ${m.role}`}><div className="chat-bubble"><div className="chat-role">{m.role==="user"?"Вы":agents.find(a=>a.id===(m.meta?.agent||agent))?.name||"QOR AI"}</div><div className="chat-text">{m.content}</div>{m.attachments?.length>0&&<div className="chat-attachments">{m.attachments.map((a,i)=><a key={i} href={`/api/documents/${a.document_id}/download`} target="_blank" rel="noreferrer"><ImageIcon size={15}/>{a.name}</a>)}</div>}{m.role==="assistant"&&<div className="chat-actions"><button onClick={()=>copy(m.content)}><Copy size={14}/>Копировать</button><button onClick={()=>setText("Переделай предыдущий ответ. ")}><RotateCcw size={14}/>Переделать</button></div>}</div></div>)}
@@ -3475,7 +3478,7 @@ function AIWorkspace({ ctx, enabled }) {
   </div>
 }
 
-function AIPage({ page, ctx, enabled }) {
+function AIPage({ page, ctx, enabled, claudeSkills }) {
   const [text, setText] = useState(""),
     [doc, setDoc] = useState(""),
     [job, setJob] = useState(null),
@@ -3497,7 +3500,7 @@ function AIPage({ page, ctx, enabled }) {
   // Hooks must be called in the same order when the user switches between
   // Assistant, Content and Designer. This return is intentionally after all
   // hooks, fixing the former production-only conditional-Hooks crash.
-  if (page === "assistant") return <AIWorkspace ctx={ctx} enabled={enabled}/>;
+  if (page === "assistant") return <AIWorkspace ctx={ctx} enabled={enabled} claudeSkills={claudeSkills}/>;
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -3546,14 +3549,14 @@ function AIPage({ page, ctx, enabled }) {
           <div>
             <h2>
               {page === "assistant"
-                ? (agents.find((a) => a.id === agent)?.name || "Рик") + " · " + (agents.find((a) => a.id === agent)?.title || "AI-руководитель")
+                ? (agents.find((a) => a.id === agent)?.name || "Арман") + " · " + (agents.find((a) => a.id === agent)?.title || "AI-руководитель")
                 : page === "content"
                   ? "Карточка из фактов о товаре"
                   : "Новая визуальная идея"}
             </h2>
             <p>
               {page === "assistant"
-                ? (agent === "rick" ? "Главная точка общения: Рик помогает владельцу увидеть картину бизнеса и выбрать действие." : "Специализированный AI работает только в своей зоне и использует проверенные данные ERP.")
+                ? (agent === "rick" ? "Главная точка общения: Арман помогает владельцу увидеть картину бизнеса и выбрать действие." : "Специализированный AI работает только в своей зоне и использует проверенные данные ERP.")
                 : page === "content"
                   ? "Укажите характеристики поставщика и выберите загруженное фото."
                   : "Опишите композицию, фон и настроение изображения."}
@@ -3562,13 +3565,13 @@ function AIPage({ page, ctx, enabled }) {
         </div>
         {!enabled && (
           <div className="info-banner">
-            AI API пока не подключён. Укажите OPENAI_API_KEY на сервере.
+            Claude API пока не подключён. Укажите ANTHROPIC_API_KEY на сервере.
             Финансовая аналитика и калькулятор работают без ключа.
           </div>
         )}
         {page === "assistant" && (
           <div className="ai-team">
-            <div className="ai-team-head"><span className="eyebrow">AI-КОМАНДА</span><strong>Выберите специалиста или пишите Рику</strong></div>
+            <div className="ai-team-head"><span className="eyebrow">AI-КОМАНДА</span><strong>Выберите специалиста или пишите Арману</strong></div>
             <div className="agent-strip">
               {agents.map((a) => (
                 <button type="button" key={a.id} className={`agent-card ${agent === a.id ? "active" : ""}`} onClick={() => setAgent(a.id)}>
@@ -4147,11 +4150,13 @@ function Roles() {
     </div>
   );
 }
-function Settings({ settings, ctx, onLogout }) {
+function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
   const [name, setName] = useState(settings.business_name || ""),
     [old, setOld] = useState(""),
     [password, setPassword] = useState(""),
     [error, setError] = useState("");
+  const [installingSkills, setInstallingSkills] = useState(false),
+    [skillInstallResult, setSkillInstallResult] = useState(null);
   const save = async (e) => {
     e.preventDefault();
     try {
@@ -4171,6 +4176,21 @@ function Settings({ settings, ctx, onLogout }) {
       onLogout();
     } catch (e) {
       setError(e.message);
+    }
+  };
+  const installSkills = async () => {
+    setInstallingSkills(true);
+    setError("");
+    try {
+      const result = await api("/ai/skills/install", { method: "POST" });
+      setSkillInstallResult(result.skills);
+      const updated = await api("/settings");
+      onSkillsUpdated?.(updated);
+      ctx.notify(`Загружено Skills: ${result.configured}/${result.required}. Сохраните JSON в настройках Render, чтобы включить их в Claude.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setInstallingSkills(false);
     }
   };
   return (
@@ -4195,11 +4215,17 @@ function Settings({ settings, ctx, onLogout }) {
         </label>
         <button className="primary">Сохранить</button>
         <p className="muted">
-          AI: {settings.ai_enabled ? "подключён" : "ожидает OPENAI_API_KEY"}.
+          Claude API: {settings.ai_enabled ? "подключён" : "ожидает ANTHROPIC_API_KEY"}. Skills: {settings.claude_skills?.enabled ? `${settings.claude_skills.configured}/${settings.claude_skills.required} подключены` : `не подключены (${settings.claude_skills?.configured || 0}/${settings.claude_skills?.required || 11})`}.
           Ключи хранятся на сервере, не в браузере.
         </p>
         <ErrorBox error={error} />
       </form>
+      {settings.ai_enabled && !settings.claude_skills?.enabled && can(ctx.auth, "settings", true) && <section className="panel padded wide">
+        <h2>Claude Skills · команда QOR</h2>
+        <p className="muted">Загрузит 11 подготовленных Skills в тот же Anthropic API workspace, к которому подключён серверный ключ. Ключ остаётся на сервере.</p>
+        <button className="primary" type="button" onClick={installSkills} disabled={installingSkills}>{installingSkills ? "Загружаем в Anthropic…" : "Загрузить 11 Skills в Claude API"}</button>
+        {skillInstallResult && <label>Конфигурация для Render · QOR_CLAUDE_SKILLS_JSON<textarea readOnly rows={10} value={JSON.stringify(skillInstallResult, null, 2)} /></label>}
+      </section>}
       <form className="panel padded" onSubmit={change}>
         <h2>Изменить пароль</h2>
         <label>

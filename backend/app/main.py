@@ -43,6 +43,7 @@ app = FastAPI(
 )
 logger = logging.getLogger(__name__)
 SYNC_RUNNING_TIMEOUT_SECONDS = max(60, int(os.getenv("MARKETPLACE_SYNC_TIMEOUT_SECONDS", "1800")))
+CLAUDE_SKILL_INSTALL_LOCK = threading.Lock()
 
 
 def sync_status_for_display(account, at=None):
@@ -3344,8 +3345,26 @@ def settings(u=Depends(current_user), db=Depends(get_db)):
     return {
         **dump(obj),
         "ai_enabled": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "claude_skills": ai.claude_skills_status(),
         "demo": os.getenv("DEMO_MODE", "false").strip().lower() == "true",
     }
+
+
+@app.post("/api/ai/skills/install")
+def install_claude_skills(u=Depends(current_user), db=Depends(get_db)):
+    """Upload the bundled QOR Skills to the Anthropic workspace behind the server key."""
+    require(u, "settings", True)
+    if not CLAUDE_SKILL_INSTALL_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "Загрузка Skills уже выполняется")
+    try:
+        if ai.claude_skills_status()["enabled"]:
+            raise HTTPException(409, "Все 11 Skills уже подключены")
+        skills = ai.install_claude_skills()
+        audit(db, u, "create", "claude_skills", 1)
+        db.commit()
+        return {"skills": skills, "configured": len(skills), "required": len(ai.CLAUDE_SKILL_KEYS)}
+    finally:
+        CLAUDE_SKILL_INSTALL_LOCK.release()
 
 
 @app.put("/api/settings")

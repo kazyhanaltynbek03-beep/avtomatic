@@ -2445,6 +2445,7 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
 }
 
 /* Unified warehouse quick receipt and audited write-off controls */
+.chat-skill-status{margin:10px 14px;padding:8px 12px;border:1px solid #d9e8df;border-radius:10px;background:#f4f9f5;color:#4b6b5a;font-size:12px;font-weight:600}
 .stock-product-card .qor-item-body{gap:0}
 .stock-quantity-control{display:grid;grid-template-columns:1fr;gap:7px;margin:12px 0;padding:12px;border:1px solid #d5e6db;border-radius:14px;background:linear-gradient(120deg,#f0f8f3,#fbfdfb)}
 .stock-quantity-control>span:first-child{color:#718279;font-size:12px;font-weight:650}

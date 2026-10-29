@@ -13,16 +13,152 @@ from . import action_engine
 
 ANTHROPIC_MESSAGES_API = "https://api.anthropic.com/v1/messages"
 OPENAI_IMAGES_API = "https://api.openai.com/v1"
+ANTHROPIC_SKILLS_API = "https://api.anthropic.com/v1/skills"
+CLAUDE_SKILL_BUNDLE_DIR = Path(__file__).resolve().parents[1] / "claude_skills"
 
 
 AI_AGENTS = {
-    "rick": {"name": "Рик", "title": "AI-руководитель", "scope": "Весь бизнес", "prompt": "Ты Рик, AI-руководитель. Дай владельцу краткий управленческий вывод: что происходит, что требует внимания и какие следующие действия разумны. Не выдумывай факты и не меняй записи."},
-    "finance": {"name": "Финансист", "title": "AI CFO", "scope": "P&L · Cash Flow · B2B", "prompt": "Ты AI-финансист. Анализируй только подтверждённые финансовые показатели: выручку, COGS, gross/net profit, расходы, cash и дебиторку. Можешь подготовить изменение себестоимости товара в магазине маркетплейса через подтверждаемое действие. Не рассчитывай критические показатели самостоятельно и не выдавай гипотезу за факт."},
-    "analyst": {"name": "Аналитик", "title": "Business Analyst", "scope": "SKU · каналы · динамика", "prompt": "Ты бизнес-аналитик. Ищи закономерности в переданном ERP snapshot: каналы, SKU, динамика, лидеры и слабые места. Если сравнительных данных нет, прямо скажи, что причинное объяснение невозможно."},
-    "buyer": {"name": "Закупщик", "title": "Inventory & Procurement", "scope": "Склад · партии · закуп", "prompt": "Ты AI-закупщик. Работай с остатками, стоимостью склада, продажами и stock alerts из ERP. Можешь подготовить закупку, корректировку остатков и себестоимость товара маркетплейса только через подтверждаемое действие. Не придумывай сроки поставки, спрос или рекомендуемое количество, если система не передала достаточных данных."},
-    "marketing": {"name": "Маркетолог", "title": "Marketplace & Growth", "scope": "Kaspi · WB · Ozon", "prompt": "Ты AI-маркетолог маркетплейсов. Анализируй только переданные показатели каналов, рекламы и продаж. Не придумывай CTR, CPC, спрос или данные конкурентов, которых нет в snapshot."},
-    "content": {"name": "Контент", "title": "Product Studio", "scope": "Карточки · SEO · креатив", "prompt": "Ты AI-контент-менеджер. Помогай с позиционированием и контентом, но не придумывай характеристики товара. Для продуктовых фактов требуй подтверждённые данные."},
+    "rick": {"name": "Арман", "title": "AI-руководитель", "scope": "Весь бизнес", "prompt": "Ты Арман, AI-руководитель. Дай владельцу краткий управленческий вывод: что происходит, что требует внимания и какие следующие действия разумны. Не выдумывай факты и не меняй записи."},
+    "finance": {"name": "Данияр", "title": "AI CFO", "scope": "P&L · Cash Flow · B2B", "prompt": "Ты Данияр, AI-финансист. Анализируй только подтверждённые финансовые показатели: выручку, COGS, gross/net profit, расходы, cash и дебиторку. Можешь подготовить изменение себестоимости товара в магазине маркетплейса через подтверждаемое действие. Не рассчитывай критические показатели самостоятельно и не выдавай гипотезу за факт."},
+    "analyst": {"name": "Тимур", "title": "Marketplace Director", "scope": "SKU · каналы · динамика", "prompt": "Ты Тимур, директор маркетплейсов. Ищи закономерности в переданном ERP snapshot: каналы, SKU, динамика, лидеры и слабые места. Если сравнительных данных нет, прямо скажи, что причинное объяснение невозможно."},
+    "buyer": {"name": "Ерлан", "title": "Inventory & Procurement", "scope": "Склад · партии · закуп", "prompt": "Ты Ерлан, специалист по складу и закупкам. Работай с остатками, стоимостью склада, продажами и stock alerts из ERP. Можешь подготовить закупку, корректировку остатков и себестоимость товара маркетплейса только через подтверждаемое действие. Не придумывай сроки поставки, спрос или рекомендуемое количество, если система не передала достаточных данных."},
+    "marketing": {"name": "Алия", "title": "Marketing & Targeting", "scope": "Kaspi · WB · Ozon", "prompt": "Ты Алия, AI-маркетолог. Анализируй только переданные показатели каналов, рекламы и продаж. Не придумывай CTR, CPC, спрос или данные конкурентов, которых нет в snapshot."},
+    "content": {"name": "Аружан", "title": "Product Content", "scope": "Карточки · SEO · креатив", "prompt": "Ты Аружан, AI-контент-менеджер. Помогай с позиционированием и контентом, но не придумывай характеристики товара. Для продуктовых фактов требуй подтверждённые данные."},
 }
+
+# Skill IDs are created in Anthropic's Skills workspace and are deliberately
+# configured separately from the human-readable Skill bundles. The same Skills
+# are attached to site agents through the Messages API; ERP tools and permissions
+# remain the source of data and authority.
+CLAUDE_SKILL_KEYS = (
+    "qor-arman-ceo", "qor-daniyar-finance", "qor-erlan-inventory",
+    "qor-timur-marketplace", "qor-aliya-marketing", "qor-aruzhan-content",
+    "qor-nurlan-market-research", "qor-aigerim-seo", "qor-miras-kaspi",
+    "qor-dias-wildberries", "qor-azamat-ozon",
+)
+AGENT_SKILL_KEYS = {
+    "rick": CLAUDE_SKILL_KEYS,
+    "finance": ("qor-daniyar-finance",),
+    "analyst": ("qor-timur-marketplace", "qor-nurlan-market-research", "qor-miras-kaspi", "qor-dias-wildberries", "qor-azamat-ozon"),
+    "buyer": ("qor-erlan-inventory",),
+    "marketing": ("qor-aliya-marketing", "qor-aigerim-seo", "qor-nurlan-market-research"),
+    "content": ("qor-aruzhan-content", "qor-aigerim-seo"),
+}
+
+
+def configured_claude_skills():
+    """Return the validated Anthropic Skill references configured for this QOR workspace."""
+    raw = os.getenv("QOR_CLAUDE_SKILLS_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        configured = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(configured, dict):
+        return {}
+    skills = {}
+    for key in CLAUDE_SKILL_KEYS:
+        item = configured.get(key)
+        if not isinstance(item, dict):
+            continue
+        skill_id = str(item.get("skill_id") or "").strip()
+        version = str(item.get("version") or "").strip()
+        if skill_id.startswith("skill_") and (version == "latest" or version.startswith("skver_")):
+            skills[key] = {"type": "custom", "skill_id": skill_id, "version": version}
+    # Each exported role package must resolve to its own API Skill; duplicates
+    # would make the UI report a complete team while silently reusing one role.
+    if len({item["skill_id"] for item in skills.values()}) != len(skills):
+        return {}
+    return skills
+
+
+def claude_skills_status():
+    skills = configured_claude_skills()
+    return {"enabled": len(skills) == len(CLAUDE_SKILL_KEYS), "configured": len(skills), "required": len(CLAUDE_SKILL_KEYS)}
+
+
+def install_claude_skills():
+    """Create or reuse the packaged QOR skills in the API workspace used by QOR."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(409, "Claude API не подключён на сервере")
+    if not CLAUDE_SKILL_BUNDLE_DIR.is_dir():
+        raise HTTPException(500, "Пакет Claude Skills отсутствует в сборке сайта")
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2026-10-21",
+    }
+    existing = {}
+    with httpx.Client(timeout=180) as client:
+        page = None
+        for _ in range(20):
+            params = {"limit": 1000, "source": "custom"}
+            if page:
+                params["page"] = page
+            response = client.get(ANTHROPIC_SKILLS_API, headers=headers, params=params)
+            if response.is_error:
+                _raise_claude_skills_error(response)
+            body = response.json()
+            for item in body.get("data", []):
+                name = str(item.get("display_name") or "")
+                if name.startswith("QOR ERP Skill · "):
+                    existing[name.removeprefix("QOR ERP Skill · ")] = item
+            page = body.get("next_page")
+            if not page:
+                break
+        else:
+            raise HTTPException(502, "Claude Skills: слишком много страниц в API каталоге")
+
+        result = {}
+        for key in CLAUDE_SKILL_KEYS:
+            display_name = f"QOR ERP Skill · {key}"
+            item = existing.get(key)
+            if item is None:
+                skill_dir = CLAUDE_SKILL_BUNDLE_DIR / key
+                skill_file = skill_dir / "SKILL.md"
+                if not skill_file.is_file():
+                    raise HTTPException(500, f"В сборке отсутствует {key}/SKILL.md")
+                uploads = []
+                for file_path in sorted(path for path in skill_dir.rglob("*") if path.is_file()):
+                    relative = file_path.relative_to(skill_dir).as_posix()
+                    uploads.append(("files[]", (f"{key}/{relative}", file_path.read_bytes(), "text/plain")))
+                response = client.post(
+                    ANTHROPIC_SKILLS_API,
+                    headers=headers,
+                    data={"display_name": display_name},
+                    files=uploads,
+                )
+                if response.is_error:
+                    _raise_claude_skills_error(response)
+                item = response.json()
+            skill_id = str(item.get("id") or "")
+            version = str(item.get("latest_version_id") or "")
+            if not skill_id.startswith("skill_") or not version:
+                raise HTTPException(502, f"Claude API вернул неполную регистрацию для {key}")
+            result[key] = {"skill_id": skill_id, "version": version}
+    return result
+
+
+def _raise_claude_skills_error(response):
+    try:
+        provider_error = response.json().get("error") or {}
+    except (ValueError, TypeError):
+        provider_error = {}
+    error_type = str(provider_error.get("type") or "provider_error")[:80]
+    # Keep provider messages short and exclude headers and credentials from errors.
+    error_message = str(provider_error.get("message") or "неизвестная ошибка")[:240]
+    raise HTTPException(502, f"Claude Skills API: {response.status_code} ({error_type}): {error_message}")
+
+
+def _agent_skills(agent_id):
+    configured = configured_claude_skills()
+    keys = AGENT_SKILL_KEYS.get(agent_id, ())
+    # Keep the bundle atomic: avoid a half-configured specialist team.
+    if len(configured) != len(CLAUDE_SKILL_KEYS) or not keys or any(key not in configured for key in keys):
+        return []
+    return [configured[key] for key in keys]
 
 def agent_catalog():
     return [{"id": k, **{x: v[x] for x in ("name", "title", "scope")}} for k, v in AI_AGENTS.items()]
@@ -148,7 +284,9 @@ def _anthropic_messages(items):
             continue
         role = item.get("role")
         kind = item.get("type")
-        if role in {"user", "assistant"}:
+        if kind == "anthropic_raw_assistant":
+            append_message("assistant", item.get("content") or [])
+        elif role in {"user", "assistant"}:
             append_message(role, _anthropic_content(item.get("content", "")))
         elif kind == "function_call":
             try:
@@ -175,13 +313,17 @@ def _anthropic_messages(items):
     return messages
 
 
-def call_response(input, instructions, tools=None, tool_choice=None, text_format=None):
+def call_response(input, instructions, tools=None, tool_choice=None, text_format=None, skill_config=None, container_id=None):
     request = {
         "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5"),
         "max_tokens": 1800,
         "system": instructions,
         "messages": _anthropic_messages(input),
     }
+    if skill_config:
+        request["container"] = {"skills": skill_config}
+        if container_id:
+            request["container"]["id"] = container_id
     if tools:
         request["tools"] = [{
             "name": tool.get("name"),
@@ -192,6 +334,8 @@ def call_response(input, instructions, tools=None, tool_choice=None, text_format
         } for tool in tools if tool.get("name")]
         if tool_choice == "required":
             request["tool_choice"] = {"type": "any"}
+    if skill_config:
+        request.setdefault("tools", []).append({"type": "code_execution_20250825", "name": "code_execution"})
     if text_format and text_format.get("type") == "json_schema":
         request["output_config"] = {
             "format": {
@@ -232,7 +376,12 @@ def call_response(input, instructions, tools=None, tool_choice=None, text_format
                 "arguments": json.dumps(part.get("input") or {}, ensure_ascii=False),
                 "call_id": part.get("id", ""),
             })
-    return {"output": output}
+    return {
+        "output": output,
+        "raw_content": body.get("content", []),
+        "container_id": (body.get("container") or {}).get("id"),
+        "stop_reason": body.get("stop_reason"),
+    }
 
 
 def output_text(res):
@@ -422,13 +571,20 @@ def assistant(db, user, payload):
         text_part = last_user["content"]
         last_user["content"] = ([{"type": "input_text", "text": text_part}] if isinstance(text_part, str) else list(text_part))
         last_user["content"].extend(file_parts)
-    res = call_response(history, instructions, tools, tool_choice="required")
+    skills = _agent_skills(agent_id)
+    request_options = {"skill_config": skills} if skills else {}
+    res = call_response(history, instructions, tools, tool_choice="required", **request_options)
     used = []
-    for _ in range(4):
+    container_id = res.get("container_id")
+    for _ in range(8):
         calls = [o for o in res.get("output", []) if o.get("type") == "function_call"]
-        if not calls:
+        paused = res.get("stop_reason") == "pause_turn"
+        if not calls and not paused:
             break
-        history += res["output"]
+        if res.get("raw_content"):
+            history.append({"type": "anthropic_raw_assistant", "content": res["raw_content"]})
+        elif calls:
+            history += res["output"]
         for c in calls:
             if c["name"] in {"propose_erp_action","propose_erp_plan"}:
                 try: args=json.loads(c.get("arguments") or "{}")
@@ -451,7 +607,11 @@ def assistant(db, user, payload):
                 elif c["name"]=="get_data_quality_summary": out=_data_quality_summary(db,user,snapshot,payload.get("account_id"))
                 else: out=_agent_tool_data(snapshot,c["name"])
             history.append({"type":"function_call_output","call_id":c["call_id"],"output":json.dumps(out,default=str,ensure_ascii=False)})
-        res = call_response(history, instructions, tools)
+        next_options = dict(request_options)
+        if container_id:
+            next_options["container_id"] = container_id
+        res = call_response(history, instructions, tools, **next_options)
+        container_id = res.get("container_id") or container_id
     if not used:
         raise HTTPException(502, "AI не запросил данные ERP; ответ заблокирован")
     if not output_text(res):
