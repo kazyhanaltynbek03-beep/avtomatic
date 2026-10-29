@@ -2231,7 +2231,17 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
     account = db.scalar(select(Account).where(Account.id == p.account_id).with_for_update())
     if not account or account.channel not in {"Kaspi", "Wildberries", "Ozon"}:
         raise HTTPException(404, "Магазин маркетплейса не найден")
-    if account.sync_status == "running":
+    sync_state, _sync_error = sync_status_for_display(account)
+    sync_heartbeat = account.last_sync
+    if sync_heartbeat is not None and sync_heartbeat.tzinfo is None:
+        sync_heartbeat = sync_heartbeat.replace(tzinfo=timezone.utc)
+    abandoned_kaspi_period_sync = (
+        sync_state == "running"
+        and account.channel == "Kaspi"
+        and str(account.sync_error or "").startswith("KASPI_PERIOD_SYNC")
+        and (sync_heartbeat is None or sync_heartbeat < now() - timedelta(minutes=5))
+    )
+    if sync_state == "running" and not abandoned_kaspi_period_sync:
         raise HTTPException(409, "Синхронизация магазина ещё выполняется. Дождитесь завершения и повторите связь.")
     scope(u, account.company_id)
     product_company_ids = {int(value) for value in ((product.specifications or {}).get("_qor_company_ids") or []) if str(value).isdigit()}
