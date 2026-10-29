@@ -86,11 +86,11 @@ function InventoryAction({ item, onUpdated }) {
     finally { setBusy(false); }
   };
   const next = match?.matched ? inventoryNext[match.status] : null;
-  return <div className="returns-inventory-action">
+  return <div className="returns-inventory-action" style={{ display: "grid", gap: 8, marginTop: 10, padding: "8px 0", borderTop: "1px solid #d9e3dd" }}>
     <strong>Единый склад</strong>
     {match?.matched ? <>
       <span>{inventoryStatusLabels[match.status] || match.status} · {match.quantity} шт.</span>
-      {match.status === "inspection" ? <div className="returns-inventory-buttons">
+      {match.status === "inspection" ? <div className="returns-inventory-buttons" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         <button type="button" className="primary" disabled={busy} onClick={() => update("restocked")}>Пригоден · вернуть в остаток</button>
         <button type="button" className="secondary" disabled={busy} onClick={() => update("defective")}>Брак</button>
       </div> : next ? <button type="button" className="secondary" disabled={busy} onClick={() => update(next[0])}>{next[1]}</button> : null}
