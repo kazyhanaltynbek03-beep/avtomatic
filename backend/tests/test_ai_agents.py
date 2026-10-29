@@ -103,12 +103,14 @@ def test_agents_have_least_privilege_read_tools():
     assert "get_marketplace_cost_catalog" in AGENT_TOOLS["buyer"]
     assert "get_data_quality_summary" in AGENT_TOOLS["buyer"]
     assert "get_finance_summary" not in AGENT_TOOLS["buyer"]
+    assert {"get_marketplace_mapping_catalog", "get_return_inventory_summary"} <= set(AGENT_TOOLS["buyer"])
     assert "get_channel_summary" in AGENT_TOOLS["marketing"]
     assert "get_inventory_summary" not in AGENT_TOOLS["marketing"]
     assert set(AGENT_TOOLS["content"]) == {"get_product_summary", "get_data_quality_summary"}
     assert set(AGENT_TOOLS["rick"]) == {
         "get_executive_summary", "get_finance_summary", "get_inventory_summary",
-        "get_channel_summary", "get_product_summary", "get_marketplace_cost_catalog", "get_data_quality_summary"
+        "get_channel_summary", "get_product_summary", "get_marketplace_mapping_catalog",
+        "get_return_inventory_summary", "get_marketplace_cost_catalog", "get_data_quality_summary"
     }
 
 
@@ -150,7 +152,7 @@ def test_specialists_have_job_scoped_write_actions_only():
     assert "post_expense" in AGENT_ACTIONS["finance"]
     assert "set_marketplace_cost" in AGENT_ACTIONS["finance"]
     assert "post_purchase" not in AGENT_ACTIONS["finance"]
-    assert set(AGENT_ACTIONS["buyer"]) == {"post_purchase", "post_adjustment", "create_product", "set_marketplace_cost"}
+    assert set(AGENT_ACTIONS["buyer"]) == {"post_purchase", "post_adjustment", "create_product", "set_marketplace_cost", "link_marketplace_listing", "set_product_min_stock", "set_return_inventory_status"}
     assert "prepare_product_card_publish" in AGENT_ACTIONS["marketing"]
     assert "post_cash" not in AGENT_ACTIONS["marketing"]
     assert set(AGENT_ACTIONS["content"]) == {"create_product_card", "validate_product_card"}
