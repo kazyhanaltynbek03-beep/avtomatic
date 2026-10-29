@@ -2688,3 +2688,15 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
  .returns-reconciliation-grid{grid-template-columns:1fr}
  .returns-inventory-buttons{grid-template-columns:1fr}
 }
+
+
+/* Per-return warehouse decision controls */
+.returns-inventory-action{display:grid;gap:8px;margin-top:10px;padding:10px;border:1px solid #d9e3dd;border-radius:12px;background:#f8fbf9;color:#355d48;font-size:12px;line-height:1.45}
+.returns-inventory-current{color:#667970}
+.returns-inventory-select-label,.returns-inventory-reason-label{display:grid;gap:5px;color:#60736a;font-size:11px;font-weight:700}
+.returns-inventory-select-label select,.returns-inventory-reason-label input{width:100%;min-width:0;min-height:42px;padding:8px 10px;border:1px solid #cbdad1;border-radius:9px;background:#fff;color:#294638;font:inherit}
+.returns-inventory-save{width:100%;min-height:44px}
+.returns-inventory-save:disabled{opacity:.55;cursor:not-allowed}
+.returns-inventory-error{color:#a33a32}
+.returns-inventory-final{font-weight:700}
+@media(max-width:760px){.returns-inventory-action{font-size:13px}.returns-inventory-select-label select,.returns-inventory-reason-label input{min-height:46px}.returns-inventory-save{min-height:48px}}
