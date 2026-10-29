@@ -2077,7 +2077,7 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
     }
   }, [activeAccountId, period, range.start, range.end]);
   useEffect(() => {
-    if (!activeAccountId) return;
+    if (!activeAccountId || report.loading || report.error) return;
     const key = `${activeAccountId}:${period}:${range.start}:${range.end}:${company || ""}`;
     const lastAttempt = autoSyncRef.current.get(key) || 0;
     const matchesRange = data.start === range.start && data.end === range.end && data.period === period;
@@ -2088,7 +2088,7 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
     if (fresh || matchesRange && data.status === "загружается" || Date.now() - lastAttempt < refreshAfterMs) return;
     autoSyncRef.current.set(key, Date.now());
     startReportSync();
-  }, [activeAccountId, period, range.start, range.end, company, data.start, data.end, data.period, data.status, data.updated_at, startReportSync]);
+  }, [activeAccountId, period, range.start, range.end, company, data.start, data.end, data.period, data.status, data.updated_at, report.loading, report.error, startReportSync]);
   const downloadExcel = async () => {
     setExcelError("");
     setDownloadingExcel(true);
