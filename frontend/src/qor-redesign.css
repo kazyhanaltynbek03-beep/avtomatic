@@ -446,3 +446,24 @@ main[data-page="accounts"] .data-table,main[data-page="users"] .data-table,main[
   .modal-footer .primary,.modal-footer .secondary {min-width:0;width:100%}
 }
 
+
+
+/* Final desktop and navigation refinement from the live production audit. */
+:root { --qor-muted:#64756c; }
+.app > aside nav { overflow-x:clip; }
+.app > aside nav section,.app > aside .nav-item { min-width:0; }
+.app > aside .nav-item { width:100%; white-space:normal; overflow-wrap:anywhere; }
+.app > aside nav h4 { color:#a3c8b5; }
+.app > aside .nav-item { color:#d0e2d8; }
+.app > aside .nav-item.active { color:#fff; }
+@media(min-width:961px) {
+  main[data-page="sales"] .qor-sales-grid { gap:8px; }
+  main[data-page="sales"] .qor-sale-card { grid-template-columns:76px minmax(0,1fr); min-height:98px; }
+  main[data-page="sales"] .qor-sale-card .qor-item-image { min-height:76px; align-self:center; margin:10px; }
+  main[data-page="sales"] .qor-sale-card .qor-item-body { padding:10px 14px; }
+  main[data-page="sales"] .qor-sale-heading h3 { font-size:13px; line-height:1.35; }
+  main[data-page="sales"] .qor-item-facts { gap:8px 18px; font-size:11px; }
+  main[data-page="sales"] .qor-item-facts span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  main[data-page="sales"] .qor-sale-card .row-actions { gap:6px; }
+  main[data-page="sales"] .qor-sale-card .row-actions .secondary { min-height:32px; padding:6px 10px; }
+}
