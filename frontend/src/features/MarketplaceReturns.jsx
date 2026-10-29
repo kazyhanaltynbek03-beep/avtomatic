@@ -56,7 +56,8 @@ const inventoryNext = {
   defective: ["written_off", "Списать брак"],
 };
 
-function InventoryAction({ item, onUpdated, allowInventory }) {\n  if (!allowInventory) return null;
+function InventoryAction({ item, onUpdated, allowInventory }) {
+  if (!allowInventory) return null;
   const [match, setMatch] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
