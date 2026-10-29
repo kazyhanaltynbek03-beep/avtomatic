@@ -15,6 +15,7 @@ const labels = {
 };
 const showDate = (value) => value ? new Date(`${value}T12:00:00+06:00`).toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty" }) : "Не подтверждено";
 const returnAmount = (value) => value == null ? "Не подтверждено" : `−${money(value)}`;
+const returnDate = (item) => item.request_date || item.financial_return_date || item.detected_date;
 const storeLabel = (store) => store?.store || store?.name || store?.account_name || store?.marketplace || "магазин";
 
 function Metric({ title, value, caption, tone = "", onClick, active = false }) {
@@ -25,7 +26,7 @@ function Metric({ title, value, caption, tone = "", onClick, active = false }) {
 
 function ReturnDetails({ item }) {
   return <details className="returns-detail"><summary>Подробности</summary><dl>
-    <dt>Дата первоначального заказа</dt><dd>{showDate(item.order_date)}</dd>
+    <dt>ID возврата маркетплейса</dt><dd>{item.external_return_id || "Не указан источником"}</dd>\n    <dt>ID товара в системе</dt><dd>{item.product_id ?? "Товар ещё не сопоставлен"}</dd>\n    <dt>Дата первоначального заказа</dt><dd>{showDate(item.order_date)}</dd>
     <dt>Дата выдачи</dt><dd>{showDate(item.issue_date)}</dd>
     <dt>Дата заявки</dt><dd>{showDate(item.request_date)}</dd>
     <dt>Дата финансовой операции</dt><dd>{showDate(item.financial_return_date)}</dd>
@@ -59,6 +60,8 @@ const inventoryNext = {
 
 function InventoryAction({ item, onUpdated, allowInventory }) {
   const [match, setMatch] = useState(null);
+  const [selectedStatus, setSelectedStatus] = useState("");
+  const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const link = async () => {
@@ -71,33 +74,51 @@ function InventoryAction({ item, onUpdated, allowInventory }) {
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
-  const update = async (status) => {
-    if (!match?.matched || busy) return;
-    let reason = "";
-    if (status === "defective" || status === "written_off") {
-      reason = window.prompt(status === "defective" ? "Укажите причину брака" : "Укажите причину списания брака", "") || "";
-      if (reason.trim().length < 3) { setError("Для фиксации брака нужна причина."); return; }
+  const update = async () => {
+    if (!match?.matched || !selectedStatus || busy) return;
+    if (["defective", "written_off"].includes(selectedStatus) && reason.trim().length < 3) {
+      setError("Укажите причину брака (не менее 3 символов).");
+      return;
     }
     setBusy(true); setError("");
     try {
-      const result = await api(`/returns/${match.return_id}/status`, { method: "POST", body: { status, reason } });
-      setMatch((current) => ({ ...current, status: result.inventory_status || status }));
+      const result = await api(`/returns/${match.return_id}/status`, {
+        method: "POST", body: { status: selectedStatus, reason: reason.trim() },
+      });
+      const savedStatus = result.inventory_status || selectedStatus;
+      setMatch((current) => ({ ...current, status: savedStatus }));
+      setSelectedStatus("");
+      setReason("");
       onUpdated?.();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
   const next = match?.matched ? inventoryNext[match.status] : null;
   if (!allowInventory) return null;
-  return <div className="returns-inventory-action" style={{ display: "grid", gap: 8, marginTop: 10, padding: "8px 0", borderTop: "1px solid #d9e3dd" }}>
-    <strong>Единый склад</strong>
+  return <div className="returns-inventory-action">
+    <strong>Учёт товара на едином складе</strong>
     {match?.matched ? <>
-      <span>{inventoryStatusLabels[match.status] || match.status} · {match.quantity} шт.</span>
-      {match.status === "inspection" ? <div className="returns-inventory-buttons" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        <button type="button" className="primary" disabled={busy} onClick={() => update("restocked")}>Пригоден · вернуть в остаток</button>
-        <button type="button" className="secondary" disabled={busy} onClick={() => update("defective")}>Брак</button>
-      </div> : next ? <button type="button" className="secondary" disabled={busy} onClick={() => update(next[0])}>{next[1]}</button> : null}
-    </> : <button type="button" className="secondary" disabled={busy} onClick={link}>{busy ? "Проверяем…" : "Проверить связь со складом"}</button>}
-    {error && <small role="status">{error}</small>}
+      <span className="returns-inventory-current">Текущий статус: <b>{inventoryStatusLabels[match.status] || match.status}</b> · {match.quantity} шт.</span>
+      {next ? <>
+        <label className="returns-inventory-select-label">Следующий статус
+          <select value={selectedStatus} onChange={(e) => { setSelectedStatus(e.target.value); setError(""); }}>
+            <option value="">Выберите действие</option>
+            {[next].flatMap(([value, title]) => value === "restocked" || value === "defective"
+              ? [["restocked", "Пригоден · вернуть в остаток"], ["defective", "Брак · не добавлять в доступный остаток"]]
+              : [[value, title]]).map(([value, title]) => <option key={value} value={value}>{title}</option>)}
+          </select>
+        </label>
+        {["defective", "written_off"].includes(selectedStatus) && <label className="returns-inventory-reason-label">Причина брака
+          <input value={reason} maxLength={160} onChange={(e) => setReason(e.target.value)} placeholder="Например: повреждена упаковка"/>
+        </label>}
+        <button type="button" className="primary returns-inventory-save" disabled={busy || !selectedStatus} onClick={update}>
+          {busy ? "Сохраняем…" : "Сохранить статус этого товара"}
+        </button>
+      </> : <span className="returns-inventory-final">{inventoryStatusLabels[match.status] || "Статус завершён"}</span>}
+    </> : <button type="button" className="secondary" disabled={busy} onClick={link}>
+      {busy ? "Проверяем связь…" : "Связать возврат с продажей и складом"}
+    </button>}
+    {error && <small className="returns-inventory-error" role="alert">{error}</small>}
   </div>;
 }
 
@@ -106,17 +127,17 @@ function ReturnRow({ item, onUpdated, allowInventory }) {
   return <>
     <tr className="returns-desktop-row">
       <td><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><small className="returns-store">{item.store}</small></td>
-      <td><strong>{item.order_id || "Не подтверждено"}</strong><small>{item.sku || "SKU не найден"}</small></td>
+      <td><strong>{item.order_id || "Заказ не подтверждён"}</strong><small>{item.sku || "SKU не найден"}</small><small>ID возврата: {item.external_return_id || "—"}</small></td>
       <td className="returns-product-cell">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<span>{title}</span></td>
       <td>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</td>
-      <td>{item.financial_return_date ? showDate(item.financial_return_date) : "Не подтверждено"}</td>
+      <td>{showDate(returnDate(item))}</td>
       <td>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</td>
       <td><span className="returns-status">{labels[item.status] || item.status}</span><small className="returns-muted">{item.financial_status === "confirmed" ? "Финансы подтверждены" : "Ожидает финансового подтверждения"}</small><ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/></td>
     </tr>
     <article className="returns-mobile-card">
       <header><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><span className="returns-status">{labels[item.status] || item.status}</span></header>
       <div className="returns-mobile-product">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<div><strong>{title}</strong><small>{item.sku || "SKU не найден"} · {item.store}</small></div></div>
-      <div className="returns-mobile-facts"><span>Заказ <b>{item.order_id || "Не подтверждено"}</b></span><span>Кол-во <b>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</b></span><span>Дата возврата <b>{showDate(item.financial_return_date)}</b></span><span>Сумма <b>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</b></span></div>
+      <div className="returns-mobile-facts"><span>ID возврата <b>{item.external_return_id || "—"}</b></span><span>Заказ <b>{item.order_id || "Не подтверждено"}</b></span><span>Товар / SKU <b>{item.sku || item.product_id || "Не сопоставлен"}</b></span><span>Кол-во <b>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</b></span><span>Дата возврата <b>{showDate(returnDate(item))}</b></span><span>Сумма <b>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</b></span></div>
       <ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/>
     </article>
   </>;
@@ -244,7 +265,7 @@ export default function MarketplaceReturns({ ctx }) {
       const form = new FormData(); form.append("file", statementFile); form.append("account_id", statementAccount); form.append("mapping", JSON.stringify(statementMapping));
       const result = await api("/marketplace-returns/financial-statement/import", { method:"POST", body:form });
       setStatementMessage(`Импортировано: ${result.imported}, связано с найденными возвратами: ${result.updated}${result.errors?.length ? `, строки с ошибками: ${result.errors.length}` : ""}.`);
-      setStatementFile(null); setStatementPreview(null); setStatementMapping({}); setPollTick((n) => n + 1);
+      setStatementFile(null); setStatementPreview(null); setStatementMapping({}); setListRefreshTick((n) => n + 1); setPollTick((n) => n + 1);
       if (fileRef.current) fileRef.current.value = "";
       ctx.notify("Выписка добавлена только в отдельный журнал возвратов");
     } catch (e) { setActionError(e.message); }
@@ -299,7 +320,7 @@ export default function MarketplaceReturns({ ctx }) {
     </div>
     <section className="returns-reconciliation"><div className="returns-reconciliation-title"><PackageCheck size={18}/><strong>Финансовая сверка возвратов</strong><span>Тестовый режим</span></div><div className="returns-reconciliation-grid"><div><small>Текущая сумма отчёта</small><strong>Требует выбора финансового источника</strong></div><div><small>Подтверждённые возвраты за период</small><strong>{summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"}</strong></div><div><small>Уже учтено / ещё не учтено</small><strong>{summary.accounted_amount || summary.not_accounted_amount ? `${money(summary.accounted_amount)} / ${money(summary.not_accounted_amount)}` : "Сверка не выполнена"}</strong></div><div><small>Отдельный скорректированный итог</small><strong>Не рассчитывается автоматически</strong></div></div><p>Автовычитание отключено: возврат не уменьшается повторно, если он уже есть в отчёте. Выручка, прибыль, выплата и денежный поток сверяются отдельно.</p></section>
     {loading && !data ? <Spinner/> : error ? <ErrorBox error={error}/> : records.length ? <>
-      <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={`${item.id}:${pollTick}`} item={item} onUpdated={() => setPollTick((n) => n + 1)} allowInventory={inventoryWrite}/>)}</tbody></table></div>
+      <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={item.id} item={item} onUpdated={() => setListRefreshTick((n) => n + 1)} allowInventory={inventoryWrite}/>)}</tbody></table></div>
       <div className="returns-pagination"><span>{data.total} записей · страница {currentPage} из {Math.max(pageCount, 1)}</span><div><button disabled={!offset} aria-label="Предыдущая страница" onClick={() => setOffset(Math.max(0, offset - 30))}><ChevronLeft size={18}/></button><button disabled={offset + 30 >= data.total} aria-label="Следующая страница" onClick={() => setOffset(offset + 30)}><ChevronRight size={18}/></button></div></div>
     </> : <div className="returns-empty"><Clock3 size={24}/><strong>Возвраты пока не найдены</strong><span>Записи появятся после проверки сохранённых данных маркетплейса. Открытие страницы не запускает полную синхронизацию.</span></div>}
   </section>;
