@@ -557,7 +557,7 @@ export default function App() {
               onLogout={() => setAuth(null)}
             />
           ) : page === "expenses" ? (
-            <><ExpenseSummary ctx={ctx}/><DataPage key={page} page={page} ctx={ctx}/></>
+            <ExpensesPage ctx={ctx}/>
           ) : page === "cash" ? (
             <><div className="panel cash-help"><h2>Что здесь учитывается</h2><p>Cash Flow — это фактические поступления и выплаты за период. Здесь отражаются проведённые денежные операции; прибыль считается отдельно по продажам, себестоимости и расходам.</p></div><DataPage key={page} page={page} ctx={ctx}/></>
            ) : (
@@ -754,8 +754,8 @@ function CostPendingNotice({ report, ctx }) {
     </div>
   );
 }
-function ExpenseSummary({ ctx }) {
-  const [channelFilter, setChannelFilter] = useState("all");
+
+function ExpenseSummary({ ctx, channelFilter, setChannelFilter }) {
   const params = new URLSearchParams({start:ctx.start, end:ctx.end});
   if (ctx.company) params.set("company_id", ctx.company);
   const {data, error, loading} = useLoad(`/expenses/summary?${params}`, ctx.refresh);
@@ -830,6 +830,105 @@ function ExpenseSummary({ ctx }) {
     <p className="panel-note">Проведено — подтверждённые операции из учёта. Расчётная комиссия показана отдельно и не является фактическим удержанием или выплатой.</p>
   </section>;
 }
+function ExpenseOperations({ ctx, channelFilter }) {
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("all");
+  const pageSize = 200;
+
+  const buildPath = (offset = 0) => {
+    const params = new URLSearchParams({start:ctx.start, end:ctx.end, limit:String(pageSize), offset:String(offset)});
+    if (ctx.company) params.set("company_id", ctx.company);
+    if (channelFilter !== "all") params.set("channel", channelFilter);
+    return "/expenses/operations?" + params.toString();
+  };
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError("");
+    setItems([]);
+    setTotal(0);
+    api(buildPath(0)).then((data) => {
+      if (!alive) return;
+      setItems(data.items || []);
+      setTotal(Number(data.total || 0));
+    }).catch((e) => {
+      if (alive) setError(e.message || "Не удалось загрузить список расходов");
+    }).finally(() => {
+      if (alive) setLoading(false);
+    });
+    return () => { alive = false; };
+  }, [ctx.start, ctx.end, ctx.company, ctx.refresh, channelFilter]);
+
+  const loadMore = async () => {
+    if (loadingMore || items.length >= total) return;
+    setLoadingMore(true);
+    setError("");
+    try {
+      const data = await api(buildPath(items.length));
+      setItems((current) => [...current, ...(data.items || [])]);
+    } catch (e) {
+      setError(e.message || "Не удалось загрузить следующие расходы");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+  const categories = [...new Set(items.map((row) => row.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const normalizedSearch = search.trim().toLocaleLowerCase("ru");
+  const visible = items.filter((row) => {
+    if (category !== "all" && row.category !== category) return false;
+    if (!normalizedSearch) return true;
+    return [row.date,row.channel,row.account_name,row.category,row.reference,row.product_name,row.sku,row.product_id,row.record_id,row.description]
+      .some((value) => String(value ?? "").toLocaleLowerCase("ru").includes(normalizedSearch));
+  });
+  const channelLabel = channelFilter === "all" ? "все каналы" : channelFilter;
+  return <section className="panel expense-operations" aria-label="Отдельные операции расходов">
+    <div className="panel-heading expense-operations-heading">
+      <div><h2>Список расходов</h2><p className="muted">Отдельные проведённые операции · {channelLabel} · {ctx.start} — {ctx.end}</p></div>
+      <strong className="expense-operation-count">{items.length} из {total}</strong>
+    </div>
+    <div className="expense-operation-filters">
+      <label className="expense-operation-search"><Search size={16}/><input aria-label="Поиск по расходам" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Поиск: дата, товар, SKU, ID, документ"/></label>
+      <label>Статья расхода<select value={category} onChange={(e)=>setCategory(e.target.value)}><option value="all">Все статьи</option>{categories.map((name)=><option key={name}>{name}</option>)}</select></label>
+    </div>
+    {error && <ErrorBox error={error}/>}
+    {loading ? <Spinner/> : visible.length ? <>
+      <div className="expense-operations-desktop">
+        <table><thead><tr><th>Дата</th><th>Статья</th><th>Канал / магазин</th><th>Товар / SKU</th><th>ID товара</th><th>ID операции / документ</th><th>Статус</th><th>Сумма</th></tr></thead>
+          <tbody>{visible.map((row)=><tr key={row.key}>
+            <td>{row.date}</td><td className="strong">{row.category}</td><td>{row.channel}<small className="expense-operation-sub">{row.account_name}</small></td>
+            <td>{row.product_name || row.sku ? <>{row.product_name || "Товар"}<small className="expense-operation-sub">{row.sku || "SKU не указан"}</small></> : "—"}</td>
+            <td>{row.product_id ?? "—"}</td><td>{row.reference}<small className="expense-operation-sub">ID записи: {row.record_id}</small></td><td><span className="expense-operation-status">{row.status}</span></td><td className="strong expense-operation-amount">{money(row.amount)}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+      <div className="expense-operations-mobile">
+        {visible.map((row)=><article className="expense-operation-card" key={row.key}>
+          <header><div><strong>{row.category}</strong><span>{row.date} · {row.channel}</span></div><b>{money(row.amount)}</b></header>
+          <dl>
+            <div><dt>Магазин</dt><dd>{row.account_name}</dd></div>
+            <div><dt>Товар</dt><dd>{row.product_name || row.sku || "—"}{row.sku && row.product_name ? <small>SKU: {row.sku}</small> : null}</dd></div>
+            <div><dt>ID товара</dt><dd>{row.product_id ?? "—"}</dd></div>
+            <div><dt>ID операции / документ</dt><dd>{row.reference}<small>ID записи: {row.record_id}</small></dd></div>
+            <div><dt>Статус</dt><dd>{row.status}</dd></div>
+          </dl>
+        </article>)}
+      </div>
+    </> : <Empty text={items.length ? "По этому поиску расходов нет." : "За выбранный период проведённых расходов нет."}/>}
+    {!loading && items.length < total && <button className="secondary expense-load-more" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? "Загружаем…" : `Показать ещё · осталось ${total - items.length}`}</button>}
+    <p className="panel-note">В списке показаны фактические расходы и суммы комиссии, логистики и рекламы, записанные в продажах. Расчётная комиссия Kaspi отображается отдельно выше: у дневной оценки нет отдельного ID операции или товара.</p>
+  </section>;
+}
+function ExpensesPage({ ctx }) {
+  const [channelFilter, setChannelFilter] = useState("all");
+  return <><ExpenseSummary ctx={ctx} channelFilter={channelFilter} setChannelFilter={setChannelFilter}/><ExpenseOperations ctx={ctx} channelFilter={channelFilter}/><DataPage key="expenses" page="expenses" ctx={ctx}/></>;
+}
+
 function ReportPage({ page, ctx }) {
   const [detailMetric, setDetailMetric] = useState(null), [alertRetry, setAlertRetry] = useState(0);
   const usesDashboard = page === "dashboard" || page === "analytics";
