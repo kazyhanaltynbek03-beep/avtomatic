@@ -961,17 +961,17 @@ function ReportPage({ page, ctx }) {
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
     page === "forecast" ? null : reportPath,
     ctx.refresh,
-    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
+    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 1800 : 0 },
   );
   const { data: dash, error: dashError, loading: dashLoading } = useLoad(
     usesDashboard ? summaryPath : null,
     ctx.refresh,
-    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
+    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 1800 : 0 },
   );
   // Match Kaspi/WB turnover to the dedicated marketplace pages. Profit and cost
   // reports continue to use the existing finance engine.
-  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
-  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
+  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 1800 : 0});
+  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 1800 : 0});
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
