@@ -359,3 +359,32 @@ def test_mapped_kaspi_and_wb_api_sales_replay_once_and_refund_does_not_restock(c
         ("Kaspi",20), ("Wildberries",40),
     }
     assert product["inventory"]["reconciliation_status"] == "confirmed"
+
+
+def test_marketplace_mapping_rejects_active_sync_but_recovers_stale_sync(client):
+    from datetime import timedelta
+    from app.db import SessionLocal
+    from app.models import Account, now
+
+    with SessionLocal() as db:
+        account = db.get(Account, 1)
+        account.sync_status = "running"
+        account.last_sync = now()
+        account.sync_error = "KASPI_PERIOD_SYNC"
+        db.commit()
+
+    active = client.post("/api/products/1/marketplace-mappings", json={
+        "account_id": 1, "id_type": "product", "external_id": "kaspi-active-sync",
+    })
+    assert active.status_code == 409
+
+    with SessionLocal() as db:
+        account = db.get(Account, 1)
+        account.last_sync = now() - timedelta(minutes=6)
+        db.commit()
+
+    recovered = client.post("/api/products/1/marketplace-mappings", json={
+        "account_id": 1, "id_type": "product", "external_id": "kaspi-stale-sync",
+    })
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["external_key"] == "product:kaspi-stale-sync"
