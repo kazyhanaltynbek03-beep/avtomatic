@@ -115,7 +115,7 @@ export const forms = {
     field("active", "Активна", "checkbox"),
   ],
   products: [
-    field("sku", "SKU", "text", { required: true }),
+    field("sku", "SKU (можно изменить)", "text", { required: true }),
     field("name", "Название", "text", { required: true }),
     field("description", "Описание", "longtext"),
     field("category", "Категория"),
