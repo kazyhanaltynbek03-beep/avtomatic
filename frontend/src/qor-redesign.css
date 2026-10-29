@@ -117,3 +117,26 @@ table tbody tr:hover {background:#f7faf8}
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after {scroll-behavior:auto!important;transition:none!important;animation-duration:.01ms!important;animation-iteration-count:1!important}
 }
+
+/* Keep the SKU company selector and its explanation readable inside the form. */
+.modal label.wide {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  align-items:start;
+  gap:8px;
+  width:100%;
+}
+.modal label.wide select,
+.modal label.wide input {
+  width:100%;
+  min-width:0;
+  max-width:100%;
+}
+.modal label.wide small {
+  display:block;
+  max-width:100%;
+  line-height:1.45;
+}
+@media(max-width:700px) {
+  .modal label.wide {gap:7px}
+}
