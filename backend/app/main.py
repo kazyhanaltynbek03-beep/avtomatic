@@ -44,6 +44,10 @@ app = FastAPI(
 )
 logger = logging.getLogger(__name__)
 SYNC_RUNNING_TIMEOUT_SECONDS = max(60, int(os.getenv("MARKETPLACE_SYNC_TIMEOUT_SECONDS", "1800")))
+KASPI_JOB_RECOVERY_GRACE_SECONDS = min(
+    SYNC_RUNNING_TIMEOUT_SECONDS,
+    max(60, int(os.getenv("KASPI_JOB_RECOVERY_GRACE_SECONDS", "300"))),
+)
 KASPI_API_HISTORY_DAYS = max(1, int(os.getenv("KASPI_API_HISTORY_DAYS", "370")))
 CLAUDE_SKILL_INSTALL_LOCK = threading.Lock()
 
@@ -117,7 +121,7 @@ def _resume_kaspi_jobs_once():
                                "status":"retry","retry_at":now().isoformat(),"batches":0,"records":0}
             if job.get("status") not in {"running", "retry"}:
                 continue
-            if job["status"] == "running" and heartbeat and heartbeat > now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS):
+            if job["status"] == "running" and heartbeat and heartbeat > now()-timedelta(seconds=KASPI_JOB_RECOVERY_GRACE_SECONDS):
                 continue
             if job["status"] == "retry" and datetime.fromisoformat(job["retry_at"]) > now():
                 continue
