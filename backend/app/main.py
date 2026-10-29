@@ -2898,7 +2898,7 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
         f.get_company(db, u, company_id)
     r = f.report(db, u, business_today().replace(day=1), business_today(), company_id)
     reported = {row["product_id"]: row for row in r["stock"]}
-    products = scope_query(select(Product).where(Product.active.is_(True)), Product, u).scalars().all()
+    products = db.scalars(scope_query(select(Product).where(Product.active.is_(True)), Product, u)).all()
     rows = []
     for product in products:
         specs = product.specifications or {}
