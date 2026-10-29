@@ -620,7 +620,7 @@ def reconcile_wb_generated_expenses(db,acc,rows):
     return 0
 
 
-def project_account(db, user, acc, external_ids=None, date_from=None, date_to=None):
+def project_account(db, user, acc, external_ids=None, date_from=None, date_to=None, reconcile_pending=True):
     query = select(MarketplaceRecord).where(MarketplaceRecord.account_id == acc.id,
         MarketplaceRecord.company_id == acc.company_id)
     if external_ids is not None:
@@ -673,7 +673,7 @@ def project_account(db, user, acc, external_ids=None, date_from=None, date_to=No
     # Reprocessing closes only the missing COGS leg; it never duplicates revenue.
     pending_sales = db.scalars(select(Sale).where(
         Sale.company_id == acc.company_id, Sale.account_id == acc.id, Sale.cogs_pending.is_(True)
-    ).order_by(Sale.date, Sale.id)).all()
+    ).order_by(Sale.date, Sale.id)).all() if reconcile_pending else []
     cogs_reconciled = 0
     for sale_obj in pending_sales:
         cogs_reconciled += int(f.settle_pending_sale_cogs(db, user, sale_obj))

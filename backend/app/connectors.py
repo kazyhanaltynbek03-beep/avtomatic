@@ -163,6 +163,11 @@ class KaspiConnector(Connector):
         status_only = state.get("scope") == "status_only"
         period_mode = state.get("scope") in {"period", "status_only"}
         period_scope = "status_only" if status_only else "period"
+        # Versioned scans explicitly enumerate every documented state. Legacy
+        # cursors remain readable, but cannot certify a complete period.
+        strict_scan = state.get("scan_version") == 3
+        states = ("ARCHIVE", "NEW", "SIGN_REQUIRED", "PICKUP", "DELIVERY", "KASPI_DELIVERY")
+        state_index = int(state.get("state_index") or 0)
         history_start = now - timedelta(days=370)
         # Legacy cursors were created by oldest-first syncs. Restart those from
         # the latest week; previously imported rows are upserted by external ID.
@@ -190,6 +195,8 @@ class KaspiConnector(Connector):
             "filter[orders][creationDate][$ge]": int(window_start.timestamp()*1000),
             "filter[orders][creationDate][$le]": int(window_end.timestamp()*1000),
             **({} if period_mode else {"include[orders]": "user"})}
+        if strict_scan:
+            params["filter[orders][state]"] = states[state_index]
         # Even when refreshing cached statuses, fetch the selected creation-date
         # window. Kaspi does not offer a completion-date filter, and historical
         # cache hits must still discover newly issued orders created in that window.
@@ -205,7 +212,10 @@ class KaspiConnector(Connector):
                 ) from exc
             raise
         data = payload.get("data") or []
-        selected = data[offset:offset+(100 if status_only else 10)]
+        selected = data[offset:offset+(5 if strict_scan else (100 if status_only else 10))]
+        page_count = (payload.get("meta") or {}).get("pageCount")
+        if strict_scan and not data and page_count is not None and page < int(page_count):
+            raise AccessRequired("Kaspi: пустая страница до конца выдачи; повторите загрузку")
         extras_selected = False
         extras_requested = 0
         missing_errors = []
@@ -234,6 +244,16 @@ class KaspiConnector(Connector):
             oid = str(item.get("id") or a.get("code") or "")
             if not oid:
                 raise AccessRequired("Kaspi: заказ без устойчивого идентификатора")
+            if strict_scan and str(a.get("status") or "").upper() in {"COMPLETED", "RETURNED"}:
+                # The list response can omit dates present in the code lookup.
+                needs_detail = not a.get("completionDate") or (
+                    a.get("status") == "RETURNED" and not (a.get("returnedDate") or a.get("returnDate")))
+                if needs_detail and a.get("code"):
+                    _, detail = _json_request(self.base_url + "?" + urlencode({"filter[orders][code]":a["code"]}), self._headers())
+                    matches = [x for x in detail.get("data") or [] if str(x.get("id")) == oid]
+                    if len(matches) != 1:
+                        raise AccessRequired("Kaspi: детали заказа не совпали с запросом; страница не завершена")
+                    a = {**a, **{k:v for k,v in (matches[0].get("attributes") or {}).items() if v is not None}}
             order = {"external_id": "order:"+oid, "record_type": "order", "order_id": oid,
                 "code": a.get("code"), "total_price": a.get("totalPrice"),
                 "delivery_cost_for_seller": a.get("deliveryCostForSeller"),
@@ -275,12 +295,16 @@ class KaspiConnector(Connector):
             # Cached orders already have lines. For new orders in a status-only
             # scan, fetch line details only when the sale/return belongs to the
             # selected event-date report.
-            if extras_selected or (status_only and (
+            if strict_scan and str(a.get("code") or "") in (state.get("known_entry_counts") or {}):
+                order["entries_complete"] = True
+                order["entries_count"] = state["known_entry_counts"][str(a["code"])]
+                continue
+            if extras_selected or (status_only and not strict_scan and (
                 str(a.get("code") or "") in set(state.get("known_order_ids") or [])
                 or str(a.get("code") or "") in set(state.get("extra_ids") or [])
             )):
                 continue
-            if status_only:
+            if status_only and not strict_scan:
                 event_start_ms = int(state.get("event_start_ms") or 0)
                 event_end_ms = int(state.get("event_end_ms") or 0)
                 event_dates = (a.get("completionDate"), a.get("returnedDate") or a.get("returnDate"))
@@ -292,21 +316,30 @@ class KaspiConnector(Connector):
                     continue
             try:
                 entry_page = 0
+                entry_count = 0
                 while True:
                     url = f"{self.base_url}/{quote(oid, safe='')}/entries?" + urlencode({"page[number]": entry_page, "page[size]":100})
                     _, ep = _json_request(url, self._headers())
                     entries = ep.get("data") or []
+                    if strict_scan and entry_page == 0 and not entries:
+                        raise AccessRequired("Kaspi: состав заказа пуст; страница требует повторной загрузки")
                     for entry in entries:
+                        entry_count += 1
                         ea = entry.get("attributes") or {}; eid = str(entry.get("id") or "")
                         if not eid:
                             raise AccessRequired("Kaspi: позиция без идентификатора")
                         product = {}; merchant = {}; mapping_error = ''
                         try:
-                            _, pp = _json_request("https://kaspi.kz/shop/api/v2/orderentries/" + quote(eid, safe='') + "/product", self._headers())
-                            product = pp.get('data') or {}
-                            if product.get('id'):
-                                _, mp = _json_request("https://kaspi.kz/shop/api/v2/masterproducts/" + quote(str(product['id']), safe='') + "/merchantProduct", self._headers())
-                                merchant = mp.get('data') or {}
+                            offer = ea.get("offer") or {}
+                            if strict_scan and offer.get("code") and offer.get("name"):
+                                product = ((entry.get("relationships") or {}).get("product") or {}).get("data") or {}
+                                merchant = {"attributes": offer}
+                            else:
+                                _, pp = _json_request("https://kaspi.kz/shop/api/v2/orderentries/" + quote(eid, safe='') + "/product", self._headers())
+                                product = pp.get('data') or {}
+                                if product.get('id'):
+                                    _, mp = _json_request("https://kaspi.kz/shop/api/v2/masterproducts/" + quote(str(product['id']), safe='') + "/merchantProduct", self._headers())
+                                    merchant = mp.get('data') or {}
                         except AccessRequired as exc:
                             mapping_error = str(exc)
                             errors.append('product:'+eid+': '+mapping_error)
@@ -329,6 +362,8 @@ class KaspiConnector(Connector):
                         break
                     if entry_page >= 10000:
                         raise AccessRequired('Kaspi: превышен лимит страниц позиций; sync не завершён')
+                order["entries_complete"] = True
+                order["entries_count"] = entry_count
             except AccessRequired as exc:
                 errors.append('entries:'+oid+': '+str(exc))
         next_state = None
@@ -344,6 +379,9 @@ class KaspiConnector(Connector):
             "event_start_ms": state.get("event_start_ms"),
             "event_end_ms": state.get("event_end_ms"),
         }
+        if strict_scan:
+            period_state.update(scan_version=3, state_index=state_index,
+                                known_entry_counts=state.get("known_entry_counts") or {})
         if status_only:
             period_state.update({"direction": "backward", "min_start_ms": initial_start_ms})
         elif period_mode:
@@ -370,14 +408,19 @@ class KaspiConnector(Connector):
                     # detailed entries for orders already in the local history.
                     period_state["page"] = page + 1
                     next_state = period_state
+                elif strict_scan and state_index + 1 < len(states):
+                    period_state.update(state_index=state_index + 1, page=0, offset=0)
+                    next_state = period_state
                 elif status_only and window_start > min_start:
                     period_state["until_ms"] = int((window_start - timedelta(milliseconds=1)).timestamp() * 1000)
                     period_state["page"] = 0
+                    period_state["state_index"] = 0
                     next_state = period_state
                 elif not status_only and window_end < until:
                     period_state["start_ms"] = int((window_end + timedelta(milliseconds=1)).timestamp() * 1000)
                     period_state["page"] = 0
                     period_state["offset"] = 0
+                    period_state["state_index"] = 0
                     next_state = period_state
                 elif period_state["extra_offset"] < len(period_state["extra_ids"]):
                     period_state["offset"] = len(data)
@@ -394,6 +437,9 @@ class KaspiConnector(Connector):
                 next_state = {"_qor_kaspi_cursor":1,"direction":"forward",
                     "start_ms":int((window_end+timedelta(milliseconds=1)).timestamp()*1000),
                     "until_ms":int(until.timestamp()*1000),"page":0,"offset":0}
+        if strict_scan and errors:
+            # Never checkpoint past an order whose entries/product lookup failed.
+            raise AccessRequired("Kaspi: неполные детали страницы; " + "; ".join(errors)[:350])
         next_cursor = json.dumps(next_state,separators=(",",":")) if next_state else None
         return SyncResult('kaspi', list(records.values()),
             f'Kaspi: {len(records)} записей, {pages} страниц, обработано до 10 заказов.', next_cursor=next_cursor, warnings=errors)

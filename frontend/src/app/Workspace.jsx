@@ -2239,11 +2239,12 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const active=Boolean(range);
   const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
+  const retryPending=summary.data?.source_quality?.progress?.some(p=>p.status==="retry");
   useEffect(()=>{
-    if(channel!=="Kaspi"||!active||summary.data?.sync_status!=="running") return;
+    if(channel!=="Kaspi"||!active||(summary.data?.sync_status!=="running"&&!retryPending)) return;
     const timer=window.setInterval(()=>setRefresh(value=>value+1),5000);
     return ()=>window.clearInterval(timer);
-  },[channel,active,summary.data?.sync_status]);
+  },[channel,active,summary.data?.sync_status,retryPending]);
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
   const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
   const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh);
@@ -2285,7 +2286,9 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
     {active&&<>
       {channel==="Wildberries" ? <WBFinanceReport key={`client-custom:${range.start}:${range.end}`} accounts={selectedAccount?[selectedAccount]:accounts} company={ctx.company} period="custom" start={range.start} end={range.end}/> : <>
         {summary.loading&&!summary.data?<Spinner/>:summary.error?<ErrorBox error={summary.error}/>:<>
-          <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. {summary.data?.sync_status==="running"?"Загружаем API-страницы; данные обновляются автоматически. Выгрузка станет доступна после завершения.":summary.data?.source_complete?"Источник подтверждён как полный для доступного API-окна.":"Источник пока не подтверждён как полный; проверьте ошибки и повторите синхронизацию."}</p>
+          <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. {summary.data?.sync_status==="running"?"Загружаем API-страницы; данные обновляются автоматически. Выгрузка станет доступна после завершения.":summary.data?.source_complete?"Обход API завершён для настроенного окна истории; обязательные данные проверены.":"Источник пока не подтверждён как полный; проверьте ошибки и повторите синхронизацию."}</p>
+          {summary.data?.source_quality?.progress?.map(p=><p className="muted" key={p.account_id}>Магазин #{p.account_id}: обработано пакетов {p.batches}, записей {p.records}. {p.scan_from&&`История с ${p.scan_from}; текущая граница ${p.scan_through}.`} {p.state&&`Состояние ${p.state}, страница ${p.page+1}.`}</p>)}
+          {summary.data?.source_quality&&!summary.data.source_quality.data_complete&&<p role="status">Требуется сверка: заказов с неполным составом — {summary.data.source_quality.issues.missing_entries}; без даты выдачи — {summary.data.source_quality.issues.missing_completion_date}; возвратов без даты — {summary.data.source_quality.issues.missing_return_date}; некорректных позиций — {summary.data.source_quality.issues.invalid_lines}; без кода товара — {summary.data.source_quality.issues.missing_product_identity}; позиций без заказа — {summary.data.source_quality.issues.orphan_entries}. Недостающие даты возвратов нужно подтвердить выпиской; дата продажи вместо них не используется.</p>}
           <div className="marketplace-report-summary">
         {[ ["Продажи API",apiAvailable?summary.data?.api_gross_revenue:null], ["Продажи после возвратов",apiAvailable?summary.data?.api_revenue:null], ["Единиц продано",!apiAvailable?"Нет данных":summary.data?.api_units==null?"—":`${summary.data.api_units} шт.`], ["Возвраты",!apiAvailable?"Нет данных":summary.data?.api_returns==null?"—":summary.data.api_returns], ["Единиц возврата",!apiAvailable?"Нет данных":summary.data?.api_return_units==null?"—":`${summary.data.api_return_units} шт.`] ].map(([label,value])=><article className="kpi" key={label}><span>{label}</span><strong>{typeof value==="number"?money(value):value??"Нет подтверждённых данных"}</strong></article>)}
           </div>

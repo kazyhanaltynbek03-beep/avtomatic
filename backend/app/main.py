@@ -34,6 +34,7 @@ from . import schemas as s, finance as f, importing, ai, action_engine, reportin
 from .connectors import AccessRequired, connector, load_saved_credentials
 from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
+from . import kaspi_integrity
 
 app = FastAPI(
     title="QOR Business ERP",
@@ -43,7 +44,7 @@ app = FastAPI(
 )
 logger = logging.getLogger(__name__)
 SYNC_RUNNING_TIMEOUT_SECONDS = max(60, int(os.getenv("MARKETPLACE_SYNC_TIMEOUT_SECONDS", "1800")))
-KASPI_API_HISTORY_DAYS = 370
+KASPI_API_HISTORY_DAYS = max(1, int(os.getenv("KASPI_API_HISTORY_DAYS", "370")))
 CLAUDE_SKILL_INSTALL_LOCK = threading.Lock()
 
 
@@ -65,16 +66,12 @@ def sync_status_for_display(account, at=None):
 
 
 def _kaspi_issued_scan_start(today_local):
-    """Kaspi filters orders by creation date, so scan its full retained history
-    when reporting by completion/issue date.
-    """
+    """Configured backfill horizon, not a claim about Kaspi retention limits."""
     return today_local - timedelta(days=KASPI_API_HISTORY_DAYS)
 
 
 def _kaspi_period_sync_key(report_mode, start, end):
-    """Version the cache so the former 30-day scan cannot mask a full backfill."""
-    mode = f"{report_mode}-full-history-v2" if report_mode == "issued" else report_mode
-    return f"{mode}:{start}:{end}"
+    return kaspi_integrity.period_key(report_mode, start, end)
 
 
 def _require_complete_kaspi_report(summary):
@@ -82,6 +79,68 @@ def _require_complete_kaspi_report(summary):
         raise HTTPException(409, "Kaspi ещё синхронизируется. Дождитесь завершения и скачайте отчёт повторно.")
     if summary.get("sync_status") != "done" or not summary.get("source_complete"):
         raise HTTPException(409, "Полная синхронизация Kaspi не подтверждена. Проверьте статус и повторите выгрузку.")
+
+
+def _resume_kaspi_jobs_once():
+    """Recover durable API-read jobs after a restart, with a cross-process lease."""
+    tasks = []
+    with SessionLocal() as db:
+        accounts = list(db.scalars(select(Account).where(
+            Account.channel == "Kaspi", Account.active.is_(True), Account.mode == "api")))
+        for account in accounts:
+            settings = dict(account.integration_settings or {})
+            job = dict(settings.get("kaspi_period_job") or {})
+            heartbeat = account.last_sync
+            if heartbeat is not None and heartbeat.tzinfo is None:
+                heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+            if not job and account.sync_status == "running" and heartbeat and heartbeat > now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS):
+                continue
+            # Optional, explicitly targeted one-time backfill. Configuration is
+            # non-secret; API credentials remain in the existing encrypted store.
+            target_ids = {int(x) for x in os.getenv("KASPI_BACKFILL_ACCOUNT_IDS", "").split(",") if x.strip().isdigit()}
+            configured_start, configured_end = os.getenv("KASPI_BACKFILL_START"), os.getenv("KASPI_BACKFILL_END")
+            if account.id in target_ids and configured_start and configured_end and not job:
+                start_day, end_day = date.fromisoformat(configured_start), date.fromisoformat(configured_end)
+                if end_day < start_day or (end_day-start_day).days > 366:
+                    raise ValueError("Invalid configured Kaspi backfill period")
+                owner = db.scalar(select(User).where(User.active.is_(True), User.role == "Owner").order_by(User.id))
+                if owner and not (settings.get("kaspi_period_sync") or {}).get(_kaspi_period_sync_key("issued", start_day, end_day)):
+                    job = {"start":configured_start,"end":configured_end,"mode":"issued","user_id":owner.id,
+                           "status":"retry","retry_at":now().isoformat(),"batches":0,"records":0}
+            if job.get("status") not in {"running", "retry"}:
+                continue
+            if job["status"] == "running" and heartbeat and heartbeat > now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS):
+                continue
+            if job["status"] == "retry" and datetime.fromisoformat(job["retry_at"]) > now():
+                continue
+            lease = "KASPI_PERIOD_SYNC:" + uuid.uuid4().hex
+            job["status"] = "running"
+            settings["kaspi_period_job"] = job
+            claimed = db.execute(update(Account).where(
+                Account.id == account.id, Account.sync_error == account.sync_error,
+                Account.last_sync == account.last_sync if account.last_sync else Account.last_sync.is_(None),
+            ).values(sync_status="running", sync_error=lease, last_sync=now(), integration_settings=settings))
+            if claimed.rowcount == 1:
+                tasks.append((account.id, job["user_id"], date.fromisoformat(job["start"]),
+                              date.fromisoformat(job["end"]), [], job["mode"], job["mode"] == "issued", lease))
+        db.commit()
+    for task in tasks:
+        _background_kaspi_period_sync(*task)
+
+
+def _kaspi_job_loop():
+    while True:
+        try:
+            _resume_kaspi_jobs_once()
+        except Exception:
+            logger.exception("Kaspi recovery scan failed")
+        time.sleep(60)
+
+
+@app.on_event("startup")
+def start_kaspi_job_recovery():
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        threading.Thread(target=_kaspi_job_loop, name="kaspi-recovery", daemon=True).start()
 WB_DEFAULT_SYNC_SECTIONS = ("new_orders", "order", "sale")
 WB_ALLOWED_SYNC_SECTIONS = frozenset(("new_orders", "order", "sale", "realization", "stocks", "products", "order_statuses"))
 
@@ -1392,11 +1451,12 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     raw_kaspi_commission_bases = {}
     api_data_available = False
     raw_q = select(MarketplaceRecord.account_id, MarketplaceRecord.payload).where(MarketplaceRecord.account_id.in_(ids), MarketplaceRecord.source == channel.lower())
-    for account_id, payload in db.execute(raw_q):
+    raw_rows = list(db.execute(raw_q))
+    for account_id, payload in raw_rows:
         p=payload or {}; typ=str(p.get('record_type') or '').lower(); src=channel.lower()
         if src == 'kaspi' and typ == 'order_entry':
             status_now = str(p.get('order_status') or '').upper()
-            date_field = (p.get('returned_date') or p.get('return_date') or p.get('completed_date')) if status_now == 'RETURNED' else p.get('completed_date')
+            date_field = (p.get('returned_date') or p.get('return_date')) if status_now == 'RETURNED' else p.get('completed_date')
             try:
                 api_data_available = api_data_available or start <= marketplace_pipeline._day(date_field, 'Asia/Almaty') <= end
             except marketplace_pipeline.Pending:
@@ -1439,7 +1499,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                                 key=(account_id,sale_day)
                                 raw_kaspi_commission_bases[key]=raw_kaspi_commission_bases.get(key,0)+sale_amount
                         if returned:
-                            return_dt=p.get('returned_date') or p.get('return_date') or p.get('completed_date')
+                            return_dt=p.get('returned_date') or p.get('return_date')
                             return_day=marketplace_pipeline._day(return_dt, 'Asia/Almaty')
                             if start<=return_day<=end:
                                 api_returns += sale_amount
@@ -1458,12 +1518,16 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     pending_return_inspection_units = sum(x.quantity for x in period_returns if x.inventory_status in {"requested", "approved", "in_transit", "received", "inspection"})
     profit = None if pending or pending_return_inspection_units else revenue-cogs-commission-logistics-return_logistics-advertising-other
     kaspi_estimated_proceeds = api_revenue - commission - logistics - return_logistics if channel == "Kaspi" else None
-    api_unknown = channel == 'Kaspi' and not api_data_available and sync_status not in {'done','partial'}
+    quality = kaspi_integrity.source_quality(accounts, raw_rows, start, end) if channel == "Kaspi" else None
+    source_complete = not sync_in_progress and not sync_errors and not api_unconverted
+    if quality:
+        source_complete = source_complete and quality["coverage_complete"] and quality["data_complete"]
+    api_unknown = channel == 'Kaspi'  and not api_data_available and sync_status not in {'done','partial'}
     return {'channel':channel,'start':str(start),'end':str(end),'revenue':revenue,'units':units,'api_gross_revenue':None if api_unknown else api_gross_revenue,'api_revenue':None if api_unknown else api_revenue,'api_units':None if api_unknown else api_units,'api_returns':None if api_unknown else api_returns,'api_return_units':None if api_unknown else api_return_units,'api_unconverted':api_unconverted,'api_data_available':api_data_available or sync_status in {'done','partial'},'sync_status':sync_status,'sync_errors':sync_errors,'last_sync':last_sync.isoformat() if last_sync else None,
-        'pending_sales':pending,'pending_return_inspection_units':pending_return_inspection_units,'pending_reasons':{'COGS_PENDING':pending} if pending else {},'financial_complete':not pending and not api_unconverted and not pending_return_inspection_units,
+        'pending_sales':pending,'pending_return_inspection_units':pending_return_inspection_units,'pending_reasons':{'COGS_PENDING':pending} if pending else {},'financial_complete':not pending and not api_unconverted and not pending_return_inspection_units and (source_complete if channel == 'Kaspi' else True),
         'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'commission_estimate_suppressed':commission_estimate_suppressed,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
-        'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':not sync_in_progress and not sync_errors and not api_unconverted}
+        'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':source_complete,'source_quality':quality}
 
 
 
@@ -4110,7 +4174,7 @@ def _stage_marketplace_catalog_records(db, acc, result):
     return inserted, updated
 
 
-def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_ids, report_mode="issued", status_only=False):
+def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_ids, report_mode="issued", status_only=False, expected_lease=None):
     """Refresh only a requested Kaspi creation-date window plus old open orders."""
     with SessionLocal() as db:
         acc = db.get(Account, account_id)
@@ -4124,6 +4188,12 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             require(user, "accounts", True)
             scope(user, acc.company_id)
             worker = connector(acc, load_saved_credentials(db, acc.id))
+            lease = acc.sync_error
+            if expected_lease is not None and lease != expected_lease:
+                return
+            job = dict((acc.integration_settings or {}).get("kaspi_period_job") or {})
+            if job and (job.get("start") != str(start) or job.get("end") != str(end)):
+                return
             today_local = datetime.now(ZoneInfo("Asia/Almaty"))
             sync_start = _kaspi_issued_scan_start(today_local.date()) if report_mode == "issued" else start
             local_start = datetime.combine(sync_start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
@@ -4149,10 +4219,21 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                         if record_type == "order_entry":
                             order_ids_with_entries.add(order_id)
             known_order_ids = [code for oid, code in known_orders.items() if oid in order_ids_with_entries]
+            known_entry_counts = {}
+            for cached in db.scalars(select(MarketplaceRecord).where(
+                MarketplaceRecord.account_id == acc.id, MarketplaceRecord.source == "kaspi",
+                MarketplaceRecord.payload["record_type"].as_string() == "order",
+            )):
+                p = cached.payload or {}
+                oid = str(p.get("order_id") or "")
+                count = sum(x.get("record_type") == "order_entry" for x in cached_children_by_order.get(oid, []))
+                if p.get("entries_complete") is True and count > 0 and count == p.get("entries_count"):
+                    known_entry_counts[str(p.get("code") or "")] = count
             progress_key = _kaspi_period_sync_key(report_mode, start, end)
             settings = dict(acc.integration_settings or {})
             progress = dict(settings.get("kaspi_period_progress") or {})
-            cursor = progress.get(progress_key) or json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
+            cursor = progress[progress_key] if progress_key in progress else json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
+                "scan_version":3,"state_index":0,"known_entry_counts":known_entry_counts,
                 "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
                 "event_start_ms":int(event_start.timestamp()*1000),
                 "event_end_ms":int(local_end.timestamp()*1000)-1,
@@ -4160,7 +4241,13 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                 "known_order_ids":known_order_ids}, separators=(",", ":"))
             pages = records = inserted_total = updated_total = 0
             while cursor:
+                # Do not occupy a pooled DB connection while waiting on Kaspi.
+                db.commit()
                 result = worker.fetch(cursor)
+                db.refresh(acc)
+                if acc.sync_error != lease or not acc.active:
+                    db.rollback()
+                    return
                 if status_only:
                     present = {str(row.get("external_id") or "") for row in result.records}
                     propagated = []
@@ -4174,8 +4261,8 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                             child = dict(prior)
                             child["order_status"] = op.get("status")
                             child["order_state"] = op.get("state")
-                            child["completed_date"] = op.get("completion_date")
-                            child["returned_date"] = op.get("returned_date")
+                            child["completed_date"] = op.get("completion_date") or child.get("completed_date")
+                            child["returned_date"] = op.get("returned_date") or child.get("returned_date")
                             if child.get("record_type") == "delivery_charge":
                                 child["completed_date"] = op.get("completion_date")
                                 if op.get("delivery_cost_for_seller") is not None:
@@ -4201,7 +4288,7 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                     result.records.extend(propagated)
                 inserted, updated = _stage_marketplace_records(db, acc, result)
                 record_ids = [str(x.get("external_id")) for x in result.records if x.get("external_id")]
-                projection = marketplace_pipeline.project_account(db, user, acc, external_ids=record_ids)
+                projection = marketplace_pipeline.project_account(db, user, acc, external_ids=record_ids, reconcile_pending=False)
                 pages += 1
                 records += len(result.records)
                 inserted_total += inserted
@@ -4210,13 +4297,23 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                 cursor = result.next_cursor
                 acc.last_sync = now()
                 acc.sync_status = "running"
-                acc.sync_error = "KASPI_PERIOD_SYNC" + ("; " + "; ".join(warnings)[-350:] if warnings else "")
+                acc.sync_error = lease
                 progress[progress_key] = cursor
-                settings["kaspi_period_progress"] = progress
+                settings = dict(acc.integration_settings or {})
+                settings["kaspi_period_progress"] = dict(progress)
+                position = json.loads(cursor) if cursor else {}
+                job.update(status="running", batches=int(job.get("batches") or 0)+1,
+                           records=int(job.get("records") or 0)+len(result.records),
+                           scan_from=str(sync_start),
+                           scan_through=datetime.fromtimestamp(position.get("until_ms", int(local_end.timestamp()*1000))/1000, ZoneInfo("Asia/Almaty")).date().isoformat(),
+                           state=("ARCHIVE", "NEW", "SIGN_REQUIRED", "PICKUP", "DELIVERY", "KASPI_DELIVERY")[int(position.get("state_index") or 0)],
+                           page=position.get("page", 0))
+                settings["kaspi_period_job"] = dict(job)
                 acc.integration_settings = settings
                 db.commit()
                 if pages >= 20000:
                     raise AccessRequired("Kaspi: превышен защитный лимит страниц диапазона")
+            marketplace_pipeline.project_account(db, user, acc, external_ids=[])
             acc = db.get(Account, account_id)
             acc.last_sync = now()
             acc.sync_status = "partial" if warnings else "done"
@@ -4225,17 +4322,13 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             progress = dict(settings.get("kaspi_period_progress") or {})
             progress.pop(progress_key, None)
             settings["kaspi_period_progress"] = progress
+            job["status"] = "partial" if warnings else "done"
+            settings["kaspi_period_job"] = dict(job)
             acc.integration_settings = settings
             if not warnings:
                 coverage = dict(settings.get("kaspi_period_sync") or {})
                 coverage[progress_key] = now().isoformat()
                 settings["kaspi_period_sync"] = dict(list(coverage.items())[-100:])
-                if report_mode == "issued":
-                    history_coverage = dict(settings.get("kaspi_history_coverage") or {})
-                    prior_through = str(history_coverage.get("through") or "")
-                    history_coverage["through"] = max(prior_through, str(end))
-                    history_coverage["at"] = now().isoformat()
-                    settings["kaspi_history_coverage"] = history_coverage
                 acc.integration_settings = settings
             audit(db, user, "sync_kaspi_period", "accounts", acc.id,
                   {"start":str(start),"end":str(end),"report_mode":report_mode,"status_only":status_only,"records":records,"pages":pages,
@@ -4245,10 +4338,17 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             logger.exception("Kaspi period sync failed for account %s", account_id)
             db.rollback()
             acc = db.get(Account, account_id)
-            if acc:
+            if acc and acc.sync_error == locals().get("lease"):
                 acc.last_sync = now()
                 acc.sync_status = "failed"
                 acc.sync_error = str(getattr(exc, "detail", exc))[:500]
+                settings = dict(acc.integration_settings or {})
+                job = dict(settings.get("kaspi_period_job") or {})
+                attempts = int(job.get("failures") or 0) + 1
+                job.update(status="retry" if attempts < 3 else "failed", failures=attempts,
+                           retry_at=(now()+timedelta(seconds=60)).isoformat())
+                settings["kaspi_period_job"] = job
+                acc.integration_settings = settings
                 db.commit()
 
 
@@ -4282,11 +4382,7 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         raise HTTPException(422, "Начало периода не может быть в будущем")
     bounded_end = min(end, local_today)
     if report_mode == "issued" and bounded_end < _kaspi_issued_scan_start(local_today):
-        raise HTTPException(422, "Этот период старше доступного 370-дневного окна Kaspi API")
-    # Kaspi has no completion-date filter. Refresh recent orders only so daily
-    # reports can catch new completions and returns without re-reading a month of
-    # orders every time the report is opened.
-    refresh_after = local_today - timedelta(days=30)
+        raise HTTPException(422, "Этот период старше настроенного окна загрузки; увеличьте глубину истории")
     period_key = _kaspi_period_sync_key(report_mode, start, bounded_end)
     settings = dict(acc.integration_settings or {})
     cache = dict(settings.get("kaspi_period_sync") or {})
@@ -4295,70 +4391,32 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         try: cached_at = datetime.fromisoformat(str(cache[period_key]))
         except ValueError: cached_at = None
     age = (now() - cached_at).total_seconds() if cached_at else None
-    history_coverage = dict(settings.get("kaspi_history_coverage") or {})
-    history_at = None
-    try:
-        history_at = datetime.fromisoformat(str(history_coverage.get("at") or ""))
-        history_through = date.fromisoformat(str(history_coverage.get("through") or ""))
-    except ValueError:
-        history_through = None
-    history_age = (now() - history_at).total_seconds() if history_at else None
-    history_fresh = (report_mode == "issued" and history_through is not None
-        and history_through >= bounded_end and history_age is not None and history_age < 60 * 60)
-    if history_fresh and not force:
-        return {"ok":True,"status":"cached","cached":True,"account_id":acc.id,"start":str(start),"end":str(bounded_end),"report_mode":report_mode}
-    completed_status_stale = force or cached_at is None or age is None or age >= 6 * 60 * 60
-    is_historical = bounded_end < local_today
     cache_ttl = 5 * 60 if start == bounded_end == local_today else (10 * 60 if bounded_end == local_today - timedelta(days=1) else 3600)
     cache_fresh = cached_at is not None and age is not None and age < cache_ttl
     if cache_fresh and not force:
         return {"ok":True,"status":"cached","cached":True,"account_id":acc.id,"start":str(start),"end":str(bounded_end),"report_mode":report_mode}
-    records = db.scalars(select(MarketplaceRecord).where(
-        MarketplaceRecord.account_id == acc.id,
-        MarketplaceRecord.source == "kaspi",
-    )).all()
     refresh_ids = set()
-    for row in records if report_mode == "issued" else []:
-        payload = row.payload or {}
-        if payload.get("record_type") != "order":
-            continue
-        try:
-            created = marketplace_pipeline._day(payload.get("creation_date"), "Asia/Almaty")
-        except marketplace_pipeline.Pending:
-            continue
-        # Status-check the last 30 days so delayed Kaspi returns and issued orders
-        # can be picked up without re-fetching the full account history.
-        if created < refresh_after or created > bounded_end:
-            continue
-        status = str(payload.get("status") or payload.get("order_status") or "").upper()
-        if status == "CANCELLED":
-            continue
-        # A returned order can still be missing its return event date. Recheck it
-        # until Kaspi supplies that date so it can enter the correct daily report.
-        if status == "RETURNED" and (payload.get("returned_date") or payload.get("return_date")):
-            continue
-        order_code = str(payload.get("code") or "").strip()
-        if not order_code:
-            continue
-        if status != "COMPLETED":
-            refresh_ids.add(order_code)
-            continue
-        if completed_status_stale:
-            refresh_ids.add(order_code)
     status_only = report_mode == "issued"
     stale_period_claim = and_(
         Account.channel == "Kaspi",
         Account.sync_error.like("KASPI_PERIOD_SYNC%"),
         or_(Account.last_sync < now()-timedelta(minutes=5), Account.last_sync.is_(None)),
     )
+    job = dict(settings.get("kaspi_period_job") or {})
+    if job.get("start") != str(start) or job.get("end") != str(bounded_end) or job.get("status") == "done":
+        job = {"start":str(start), "end":str(bounded_end), "mode":report_mode,
+               "user_id":u.id, "batches":0, "records":0}
+    job.update(status="running", failures=0)
+    settings["kaspi_period_job"] = job
+    lease = "KASPI_PERIOD_SYNC:" + uuid.uuid4().hex
     claimed = db.execute(update(Account).where(Account.id == id,
         or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None), stale_period_claim))
-        .values(sync_status="running", sync_error="KASPI_PERIOD_SYNC", last_sync=now()))
+        .values(sync_status="running", sync_error=lease, last_sync=now(), integration_settings=settings))
     if claimed.rowcount != 1:
         return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
                 "start":str(start),"end":str(bounded_end),"report_mode":report_mode}
     db.commit()
-    tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, ([] if status_only else sorted(refresh_ids)), report_mode, status_only)
+    tasks.add_task(_background_kaspi_period_sync, acc.id, u.id, start, bounded_end, ([] if status_only else sorted(refresh_ids)), report_mode, status_only, lease)
     return {"ok":True,"status":"running","account_id":acc.id,"start":str(start),"end":str(bounded_end),
             "report_mode":report_mode,"old_orders_to_refresh":len(refresh_ids),"status_only":status_only}
 
