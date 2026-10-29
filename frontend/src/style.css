@@ -2479,14 +2479,6 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
 /* Unified warehouse quick receipt and audited write-off controls */
 .chat-skill-status{margin:10px 14px;padding:8px 12px;border:1px solid #d9e8df;border-radius:10px;background:#f4f9f5;color:#4b6b5a;font-size:12px;font-weight:600}
 .stock-product-card .qor-item-body{gap:0}
-.stock-marketplace-badges{display:flex;min-height:28px;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 2px}
-.stock-marketplace-badge{display:inline-flex;min-height:27px;align-items:center;gap:6px;padding:3px 9px 3px 4px;border:1px solid transparent;border-radius:999px;font-size:11px;font-weight:750;line-height:1;white-space:nowrap}
-.stock-marketplace-badge>b{display:grid;width:19px;height:19px;place-items:center;border-radius:50%;background:#fff;font-size:8px;font-weight:850;letter-spacing:-.04em}
-.stock-marketplace-badge>small{padding-left:2px;font-size:10px;font-weight:800}
-.stock-marketplace-badge.is-kaspi{border-color:#f4dddd;background:#fff1f1;color:#b93849}.stock-marketplace-badge.is-kaspi>b{color:#d84354}
-.stock-marketplace-badge.is-wildberries{border-color:#eadcf0;background:#faf1fc;color:#79378d}.stock-marketplace-badge.is-wildberries>b{color:#8a42a1}
-.stock-marketplace-badge.is-ozon{border-color:#eee4c9;background:#fff9e9;color:#80661e}.stock-marketplace-badge.is-ozon>b{color:#b38d2c}
-.stock-marketplace-unlinked{color:#87948d;font-size:11px}
 .stock-quantity-control{display:grid;grid-template-columns:1fr;gap:7px;margin:12px 0;padding:12px;border:1px solid #d5e6db;border-radius:14px;background:linear-gradient(120deg,#f0f8f3,#fbfdfb)}
 .stock-quantity-control>span:first-child{color:#718279;font-size:12px;font-weight:650}
 .stock-quantity-control>div{display:grid;grid-template-columns:48px minmax(90px,1fr) 48px;align-items:center;gap:8px}
@@ -2818,6 +2810,12 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
 .chat-markdown strong{color:#183e2f}
 .chat-history-close{cursor:pointer}
 .chat-history-toggle{cursor:pointer}
+
+@media(min-width:701px) and (max-width:1450px){
+  .chat-title{flex:1 1 100%}
+  .chat-head-controls{width:100%;justify-content:flex-end}
+}
+.chat-head-controls select{min-width:0}
 
 /* Mobile return cards must be outside table markup so browsers render them consistently. */
 .returns-mobile-list{display:none}
