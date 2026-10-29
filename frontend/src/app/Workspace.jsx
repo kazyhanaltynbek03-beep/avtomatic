@@ -1625,7 +1625,7 @@ function Stock({ ctx }) {
       ) : error ? (
         <ErrorBox error={error} />
       ) : (
-        <div className="qor-item-grid">{displayStock.map((row) => {
+        <div className="qor-item-grid qor-stock-list">{displayStock.map((row) => {
           const product = ctx.refs.products?.find((p) => p.id === row.product_id);
           const productCompany = product?.specifications?._qor_company_ids?.[0] || ctx.company || "";
           return <StockItemCard key={row.product_id} row={row} product={product} company={productCompany} ctx={ctx}/>;
@@ -2735,7 +2735,7 @@ function DataPage({ page, ctx }) {
           <ErrorBox error={state.error} />
         ) : (
           <>
-            {entity === "products" ? <div className="qor-item-grid">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} accounts={ctx.refs.accounts || []} onSync={id=>syncProductWB(product,id)} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={accountId=>ctx.open("products", accountId ? {...product,_marketplaceLinkAccountId:accountId,_openMarketplaceSetup:true} : product)} onDelete={() => remove(product)} onPrice={() => quickPrice(product)}/>)}</div> : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
+            {entity === "products" ? <div className="qor-item-grid qor-catalog-list">{catalogRows.map((product) => <ProductCatalogCard key={product.id} product={product} accounts={ctx.refs.accounts || []} onSync={id=>syncProductWB(product,id)} selected={selectedProducts.includes(product.id)} onSelect={e=>setSelectedProducts(v=>e.target.checked ? [...new Set([...v,product.id])] : v.filter(id=>id!==product.id))} onEdit={accountId=>ctx.open("products", accountId ? {...product,_marketplaceLinkAccountId:accountId,_openMarketplaceSetup:true} : product)} onDelete={() => remove(product)} onPrice={() => quickPrice(product)}/>)}</div> : entity === "sales" ? <div className="qor-sales-grid">{state.data.items.map((sale) => <SaleProductCard key={sale.id} sale={sale} product={ctx.refs.products?.find((p) => p.id === sale.product_id)} account={ctx.refs.accounts?.find((a) => a.id === sale.account_id)} onReturn={() => ctx.open("returns", {sale_id:sale.id})}/>)}</div> : <Table
               rows={state.data.items}
               cols={columns[entity] || ["id", "created_at"]}
               refs={ctx.refs}
