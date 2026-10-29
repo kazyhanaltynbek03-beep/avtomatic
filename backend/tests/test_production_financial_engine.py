@@ -120,13 +120,16 @@ def test_defective_return_never_enters_available_stock(client):
         assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=='return'))==0
 
 
-def test_missing_fifo_does_not_consume_partial_batch(client):
+def test_missing_fifo_decrements_available_stock_and_records_shortage(client):
     buy(client,qty=1,cost=123)
     with SessionLocal() as db:
         acc=db.get(Account,1);acc.channel='Wildberries'
         row=staged(db,acc,'partial',record_type='realization',supplier_oper_name='Продажа',sa_name='A',srid='PART',quantity=2,retail_price_withdisc_rub=100,currency='KZT',sale_dt='2026-10-02')
         assert mp.project_record(db,db.get(User,1),acc,row)[0]
-        assert db.scalar(select(func.sum(Batch.remaining)))==1
+        assert db.scalar(select(func.sum(Batch.remaining)))==0
+        movements=db.scalars(select(Movement).where(Movement.product_id==1)).all()
+        assert sum(row.quantity for row in movements)==-1
+        assert any(row.kind=="sale_pending_fifo" and row.quantity==-1 and row.batch_id is None for row in movements)
         assert db.scalar(select(func.count()).select_from(Allocation))==0
 
 

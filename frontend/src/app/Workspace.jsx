@@ -287,6 +287,7 @@ export default function App() {
     notify,
     navigate,
     open: (kind, item) => setModal({ kind, item }),
+    reload: () => setRefresh(value => value + 1),
   };
   const logout = async () => {
     await api("/auth/logout", { method: "POST" });
@@ -2781,6 +2782,23 @@ function EditModal({ kind, item, ctx, close }) {
     return () => document.removeEventListener("keydown", fn);
   }, [requestClose]);
   const set = (k, v) => setValues((x) => ({ ...x, [k]: v }));
+  const removePersistedMarketplaceMapping = async (mapping) => {
+    if (!globalThis.confirm("Убрать связь этой карточки с SKU? История продаж и складских движений останется без изменений.")) return;
+    setBusy(true);
+    try {
+      await api(`/products/${item.id}/marketplace-mappings`, {
+        method: "DELETE",
+        body: {account_id: Number(mapping.account_id), external_key: mapping.external_key},
+      });
+      ctx.notify("Связь карточки удалена; история сохранена");
+      ctx.reload?.();
+      close();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const addProductPhotos = async (files) => {
     const chosen = Array.from(files || []).slice(0, 8);
     try {
@@ -2887,14 +2905,21 @@ function EditModal({ kind, item, ctx, close }) {
         let productSaveMessage = "Товар сохранён";
         if (kind === "products") {
           const identifiers = marketplaceIdRows.filter(row => row.account_id && row.external_id.trim());
+          let mappingResult = {reprocessed_records:0, projected_records:0, pending_records:0};
           for (const row of identifiers) {
             const endpoint = `/products/${saved.id}/marketplace-mappings`;
             const body = {account_id:Number(row.account_id), id_type:row.id_type, external_id:row.external_id.trim()};
             try {
-              await api(endpoint, {method:"POST", body});
+              const result = await api(endpoint, {method:"POST", body});
+              mappingResult.reprocessed_records += Number(result.reprocessed_records || 0);
+              mappingResult.projected_records += Number(result.projected_records || 0);
+              mappingResult.pending_records += Number(result.pending_records || 0);
             } catch (mappingError) {
               if (!String(mappingError.message || "").includes("Подтвердите перенос связи") || !globalThis.confirm("Этот ID уже привязан к другому SKU. Перенести его на новый товар? История продаж и складских движений останется у прежнего SKU; новые синхронизации будут идти через этот товар.")) throw mappingError;
-              await api(endpoint, {method:"POST", body:{...body, confirm_reassign:true}});
+              const result = await api(endpoint, {method:"POST", body:{...body, confirm_reassign:true}});
+              mappingResult.reprocessed_records += Number(result.reprocessed_records || 0);
+              mappingResult.projected_records += Number(result.projected_records || 0);
+              mappingResult.pending_records += Number(result.pending_records || 0);
             }
           }
           if (!editing) {
@@ -2910,8 +2935,16 @@ function EditModal({ kind, item, ctx, close }) {
               productSaveMessage = `Товар сохранён. Автопоиск карточек не завершился: ${matchError.message}`;
             }
           }
+          if (editing && identifiers.length) {
+            productSaveMessage = mappingResult.projected_records
+              ? `Изменения сохранены. Связано записей продаж: ${mappingResult.projected_records}`
+              : mappingResult.pending_records
+                ? `Связь сохранена. ${mappingResult.pending_records} записей всё ещё требуют проверки данных/остатков`
+                : `Изменения сохранены. Карточек связано: ${identifiers.length}`;
+          }
+          ctx.reload?.();
         }
-        ctx.notify(editing ? "Изменения сохранены" : kind === "products" ? productSaveMessage : "Операция выполнена");
+        ctx.notify(kind === "products" ? productSaveMessage : editing ? "Изменения сохранены" : "Операция выполнена");
       }
       close();
     } catch (e) {
@@ -3143,7 +3176,7 @@ function EditModal({ kind, item, ctx, close }) {
           <section className="marketplace-sync-settings">
           <h3>Связать существующие карточки</h3>
           <p className="muted">Добавляйте по одной строке на каждый ID. Можно выбрать несколько магазинов Kaspi/Wildberries и добавить 5–6 карточек для каждого магазина: все строки будут связаны с этим одним SKU. Kaspi: используйте seller SKU / артикул из кабинета. Wildberries: добавьте nmID как ID карточки и chrtID каждого размера. При переносе уже связанного ID история продаж останется у прежней записи.</p>
-          {(item?.marketplace_mappings || []).map((mapping, index) => <div className="marketplace-allocation" key={`${mapping.account_id}:${mapping.external_key}:${index}`}><b>{(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.channel || mapping.channel} · {(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.name || `магазин ${mapping.account_id}`}</b><small>{mapping.external_key}</small></div>)}
+          {(item?.marketplace_mappings || []).map((mapping, index) => <div className="marketplace-allocation" key={`${mapping.account_id}:${mapping.external_key}:${index}`}><b>{(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.channel || mapping.channel} · {(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.name || `магазин ${mapping.account_id}`}</b><small>{mapping.external_key}</small><button type="button" className="secondary" disabled={busy} onClick={()=>removePersistedMarketplaceMapping(mapping)}>Убрать связь</button></div>)}
           {marketplaceIdRows.map((row,index)=><div className="marketplace-allocation" key={index}>
             <label>Магазин<select value={row.account_id} onChange={e=>{const account=(ctx.refs.accounts || []).find(a=>String(a.id)===e.target.value);setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,account_id:e.target.value,id_type:x.external_id.trim()?x.id_type:account?.channel==="Wildberries"?"product":"sku"}:x))}}><option value="">Выберите магазин</option>{(ctx.refs.accounts || []).filter(a=>a.active!==false && ["Kaspi","Wildberries","Ozon"].includes(a.channel) && (!values.company_id || String(a.company_id)===String(values.company_id))).map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select></label>
             <label>Тип ID<select value={row.id_type} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,id_type:e.target.value}:x))}><option value="product">ID карточки товара</option><option value="sku">Артикул / seller SKU</option><option value="barcode">Штрихкод</option><option value="size">ID размера WB (chrtId)</option></select></label>

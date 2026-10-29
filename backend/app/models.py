@@ -354,7 +354,11 @@ class Movement(Record, Base):
     __tablename__ = "movements"
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
-    batch_id: Mapped[int] = mapped_column(ForeignKey("batches.id"))
+    # Marketplace sales may be confirmed before the opening stock or purchase
+    # batch has been entered. Keep the quantity movement even when its FIFO
+    # cost is pending; the nullable batch is reconciled later without replaying
+    # the physical quantity movement.
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id"), nullable=True)
     date: Mapped[DateType] = mapped_column(Date)
     quantity: Mapped[int] = mapped_column(Integer)
     cost: Mapped[int] = mapped_column(BigInteger)

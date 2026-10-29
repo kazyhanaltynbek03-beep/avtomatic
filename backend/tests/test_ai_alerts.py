@@ -18,6 +18,7 @@ def test_erp_alerts_report_unmapped_marketplace_records_and_failed_sync(client):
     assert isinstance(payload["stock_alerts"],list)
     assert isinstance(payload["receivables"],list)
     assert all(int(row["min_stock"]) > 0 for row in payload["stock_alerts"])
+    assert 1 in {row["product_id"] for row in payload["stock_alerts"]}
     mapping=next(x for x in items if x["type"]=="unmapped_products")
     sync=next(x for x in items if x["type"]=="marketplace_sync")
     assert mapping["account_id"]==1 and mapping["count"]==1

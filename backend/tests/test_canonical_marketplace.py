@@ -202,6 +202,9 @@ def test_mapping_fifo_retry(client):
     assert response.status_code==200,response.text
     with SessionLocal() as db:
         sale=db.scalar(select(Sale));assert not sale.cogs_pending and sale.cogs==1000
+        movements=db.scalars(select(Movement).where(Movement.product_id==pid)).all()
+        assert sum(x.quantity for x in movements)==1
+        assert sum(x.cost for x in movements)==1000
     assert client.post('/api/accounts/1/reprocess').json()['projected']==0
 
 
@@ -477,6 +480,9 @@ def test_wb_realization_posts_revenue_without_fifo_and_without_precreated_produc
         assert result['pending_erp']==1,result
         sale=db.scalar(select(Sale))
         assert sale and sale.quantity==2 and sale.revenue==2000000 and sale.cogs_pending is True
+        movements=db.scalars(select(Movement).where(Movement.product_id==sale.product_id)).all()
+        assert sum(x.quantity for x in movements)==-2
+        assert any(x.batch_id is None and x.kind=='sale_pending_fifo' for x in movements)
         assert row.status=='projected'
         rep=f.report(db,u,date(2026,10,1),date(2026,10,31),1)
         assert rep['revenue']==2000000 and rep['units']==2

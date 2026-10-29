@@ -135,6 +135,19 @@ def test_shared_sku_stock_decreases_across_kaspi_and_wildberries_sales(client):
     assert product["inventory"]["reconciliation_status"] == "partial"
 
 
+def test_stock_endpoint_uses_lifetime_ledger_not_only_current_month(client):
+    from .conftest import post
+
+    post(client, "opening", company_id=1, product_id=1, reference="OLD-OPENING",
+         date="2026-09-20", quantity=12, unit_cost=1000, evidence="Historical opening")
+    response = client.get("/api/stock?company_id=1")
+    assert response.status_code == 200, response.text
+    row = next(item for item in response.json() if item["product_id"] == 1)
+    assert row["quantity"] == 12
+    assert row["value"] == 12000
+    assert row["min_stock"] == 5
+
+
 def test_inventory_count_requires_confirmed_cost_for_positive_adjustment(client):
     payload = {
         "company_id": 1, "product_id": 1, "counted_quantity": 2,
@@ -179,6 +192,43 @@ def test_marketplace_ids_map_different_platform_ids_to_one_qor_product(client):
         assert {(m.account_id, m.external_key) for m in mappings} == {
             (1, "product:kaspi-item-771"), (4, "product:wb-nmid-992"),
         }
+
+
+def test_mapping_save_reprocesses_pending_rows_and_delete_preserves_stock(client, monkeypatch):
+    from datetime import date
+    from app import main
+    from app.models import MarketplaceRecord, MarketplaceProductMapping, Movement
+    with SessionLocal() as db:
+        db.add(MarketplaceRecord(account_id=1, company_id=1, source="kaspi",
+            external_id="pending-order-1",
+            payload={"external_product_id":"K-RETRY-1"}, status="pending_mapping",
+            stage_status="pending_mapping", reason_code="SKU_NOT_MAPPED"))
+        db.commit()
+    original = main.marketplace_pipeline.project_record
+    def project(db, user, account, row):
+        row.stage_status = "projected"
+        return True, None
+    monkeypatch.setattr(main.marketplace_pipeline, "project_record", project)
+    linked = client.post("/api/products/1/marketplace-mappings", json={
+        "account_id":1, "id_type":"product", "external_id":"K-RETRY-1",
+    })
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["reprocessed_records"] == 1
+    assert linked.json()["projected_records"] == 1
+    monkeypatch.setattr(main.marketplace_pipeline, "project_record", original)
+    with SessionLocal() as db:
+        db.add(Movement(company_id=1, product_id=1, batch_id=None,
+            date=date(2026, 10, 29), quantity=-1, cost=0, kind="sale_pending_fifo",
+            reference="KEEP-HISTORY"))
+        db.commit()
+    removed = client.request("DELETE", "/api/products/1/marketplace-mappings", json={
+        "account_id":1, "external_key":"product:K-RETRY-1",
+    })
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["history_preserved"] is True
+    with SessionLocal() as db:
+        assert db.query(MarketplaceProductMapping).filter_by(product_id=1).count() == 0
+        assert db.query(Movement).filter_by(reference="KEEP-HISTORY").count() == 1
 
 
 def test_product_listing_shows_persistent_per_shop_link_and_sync_status(client):
