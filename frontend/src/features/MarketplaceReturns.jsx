@@ -179,7 +179,7 @@ export default function MarketplaceReturns({ ctx }) {
       if (!silent) ctx.notify("Проверка сохранённых данных возвратов запущена");
     } catch (e) { setActionError(e.message); }
     finally { lock.current = false; setBusyAccount(null); }
-  };
+  }, [ctx.notify]);
   useEffect(() => {
     if (!data || !syncData || !autoEligible.length) return;
     let cancelled = false;
