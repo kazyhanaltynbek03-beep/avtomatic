@@ -139,6 +139,7 @@ export default function MarketplaceReturns({ ctx }) {
   const [statementMessage, setStatementMessage] = useState("");
   const fileRef = useRef(null);
   const lock = useRef(false);
+  const autoStarted = useRef(new Set());
   const params = useMemo(() => {
     const p = new URLSearchParams({ marketplace, offset: String(offset), limit: "30", start: ctx.start, end: ctx.end, search });
     if (ctx.company) p.set("company_id", ctx.company);
@@ -156,6 +157,8 @@ export default function MarketplaceReturns({ ctx }) {
   const summary = data?.summary || {};
   const stores = data?.integrations || [];
   const active = stores.filter((x) => x.active && x.mode === "api");
+  const autoEligible = active.filter((x) => x.marketplace === "Kaspi" || x.marketplace === "Wildberries");
+  const autoEligibleKey = autoEligible.map((x) => x.account_id).join(",");
   const progressByAccount = Object.fromEntries((syncData?.items || []).map((x) => [x.account_id, x]));
 
   useEffect(() => { setOffset(0); }, [marketplace, search, ctx.company, ctx.start, ctx.end, selectedAccountId, selectedMetric]);
@@ -166,17 +169,35 @@ export default function MarketplaceReturns({ ctx }) {
     return () => window.clearInterval(timer);
   }, [syncData?.items]);
 
-  const discover = async (accountId) => {
+  const discover = async (accountId, silent = false) => {
     if (lock.current) return;
     lock.current = true;
     setBusyAccount(accountId);
     setActionError("");
     try {
       await api("/marketplace-returns/discover", { method: "POST", body: { account_id: accountId } });
-      ctx.notify("Проверка сохранённых данных возвратов запущена");
+      setPollTick((n) => n + 1);
+      if (!silent) ctx.notify("Проверка сохранённых данных возвратов запущена");
     } catch (e) { setActionError(e.message); }
     finally { lock.current = false; setBusyAccount(null); }
   };
+  useEffect(() => {
+    if (!data || !syncData || !autoEligible.length) return;
+    let cancelled = false;
+    const startOnce = async () => {
+      for (const store of autoEligible) {
+        const accountId = Number(store.account_id);
+        if (!accountId || autoStarted.current.has(accountId)) continue;
+        autoStarted.current.add(accountId);
+        if (progressByAccount[accountId]?.status === "running") continue;
+        if (cancelled) return;
+        await discover(accountId, true);
+      }
+    };
+    startOnce();
+    return () => { cancelled = true; };
+  }, [data, syncData, autoEligibleKey, ctx.company]);
+
   const previewStatement = async (file, accountId = statementAccount) => {
     if (!file || !accountId) return;
     setStatementBusy(true); setActionError(""); setStatementMessage(""); setStatementPreview(null);
