@@ -52,9 +52,10 @@ test("owner can log in, open core pages and log out without browser errors", asy
     clientWidth: element.clientWidth,
     choices: element.querySelectorAll("button").length,
   }));
-  expect(periodStyle.display).toBe("grid");
-  expect(periodStyle.scrollWidth).toBeLessThanOrEqual(periodStyle.clientWidth);
+  expect(periodStyle.display).toBe("flex");
+  expect(periodStyle.scrollWidth).toBeGreaterThan(periodStyle.clientWidth);
   expect(periodStyle.choices).toBe(10);
+  expect(await page.locator("html").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.setViewportSize({ width: 1280, height: 900 });
   expect(consoleErrors, `API responses with errors: ${failedApi.join(", ")}`).toEqual([]);
   expect(failedApi).toEqual([]);

@@ -260,24 +260,32 @@ main[data-page="accounts"] .info-banner{border:1px solid #e1e9e4;background:#f2f
 @media(max-width:700px){.product-wizard-steps{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:8px 5px;}.product-wizard-step{flex-direction:column;justify-content:flex-start;gap:4px;text-align:center;font-size:8px;line-height:1.2;}.product-wizard-step i{flex-basis:26px;width:26px;height:26px;}.product-wizard-step span{width:100%;white-space:normal;overflow:visible;text-overflow:clip;}.product-photo-preview-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
 
 
-/* Keep every period choice visible on narrow phones. */
+/* Keep the compact, swipeable period control used by the original mobile UI. */
 @media (max-width: 700px) {
   .toolbar > .periods {
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-    flex-wrap: initial !important;
-    justify-content: stretch !important;
-    overflow: visible !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    justify-content: flex-start !important;
+    gap: 3px !important;
+    padding: 4px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    border-radius: 13px;
   }
+  .toolbar > .periods::-webkit-scrollbar { display: none; }
   .toolbar > .periods button {
-    min-width: 0 !important;
-    min-height: 38px;
-    padding: 7px 4px;
-    white-space: normal !important;
-    overflow-wrap: anywhere;
+    flex: 0 0 auto !important;
+    min-width: max-content !important;
+    min-height: 34px;
+    padding: 6px 10px !important;
+    white-space: nowrap !important;
     text-align: center;
-    line-height: 1.2;
-    font-size: 11px;
+    line-height: 1.15;
+    font-size: 11px !important;
+    scroll-snap-align: start;
   }
-  .toolbar > .periods button:last-child:nth-child(3n+1) { grid-column: auto; }
 }
