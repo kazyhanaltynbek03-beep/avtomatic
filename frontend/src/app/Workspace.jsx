@@ -972,7 +972,7 @@ function ReportPage({ page, ctx }) {
   }, [onNotificationCount, page, systemAlerts, systemAlertsError]);
   const r = usesDashboard ? (loadedReport || dash?.report) : loadedReport;
   const dashboardChannels = usesDashboard && r ? [
-    ...(r.channels || []).filter((row) => !["Kaspi", "Wildberries", "WB"].includes(row.name)),
+    ...(r.channels || []).filter((row) => !["kaspi", "wb", "wildberries", "каспи", "каспий", "вб", "вайлдберриз"].includes(String(row.name || "").normalize("NFKC").trim().toLocaleLowerCase("ru-RU"))),
     {name:"Kaspi", revenue:dashboardKaspiSummary.data?.api_revenue, returns:dashboardKaspiSummary.data?.api_returns, apiLoading:dashboardKaspiSummary.loading, apiError:dashboardKaspiSummary.error},
     {name:"Wildberries", revenue:dashboardWbSummary.data?.api_revenue, returns:dashboardWbSummary.data?.returns, apiLoading:dashboardWbSummary.loading, apiError:dashboardWbSummary.error},
   ] : (r?.channels || []);
