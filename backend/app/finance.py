@@ -248,7 +248,7 @@ def purchase(db, user, p):
     return obj
 
 
-def take_fifo(db, cid, pid, quantity, d):
+def take_fifo(db, cid, pid, quantity, d, allow_partial=False):
     batches = db.scalars(
         select(Batch)
         .where(
@@ -260,7 +260,8 @@ def take_fifo(db, cid, pid, quantity, d):
         .order_by(Batch.date, Batch.id)
         .with_for_update()
     ).all()
-    if sum(b.remaining for b in batches) < quantity:
+    available = sum(b.remaining for b in batches)
+    if available < quantity and not allow_partial:
         fail("Недостаточно остатка товара у выбранной компании")
     result = []
     need = quantity
@@ -300,18 +301,12 @@ def sale(db, user, p, confirmed_marketplace=False):
     revenue = gross_revenue - p.discount
     if p.paid > revenue:
         fail("Оплата больше выручки")
-    cogs_pending = False
-    try:
-        allocation = take_fifo(db, p.company_id, p.product_id, p.quantity, p.date)
-    except HTTPException as exc:
-        # Marketplace revenue is a real business fact even when historical purchase
-        # batches were not imported yet. Only COGS/profit stay incomplete.
-        marketplace_ref = confirmed_marketplace
-        if account.channel in {"Wildberries", "Kaspi", "Ozon"} and marketplace_ref and "Недостаточно остатка товара" in str(exc.detail):
-            allocation = []
-            cogs_pending = True
-        else:
-            raise
+    marketplace_sale = confirmed_marketplace and account.channel in {"Wildberries", "Kaspi", "Ozon"}
+    allocation = take_fifo(db, p.company_id, p.product_id, p.quantity, p.date,
+                           allow_partial=marketplace_sale)
+    allocated_quantity = sum(n for _b, n, _c in allocation)
+    unallocated_quantity = p.quantity - allocated_quantity
+    cogs_pending = unallocated_quantity > 0
     obj = Sale(
         **p.model_dump(exclude={"unit_price", "paid"}),
         revenue=revenue,
@@ -334,6 +329,15 @@ def sale(db, user, p, confirmed_marketplace=False):
                 reference=p.reference,
             )
         )
+    if unallocated_quantity:
+        # Revenue and sold units are confirmed facts. Record the missing FIFO
+        # quantity as a visible stock deficit now; never silently leave stock
+        # unchanged just because the corresponding opening lot is not entered.
+        db.add(Movement(
+            company_id=p.company_id, product_id=p.product_id, batch_id=None,
+            date=p.date, quantity=-unallocated_quantity, cost=0,
+            kind="sale_pending_fifo", reference=p.reference,
+        ))
     cash_entry(
         db,
         company_id=p.company_id,
@@ -357,19 +361,28 @@ def settle_pending_sale_cogs(db, user, sale_obj):
     sale_obj=db.scalar(select(Sale).where(Sale.id==sale_obj.id).with_for_update().execution_options(populate_existing=True))
     if not sale_obj.cogs_pending: return False
     lock_product(db, sale_obj.product_id)
+    already_allocated = db.scalar(select(func.coalesce(func.sum(Allocation.quantity), 0)).where(
+        Allocation.sale_id == sale_obj.id
+    )) or 0
+    remaining_quantity = max(0, sale_obj.quantity - int(already_allocated))
+    if not remaining_quantity:
+        sale_obj.cogs_pending = False
+        return True
     try:
-        allocation = take_fifo(db, sale_obj.company_id, sale_obj.product_id, sale_obj.quantity, sale_obj.date)
+        allocation = take_fifo(db, sale_obj.company_id, sale_obj.product_id, remaining_quantity, sale_obj.date)
     except HTTPException as exc:
         if "Недостаточно остатка товара" in str(exc.detail):
             return False
         raise
-    sale_obj.cogs = sum(c for b, n, c in allocation)
+    sale_obj.cogs = int(sale_obj.cogs or 0) + sum(c for b, n, c in allocation)
     sale_obj.cogs_pending = False
     for b, n, c in allocation:
         db.add(Allocation(sale_id=sale_obj.id, batch_id=b.id, quantity=n, cost=c))
+        # Quantity was already posted when the marketplace sale was confirmed.
+        # This cost-only adjustment closes FIFO without double-decrementing stock.
         db.add(Movement(company_id=sale_obj.company_id, product_id=sale_obj.product_id,
-                        batch_id=b.id, date=sale_obj.date, quantity=-n, cost=-c,
-                        kind="sale", reference=sale_obj.reference))
+                        batch_id=b.id, date=sale_obj.date, quantity=0, cost=-c,
+                        kind="sale_fifo_cost", reference=sale_obj.reference))
     db.flush()
     for ret in db.scalars(select(Return).where(Return.sale_id == sale_obj.id).order_by(Return.date,Return.id)):
         restore_return_cost(db, sale_obj, ret)

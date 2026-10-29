@@ -2033,6 +2033,11 @@ class ProductMarketplaceIdIn(BaseModel):
     confirm_reassign: bool = False
 
 
+class ProductMarketplaceMappingDeleteIn(BaseModel):
+    account_id: int
+    external_key: str = Field(min_length=1, max_length=200)
+
+
 class MarketplaceAutoMatchIn(BaseModel):
     company_id: int | None = Field(default=None, ge=1)
     product_ids: list[int] | None = Field(default=None, max_length=10000)
@@ -2218,18 +2223,16 @@ def _run_wb_product_catalog_refresh(job_id):
 @app.post("/api/products/{product_id}/marketplace-mappings")
 def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
                                 tasks: BackgroundTasks, u=Depends(current_user), db=Depends(get_db)):
-    """Attach a seller-specific marketplace identifier to an existing QOR SKU.
-
-    This only saves identity mapping. It does not replay staged orders or alter
-    financial reports; normal, idempotent marketplace projection uses it later.
-    """
+    """Attach an external marketplace identifier and replay matching staged rows."""
     require(u, "inventory", True)
     product = db.get(Product, product_id)
     if not product or not product.active:
         raise HTTPException(404, "Активный товар QOR не найден")
-    account = db.get(Account, p.account_id)
+    account = db.scalar(select(Account).where(Account.id == p.account_id).with_for_update())
     if not account or account.channel not in {"Kaspi", "Wildberries", "Ozon"}:
         raise HTTPException(404, "Магазин маркетплейса не найден")
+    if account.sync_status == "running":
+        raise HTTPException(409, "Синхронизация магазина ещё выполняется. Дождитесь завершения и повторите связь.")
     scope(u, account.company_id)
     product_company_ids = {int(value) for value in ((product.specifications or {}).get("_qor_company_ids") or []) if str(value).isdigit()}
     if product_company_ids and account.company_id not in product_company_ids:
@@ -2275,13 +2278,61 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
             ))
             if not existing or existing.product_id != product.id:
                 raise HTTPException(409, "Этот ID уже привязан к другому товару QOR")
+    # A saved link must immediately resolve matching staged sales. Otherwise
+    # users see a successful save while the card and sale remain "needs link"
+    # until an unrelated manual reprocess.
+    matching_rows = []
+    candidates = db.scalars(select(MarketplaceRecord).where(
+        MarketplaceRecord.account_id == account.id,
+        MarketplaceRecord.company_id == account.company_id,
+        MarketplaceRecord.stage_status == "pending_mapping",
+    )).all()
+    for candidate in candidates:
+        if external_key in marketplace_pipeline.identifiers(candidate.payload or {}):
+            matching_rows.append(candidate)
+    projected_now = 0
+    pending_now = 0
+    for candidate in matching_rows:
+        ok, _reason = marketplace_pipeline.project_record(db, u, account, candidate)
+        projected_now += int(ok)
+        pending_now += int(candidate.stage_status in {"pending_fifo", "pending_fx", "pending_mapping"})
     db.commit()
     if account.channel == "Wildberries":
         # If the seller explicitly enabled WB auto-sync, a newly linked card or
         # size becomes eligible for the same guarded outbound sync as later edits.
         _schedule_wb_sync_for_product(tasks, product.id, account.company_id)
     return {"ok": True, "product_id": product.id, "account_id": account.id,
-            "channel": account.channel, "external_key": external_key}
+            "channel": account.channel, "external_key": external_key,
+            "reprocessed_records": len(matching_rows), "projected_records": projected_now,
+            "pending_records": pending_now}
+
+
+@app.delete("/api/products/{product_id}/marketplace-mappings")
+def delete_product_marketplace_mapping(product_id: int, p: ProductMarketplaceMappingDeleteIn,
+                                       u=Depends(current_user), db=Depends(get_db)):
+    require(u, "inventory", True)
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Товар QOR не найден")
+    mapping = db.scalar(select(MarketplaceProductMapping).where(
+        MarketplaceProductMapping.product_id == product_id,
+        MarketplaceProductMapping.account_id == p.account_id,
+        MarketplaceProductMapping.external_key == p.external_key,
+    ))
+    if not mapping:
+        raise HTTPException(404, "Связь ID с этим товаром уже удалена")
+    account = db.get(Account, mapping.account_id)
+    if not account:
+        raise HTTPException(404, "Магазин маркетплейса не найден")
+    scope(u, account.company_id)
+    db.delete(mapping)
+    audit(db, u, "mapping_remove", "products", product_id, {
+        "account_id": account.id, "channel": account.channel,
+        "external_key": p.external_key,
+    })
+    db.commit()
+    return {"ok": True, "product_id": product_id, "account_id": account.id,
+            "external_key": p.external_key, "history_preserved": True}
 
 
 @app.post("/api/marketplace-records/{id}/mapping")
@@ -3024,8 +3075,34 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
     require(u, "inventory")
     if company_id is not None:
         f.get_company(db, u, company_id)
-    r = f.report(db, u, business_today().replace(day=1), business_today(), company_id)
-    reported = {row["product_id"]: row for row in r["stock"]}
+    today = business_today()
+    month_start = today.replace(day=1)
+    movement_query = scope_query(select(
+        Movement.product_id,
+        func.coalesce(func.sum(Movement.quantity), 0),
+        func.coalesce(func.sum(Movement.cost), 0),
+    ), Movement, u).where(Movement.date <= today).group_by(Movement.product_id)
+    if company_id is not None:
+        movement_query = movement_query.where(Movement.company_id == company_id)
+    movement_totals = {
+        pid: (int(quantity or 0), int(value or 0))
+        for pid, quantity, value in db.execute(movement_query)
+    }
+    sales_query = scope_query(select(
+        Sale.product_id, func.coalesce(func.sum(Sale.quantity), 0)
+    ), Sale, u).where(Sale.date >= month_start, Sale.date <= today).group_by(Sale.product_id)
+    if company_id is not None:
+        sales_query = sales_query.where(Sale.company_id == company_id)
+    sold_totals = {pid: int(quantity or 0) for pid, quantity in db.execute(sales_query)}
+    returns_query = scope_query(select(
+        Sale.product_id, func.coalesce(func.sum(Return.quantity), 0)
+    ).join(Sale, Return.sale_id == Sale.id), Sale, u).where(
+        Return.date >= month_start, Return.date <= today
+    ).group_by(Sale.product_id)
+    if company_id is not None:
+        returns_query = returns_query.where(Sale.company_id == company_id, Return.company_id == company_id)
+    for pid, quantity in db.execute(returns_query):
+        sold_totals[pid] = sold_totals.get(pid, 0) - int(quantity or 0)
     products = db.scalars(scope_query(select(Product).where(Product.active.is_(True)), Product, u)).all()
     rows = []
     for product in products:
@@ -3037,12 +3114,17 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
             continue
         if getattr(product, "catalog_kind", "master") != "master":
             continue
-        row = reported.get(product.id, {
+        quantity, value = movement_totals.get(product.id, (0, 0))
+        sold = sold_totals.get(product.id, 0)
+        days = max(1, (today - month_start).days + 1)
+        row = {
             "product_id": product.id, "sku": product.sku, "name": product.name,
-            "quantity": 0, "value": 0, "min_stock": product.min_stock, "sold": 0,
-            "unit_cost": 0, "days_of_stock": None, "turnover_days": None,
-            "velocity_per_day": 0,
-        })
+            "quantity": quantity, "value": value, "min_stock": int(product.min_stock or 0),
+            "sold": sold, "unit_cost": f.rounded(value, quantity) if quantity > 0 else 0,
+            "days_of_stock": round(quantity / (sold / days), 1) if sold > 0 else None,
+            "turnover_days": round(days * quantity / sold, 1) if sold > 0 else None,
+            "velocity_per_day": round(sold / days, 3),
+        }
         rows.append(row)
     if not allowed(u, "finance") and not allowed(u, "analytics"):
         for x in rows:

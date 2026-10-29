@@ -155,7 +155,7 @@ def test_demo_connector_no_financial_writes(client):
 
 
 def test_missing_ai_key_and_real_connector_fail_honestly(client, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     j = client.post(
         "/api/jobs",
         json={
@@ -170,7 +170,7 @@ def test_missing_ai_key_and_real_connector_fail_honestly(client, monkeypatch):
     run_one()
     res = client.get("/api/jobs/" + str(j["id"])).json()
     assert res["status"] == "failed"
-    assert "OPENAI_API_KEY" in res["error"]
+    assert "ANTHROPIC_API_KEY" in res["error"]
     with SessionLocal() as db:
         db.get(Account, 1).mode = "api"
         db.commit()
