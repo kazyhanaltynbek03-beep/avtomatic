@@ -111,12 +111,23 @@ def _resume_kaspi_jobs_once():
                 current_is_target = job.get("start") == str(start_day) and job.get("end") == str(end_day)
                 target_complete = bool((settings.get("kaspi_period_sync") or {}).get(target_key))
                 current_is_active = job.get("status") in {"running", "retry"}
-                if not current_is_target and not current_is_active and not target_complete:
+                if not current_is_target and not target_complete:
+                    if current_is_active:
+                        handoff_grace = max(60, int(os.getenv("KASPI_TARGET_HANDOFF_GRACE_SECONDS", "60")))
+                        if heartbeat and heartbeat > now()-timedelta(seconds=handoff_grace):
+                            continue
+                        # Pause the unrelated current period at its last durable
+                        # cursor, then prioritize the explicitly configured
+                        # customer period. Lease replacement prevents the old
+                        # worker from committing a second page after this point.
+                        paused = list(settings.get("kaspi_period_paused_jobs") or [])
+                        if not any(x.get("start") == job.get("start") and x.get("end") == job.get("end")
+                                   for x in paused):
+                            paused.append({**job, "status":"paused", "paused_at":now().isoformat()})
+                        settings["kaspi_period_paused_jobs"] = paused[-20:]
                     owner = db.scalar(select(User).where(User.active.is_(True), User.role == "Owner").order_by(User.id))
                     if owner:
-                        # A saved per-period cursor is reused by the worker. This
-                        # queues the requested period behind an already-running
-                        # job without overwriting that job's lease or checkpoint.
+                        # The saved cursor for this exact period is reused.
                         job = {"start":str(start_day),"end":str(end_day),"mode":"issued","user_id":owner.id,
                                "status":"retry","retry_at":now().isoformat(),"batches":0,"records":0}
             if job.get("status") not in {"running", "retry"}:
