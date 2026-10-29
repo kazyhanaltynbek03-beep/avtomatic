@@ -24,15 +24,19 @@ export function useLoad(path, refresh, options = {}) {
       return () => { live = false; };
     }
     const controller = new globalThis.AbortController();
+    const debounceMs = Math.max(0, Number(options.debounceMs) || 0);
     setState({ loading: true });
-    api(path, { signal: controller.signal })
-      .then((data) => {
-        if (cacheKey) reportCache.set(cacheKey, { data, savedAt: Date.now() });
-        if (live) setState({ data });
-      })
-      .catch((error) => { if (live) setState({ error: error.message }); });
-    return () => { live = false; controller.abort(); };
-  }, [path, refresh, options.cacheScope]);
+    const request = () => {
+      api(path, { signal: controller.signal })
+        .then((data) => {
+          if (cacheKey) reportCache.set(cacheKey, { data, savedAt: Date.now() });
+          if (live) setState({ data });
+        })
+        .catch((error) => { if (live) setState({ error: error.message }); });
+    };
+    const timer = setTimeout(request, debounceMs);
+    return () => { live = false; clearTimeout(timer); controller.abort(); };
+  }, [path, refresh, options.cacheScope, options.debounceMs]);
 
   return state;
 }

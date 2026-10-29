@@ -36,7 +36,7 @@ const healthy=()=>new Promise(resolve=>{const req=http.get(base+'/api/health',r=
   const headers={'X-CSRF-Token':auth.csrf};
   let response=await page.request.post(base+'/api/admin/reconcile-marketplaces',{headers});assert.equal(response.status(),200,await response.text());
   await page.reload();await page.getByRole('heading',{name:'Обзор бизнеса',exact:true}).waitFor();
-  await page.getByText('Ожидается себестоимость или обработка подтверждённых операций.',{exact:false}).waitFor();
+  await page.getByText('Себестоимость не заполнена для',{exact:false}).waitFor();
   const period='start=2026-10-01&end=2026-10-31&company_id=1';
   const report=await (await page.request.get(base+'/api/report?'+period)).json();
   assert.equal(report.revenue,73380800);assert.equal(report.net_profit,null);

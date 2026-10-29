@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 
 def _alembic(database, revision):
@@ -14,6 +15,7 @@ def _alembic(database, revision):
         capture_output=True,
         text=True,
         env=env,
+        cwd=Path(__file__).resolve().parents[1],
     )
     assert result.returncode == 0, result.stdout + "\\n" + result.stderr
     return result
