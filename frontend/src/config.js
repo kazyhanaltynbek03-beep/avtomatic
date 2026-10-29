@@ -63,11 +63,11 @@ export const groups = [
   [
     "AI инструменты",
     [
-      ["assistant", "Business Assistant", Sparkles, "ai"],
-      ["niches", "Market Analyst", Compass, "marketing"],
-      ["calculator", "Product Calculator", Calculator, "marketing"],
-      ["content", "Product Cards", FileImage, "marketing"],
-      ["designer", "AI Designer", Palette, "marketing"],
+      ["assistant", "AI-ассистент", Sparkles, "ai"],
+      ["niches", "Аналитика рынка", Compass, "marketing"],
+      ["calculator", "Калькулятор товара", Calculator, "marketing"],
+      ["content", "Карточки товаров", FileImage, "marketing"],
+      ["designer", "Дизайн карточек", Palette, "marketing"],
       ["forecast", "Прогноз", TrendingUp, "analytics"],
       ["alerts", "Уведомления", Bell, "analytics"],
     ],
