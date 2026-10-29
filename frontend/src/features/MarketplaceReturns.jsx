@@ -140,6 +140,7 @@ export default function MarketplaceReturns({ ctx }) {
   const fileRef = useRef(null);
   const lock = useRef(false);
   const autoStarted = useRef(new Set());
+  const notify = ctx.notify;
   const params = useMemo(() => {
     const p = new URLSearchParams({ marketplace, offset: String(offset), limit: "30", start: ctx.start, end: ctx.end, search });
     if (ctx.company) p.set("company_id", ctx.company);
@@ -155,7 +156,7 @@ export default function MarketplaceReturns({ ctx }) {
   const { data: syncData } = useLoad(`/marketplace-returns/sync-status${ctx.company ? `?company_id=${ctx.company}` : ""}`, `${ctx.refresh}:${pollTick}`);
   const records = data?.items || [];
   const summary = data?.summary || {};
-  const stores = data?.integrations || [];
+  const stores = useMemo(() => data?.integrations || [], [data?.integrations]);
   const active = useMemo(() => stores.filter((x) => x.active && x.mode === "api"), [stores]);
   const autoEligible = useMemo(() => active.filter((x) => x.marketplace === "Kaspi" || x.marketplace === "Wildberries"), [active]);
   const progressByAccount = useMemo(() => Object.fromEntries((syncData?.items || []).map((x) => [x.account_id, x])), [syncData?.items]);
@@ -176,10 +177,10 @@ export default function MarketplaceReturns({ ctx }) {
     try {
       await api("/marketplace-returns/discover", { method: "POST", body: { account_id: accountId } });
       setPollTick((n) => n + 1);
-      if (!silent) ctx.notify("Проверка сохранённых данных возвратов запущена");
+      if (!silent) notify("Проверка сохранённых данных возвратов запущена");
     } catch (e) { setActionError(e.message); }
     finally { lock.current = false; setBusyAccount(null); }
-  }, [ctx.notify]);
+  }, [notify]);
   useEffect(() => {
     if (!data || !syncData || !autoEligible.length) return;
     let cancelled = false;
