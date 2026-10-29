@@ -43,6 +43,7 @@ app = FastAPI(
 )
 logger = logging.getLogger(__name__)
 SYNC_RUNNING_TIMEOUT_SECONDS = max(60, int(os.getenv("MARKETPLACE_SYNC_TIMEOUT_SECONDS", "1800")))
+KASPI_API_HISTORY_DAYS = 370
 CLAUDE_SKILL_INSTALL_LOCK = threading.Lock()
 
 
@@ -61,6 +62,26 @@ def sync_status_for_display(account, at=None):
     if heartbeat is None or heartbeat < reference - timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS):
         return "failed", "SYNC_TIMEOUT: синхронизация давно не обновлялась; запустите её повторно"
     return status, error
+
+
+def _kaspi_issued_scan_start(today_local):
+    """Kaspi filters orders by creation date, so scan its full retained history
+    when reporting by completion/issue date.
+    """
+    return today_local - timedelta(days=KASPI_API_HISTORY_DAYS)
+
+
+def _kaspi_period_sync_key(report_mode, start, end):
+    """Version the cache so the former 30-day scan cannot mask a full backfill."""
+    mode = f"{report_mode}-full-history-v2" if report_mode == "issued" else report_mode
+    return f"{mode}:{start}:{end}"
+
+
+def _require_complete_kaspi_report(summary):
+    if summary.get("sync_in_progress") or summary.get("sync_status") == "running":
+        raise HTTPException(409, "Kaspi ещё синхронизируется. Дождитесь завершения и скачайте отчёт повторно.")
+    if summary.get("sync_status") != "done" or not summary.get("source_complete"):
+        raise HTTPException(409, "Полная синхронизация Kaspi не подтверждена. Проверьте статус и повторите выгрузку.")
 WB_DEFAULT_SYNC_SECTIONS = ("new_orders", "order", "sale")
 WB_ALLOWED_SYNC_SECTIONS = frozenset(("new_orders", "order", "sale", "realization", "stocks", "products", "order_statuses"))
 
@@ -1222,6 +1243,7 @@ def marketplace_report_xlsx(channel: str, start: date, end: date,
         # These are copies of current API/ERP fields; this export has no new
         # commissions, tax, return or profit formulas.
         summary = marketplace_summary(channel, start, end, company_id, account_id, u, db)
+        _require_complete_kaspi_report(summary)
         sales = marketplace_record_details(channel, "sales", start, end, company_id, account_id, u, db)
         returns = marketplace_record_details(channel, "returns", start, end, company_id, account_id, u, db)
         from openpyxl import Workbook
@@ -1243,7 +1265,10 @@ def marketplace_report_xlsx(channel: str, start: date, end: date,
             ("Возвраты, шт.", "api_return_units", "Количество из строк Kaspi API"),
             ("Строки без конвертации", "api_unconverted", "Требуют проверки даты/суммы"),
         ]:
-            overview.append([label, summary.get(key) if api_available else None, note])
+            value = summary.get(key) if api_available else None
+            if key in {"api_gross_revenue", "api_revenue", "api_returns"} and value is not None:
+                value = value / 100
+            overview.append([label, value, note])
         sale_ws = book.create_sheet("Продажи API")
         headers = ["Дата выдачи", "Магазин", "ID заказа", "Товар", "SKU", "Количество", "Сумма API", "Валюта", "Статус"]
         sale_ws.append(headers)
@@ -4100,7 +4125,7 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             scope(user, acc.company_id)
             worker = connector(acc, load_saved_credentials(db, acc.id))
             today_local = datetime.now(ZoneInfo("Asia/Almaty"))
-            sync_start = max(today_local.date() - timedelta(days=370), start - timedelta(days=30)) if report_mode == "issued" else start
+            sync_start = _kaspi_issued_scan_start(today_local.date()) if report_mode == "issued" else start
             local_start = datetime.combine(sync_start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
             local_end = (today_local if end >= today_local.date() else
                          datetime.combine(end + timedelta(days=1), datetime.min.time(), ZoneInfo("Asia/Almaty")))
@@ -4124,7 +4149,10 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                         if record_type == "order_entry":
                             order_ids_with_entries.add(order_id)
             known_order_ids = [code for oid, code in known_orders.items() if oid in order_ids_with_entries]
-            cursor = json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
+            progress_key = _kaspi_period_sync_key(report_mode, start, end)
+            settings = dict(acc.integration_settings or {})
+            progress = dict(settings.get("kaspi_period_progress") or {})
+            cursor = progress.get(progress_key) or json.dumps({"_qor_kaspi_cursor":1,"scope":"status_only" if status_only else "period",
                 "start_ms":int(local_start.timestamp()*1000),"until_ms":int(local_end.timestamp()*1000)-1,
                 "event_start_ms":int(event_start.timestamp()*1000),
                 "event_end_ms":int(local_end.timestamp()*1000)-1,
@@ -4183,6 +4211,9 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                 acc.last_sync = now()
                 acc.sync_status = "running"
                 acc.sync_error = "KASPI_PERIOD_SYNC" + ("; " + "; ".join(warnings)[-350:] if warnings else "")
+                progress[progress_key] = cursor
+                settings["kaspi_period_progress"] = progress
+                acc.integration_settings = settings
                 db.commit()
                 if pages >= 20000:
                     raise AccessRequired("Kaspi: превышен защитный лимит страниц диапазона")
@@ -4190,11 +4221,21 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             acc.last_sync = now()
             acc.sync_status = "partial" if warnings else "done"
             acc.sync_error = "; ".join(warnings)[:500]
+            settings = dict(acc.integration_settings or {})
+            progress = dict(settings.get("kaspi_period_progress") or {})
+            progress.pop(progress_key, None)
+            settings["kaspi_period_progress"] = progress
+            acc.integration_settings = settings
             if not warnings:
-                settings = dict(acc.integration_settings or {})
                 coverage = dict(settings.get("kaspi_period_sync") or {})
-                coverage[f"{report_mode}:{start}:{end}"] = now().isoformat()
+                coverage[progress_key] = now().isoformat()
                 settings["kaspi_period_sync"] = dict(list(coverage.items())[-100:])
+                if report_mode == "issued":
+                    history_coverage = dict(settings.get("kaspi_history_coverage") or {})
+                    prior_through = str(history_coverage.get("through") or "")
+                    history_coverage["through"] = max(prior_through, str(end))
+                    history_coverage["at"] = now().isoformat()
+                    settings["kaspi_history_coverage"] = history_coverage
                 acc.integration_settings = settings
             audit(db, user, "sync_kaspi_period", "accounts", acc.id,
                   {"start":str(start),"end":str(end),"report_mode":report_mode,"status_only":status_only,"records":records,"pages":pages,
@@ -4240,11 +4281,13 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     if start > local_today:
         raise HTTPException(422, "Начало периода не может быть в будущем")
     bounded_end = min(end, local_today)
+    if report_mode == "issued" and bounded_end < _kaspi_issued_scan_start(local_today):
+        raise HTTPException(422, "Этот период старше доступного 370-дневного окна Kaspi API")
     # Kaspi has no completion-date filter. Refresh recent orders only so daily
     # reports can catch new completions and returns without re-reading a month of
     # orders every time the report is opened.
     refresh_after = local_today - timedelta(days=30)
-    period_key = f"{report_mode}:{start}:{bounded_end}"
+    period_key = _kaspi_period_sync_key(report_mode, start, bounded_end)
     settings = dict(acc.integration_settings or {})
     cache = dict(settings.get("kaspi_period_sync") or {})
     cached_at = None
@@ -4252,6 +4295,18 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         try: cached_at = datetime.fromisoformat(str(cache[period_key]))
         except ValueError: cached_at = None
     age = (now() - cached_at).total_seconds() if cached_at else None
+    history_coverage = dict(settings.get("kaspi_history_coverage") or {})
+    history_at = None
+    try:
+        history_at = datetime.fromisoformat(str(history_coverage.get("at") or ""))
+        history_through = date.fromisoformat(str(history_coverage.get("through") or ""))
+    except ValueError:
+        history_through = None
+    history_age = (now() - history_at).total_seconds() if history_at else None
+    history_fresh = (report_mode == "issued" and history_through is not None
+        and history_through >= bounded_end and history_age is not None and history_age < 60 * 60)
+    if history_fresh and not force:
+        return {"ok":True,"status":"cached","cached":True,"account_id":acc.id,"start":str(start),"end":str(bounded_end),"report_mode":report_mode}
     completed_status_stale = force or cached_at is None or age is None or age >= 6 * 60 * 60
     is_historical = bounded_end < local_today
     cache_ttl = 5 * 60 if start == bounded_end == local_today else (10 * 60 if bounded_end == local_today - timedelta(days=1) else 3600)

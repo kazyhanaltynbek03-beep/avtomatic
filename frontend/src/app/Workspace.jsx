@@ -2239,6 +2239,11 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const active=Boolean(range);
   const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
+  useEffect(()=>{
+    if(channel!=="Kaspi"||!active||summary.data?.sync_status!=="running") return;
+    const timer=setInterval(()=>setRefresh(value=>value+1),5000);
+    return ()=>clearInterval(timer);
+  },[channel,active,summary.data?.sync_status]);
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
   const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
   const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh);
@@ -2251,31 +2256,36 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
     try {
       if(channel==="Kaspi"&&can(ctx.auth,"accounts",true)) {
         const targets=selectedAccount?[selectedAccount]:accounts;
-        await Promise.allSettled(targets.map(a=>api(`/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})));
+        const results=await Promise.allSettled(targets.map(a=>api(`/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})));
+        const failures=results.filter(result=>result.status==="rejected");
+        const alreadyRunning=results.some(result=>result.status==="fulfilled"&&result.value?.already_running);
+        if(failures.length) {setError(`Не удалось запустить синхронизацию для ${failures.length} магазина(ов). Проверьте подключение и повторите.`);return;}
+        if(alreadyRunning) {setError("Синхронизация магазина уже выполняется. Дождитесь её завершения и нажмите «Показать отчёт» ещё раз для выбранного периода.");return;}
       }
       setRange({start,end}); setRefresh(v=>v+1);
     } finally {setBusy(false);}
   };
   const download=async()=>{
-    if(!range) return;
+    if(!range||!reportReady) return;
     setError(""); setBusy(true);
     try { await downloadApiFile(`/marketplace-report.xlsx?${params.toString()}`,`${channel}-API-${range.start}-${range.end}.xlsx`); }
     catch(e){setError(e.message||"Не удалось сформировать Excel");}
     finally{setBusy(false);}
   };
+  const reportReady=channel!=="Kaspi"||(summary.data?.sync_status==="done"&&summary.data?.source_complete===true);
   return <section className="panel marketplace-client-report" aria-label={`Отдельный отчёт ${channel}`}>
     <div className="section-heading"><div><h3>Отдельный отчёт {channel}</h3><p className="muted">Собирает страницы и Excel за выбранные даты. Источник — сохранённые записи API и действующие отчёты QOR.</p></div></div>
     <form className="row-actions" onSubmit={generate}>
       <label>С<input type="date" value={start} onChange={e=>setStart(e.target.value)} required/></label>
       <label>По<input type="date" value={end} onChange={e=>setEnd(e.target.value)} required/></label>
       <button className="primary" type="submit" disabled={busy||!accounts.length}>{busy?"Готовим…":"Показать отчёт"}</button>
-      {channel==="Kaspi"&&<button type="button" disabled={!range||busy} onClick={download}>{busy?"Формируем…":"Скачать Excel"}</button>}
+      {channel==="Kaspi"&&<button type="button" disabled={!range||busy||!reportReady} onClick={download}>{busy?"Формируем…":reportReady?"Скачать Excel":"Дождитесь полной синхронизации"}</button>}
     </form>
     {error&&<ErrorBox error={error}/>}
     {active&&<>
       {channel==="Wildberries" ? <WBFinanceReport key={`client-custom:${range.start}:${range.end}`} accounts={selectedAccount?[selectedAccount]:accounts} company={ctx.company} period="custom" start={range.start} end={range.end}/> : <>
         {summary.loading&&!summary.data?<Spinner/>:summary.error?<ErrorBox error={summary.error}/>:<>
-          <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. Значения показаны в том виде, как их отдаёт API/сводка.</p>
+          <p className="muted">Период {range.start} — {range.end} · синхронизация: {summary.data?.sync_status||"—"}. {summary.data?.sync_status==="running"?"Загружаем API-страницы; данные обновляются автоматически. Выгрузка станет доступна после завершения.":summary.data?.source_complete?"Источник подтверждён как полный для доступного API-окна.":"Источник пока не подтверждён как полный; проверьте ошибки и повторите синхронизацию."}</p>
           <div className="marketplace-report-summary">
         {[ ["Продажи API",apiAvailable?summary.data?.api_gross_revenue:null], ["Продажи после возвратов",apiAvailable?summary.data?.api_revenue:null], ["Единиц продано",!apiAvailable?"Нет данных":summary.data?.api_units==null?"—":`${summary.data.api_units} шт.`], ["Возвраты",!apiAvailable?"Нет данных":summary.data?.api_returns==null?"—":summary.data.api_returns], ["Единиц возврата",!apiAvailable?"Нет данных":summary.data?.api_return_units==null?"—":`${summary.data.api_return_units} шт.`] ].map(([label,value])=><article className="kpi" key={label}><span>{label}</span><strong>{typeof value==="number"?money(value):value??"Нет подтверждённых данных"}</strong></article>)}
           </div>
