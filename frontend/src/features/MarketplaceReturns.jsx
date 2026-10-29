@@ -124,23 +124,32 @@ function InventoryAction({ item, onUpdated, allowInventory }) {
 
 function ReturnRow({ item, onUpdated, allowInventory }) {
   const title = item.product_name || "Товар не сопоставлен";
-  return <>
-    <tr className="returns-desktop-row">
-      <td><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><small className="returns-store">{item.store}</small></td>
-      <td><strong>{item.order_id || "Заказ не подтверждён"}</strong><small>{item.sku || "SKU не найден"}</small><small>ID возврата: {item.external_return_id || "—"}</small></td>
-      <td className="returns-product-cell">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<span>{title}</span></td>
-      <td>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</td>
-      <td>{showDate(returnDate(item))}</td>
-      <td>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</td>
-      <td><span className="returns-status">{labels[item.status] || item.status}</span><small className="returns-muted">{item.financial_status === "confirmed" ? "Финансы подтверждены" : "Ожидает финансового подтверждения"}</small><ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/></td>
-    </tr>
-    <article className="returns-mobile-card">
-      <header><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><span className="returns-status">{labels[item.status] || item.status}</span></header>
-      <div className="returns-mobile-product">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<div><strong>{title}</strong><small>{item.sku || "SKU не найден"} · {item.store}</small></div></div>
-      <div className="returns-mobile-facts"><span>ID возврата <b>{item.external_return_id || "—"}</b></span><span>Заказ <b>{item.order_id || "Не подтверждено"}</b></span><span>Товар / SKU <b>{item.sku || item.product_id || "Не сопоставлен"}</b></span><span>Кол-во <b>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</b></span><span>Дата возврата <b>{showDate(returnDate(item))}</b></span><span>Сумма <b>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</b></span></div>
-      <ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/>
-    </article>
-  </>;
+  return <tr className="returns-desktop-row">
+    <td><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace}</span><small className="returns-store">{item.store}</small></td>
+    <td><strong>{item.order_id || "Заказ не подтверждён"}</strong><small>{item.sku || "SKU не найден"}</small><small>ID возврата: {item.external_return_id || "—"}</small></td>
+    <td className="returns-product-cell">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<span>{title}</span></td>
+    <td>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</td>
+    <td>{showDate(returnDate(item))}</td>
+    <td>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</td>
+    <td><span className="returns-status">{labels[item.status] || item.status}</span><small className="returns-muted">{item.financial_status === "confirmed" ? "Финансы подтверждены" : "Ожидает финансового подтверждения"}</small><ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/></td>
+  </tr>;
+}
+
+function ReturnCard({ item, onUpdated, allowInventory }) {
+  const title = item.product_name || "Товар не сопоставлен";
+  return <article className="returns-mobile-card">
+    <header><span className={`returns-market ${item.marketplace.toLowerCase()}`}>{item.marketplace} · {item.store || "магазин"}</span><span className="returns-status">{labels[item.status] || item.status}</span></header>
+    <div className="returns-mobile-product">{item.image_url ? <img src={item.image_url} alt="" loading="lazy"/> : <span className="returns-image-placeholder">□</span>}<div><strong>{title}</strong><small>{item.sku || "SKU не найден"}</small></div></div>
+    <div className="returns-mobile-facts">
+      <span>ID возврата <b>{item.external_return_id || "Не указан источником"}</b></span>
+      <span>Исходный заказ <b>{item.order_id || "Не подтверждён"}</b></span>
+      <span>ID товара <b>{item.product_id ?? "Не сопоставлен"}</b></span>
+      <span>Количество <b>{item.quantity == null ? "Не подтверждено" : `${item.quantity} шт.`}</b></span>
+      <span>Дата возврата <b>{showDate(returnDate(item))}</b></span>
+      <span>Сумма <b>{item.amount == null || item.financial_status !== "confirmed" ? "Не подтверждено" : returnAmount(item.amount)}</b></span>
+    </div>
+    <ReturnDetails item={item}/><InventoryAction item={item} onUpdated={onUpdated} allowInventory={allowInventory}/>
+  </article>;
 }
 
 export default function MarketplaceReturns({ ctx }) {
@@ -311,19 +320,19 @@ export default function MarketplaceReturns({ ctx }) {
     {marketplace === "Ozon" && stores.some((x) => x.marketplace === "Ozon" && x.active) && <div className="returns-empty-integration"><CircleAlert size={18}/><span>Интеграция Ozon подключена, но обнаружение возвратов ещё не настроено.</span></div>}
     <div className="returns-filter-row"><label className="returns-search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Заказ, артикул, SKU, товар или магазин" aria-label="Поиск возвратов"/><button type="button" onClick={() => setSearch("")} aria-label="Очистить поиск">×</button></label><span className="returns-period-note">Период относится к дате заявки или подтверждённой финансовой операции.</span></div>
     <section className="returns-list-section" id="returns-list" aria-labelledby="returns-list-title">
-      <div className="returns-list-heading"><div><h3 id="returns-list-title">Список возвратов</h3><span>{data?.total ?? 0} позиций · Kaspi и Wildberries</span></div>{loading && data && <small>Обновляем список…</small>}</div>
+      <div className="returns-list-heading"><div><h3 id="returns-list-title">Список возвратов</h3><span>{loading && !data ? "Загружаем список…" : `${data?.total ?? 0} позиций · Kaspi и Wildberries`}</span></div>{loading && data && <small>Обновляем список…</small>}</div>
       {loading && !data ? <Spinner/> : error ? <ErrorBox error={error}/> : records.length ? <>
-        <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={item.id} item={item} onUpdated={() => setListRefreshTick((n) => n + 1)} allowInventory={inventoryWrite}/>)}</tbody></table></div>
+        <div className="returns-table-wrap"><table className="returns-table"><thead><tr><th>Маркетплейс / магазин</th><th>Исходный заказ / SKU</th><th>Товар</th><th>Количество</th><th>Дата возврата</th><th>Сумма</th><th>Статус / сверка</th></tr></thead><tbody>{records.map((item) => <ReturnRow key={item.id} item={item} onUpdated={() => setListRefreshTick((n) => n + 1)} allowInventory={inventoryWrite}/>)}</tbody></table></div><div className="returns-mobile-list">{records.map((item) => <ReturnCard key={item.id} item={item} onUpdated={() => setListRefreshTick((n) => n + 1)} allowInventory={inventoryWrite}/>)}</div>
         <div className="returns-pagination"><span>{data.total} записей · страница {currentPage} из {Math.max(pageCount, 1)}</span><div><button disabled={!offset} aria-label="Предыдущая страница" onClick={() => setOffset(Math.max(0, offset - 30))}><ChevronLeft size={18}/></button><button disabled={offset + 30 >= data.total} aria-label="Следующая страница" onClick={() => setOffset(offset + 30)}><ChevronRight size={18}/></button></div></div>
       </> : <div className="returns-empty"><Clock3 size={24}/><strong>Возвраты пока не найдены</strong><span>Записи появятся после проверки сохранённых данных маркетплейса. Открытие страницы не запускает полную синхронизацию.</span></div>}
     </section>
     <div className="returns-metrics-grid">
-      <Metric title="Заявки на возврат" value={summary.requests || 0} caption="Не равны возврату денег" active={selectedMetric === "requests"} onClick={() => setSelectedMetric(selectedMetric === "requests" ? "" : "requests")}/>
-      <Metric title="Подтверждённые возвраты" value={summary.confirmed_count || 0} caption="Финансовый источник подтвердил" tone="green" active={selectedMetric === "confirmed"} onClick={() => setSelectedMetric(selectedMetric === "confirmed" ? "" : "confirmed")}/>
-      <Metric title="Сумма подтверждённых возвратов" value={summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"} caption="KZT · изолировано от отчётов" active={selectedMetric === "confirmed_amount"} onClick={() => setSelectedMetric(selectedMetric === "confirmed_amount" ? "" : "confirmed_amount")}/>
-      <Metric title="На проверке" value={summary.pending_count || 0} caption="Дата или сумма могут отсутствовать" tone="amber" active={selectedMetric === "pending"} onClick={() => setSelectedMetric(selectedMetric === "pending" ? "" : "pending")}/>
-      <Metric title="Отклонённые" value={summary.rejected_count || 0} active={selectedMetric === "rejected"} onClick={() => setSelectedMetric(selectedMetric === "rejected" ? "" : "rejected")}/>
-      <Metric title="Не подтверждены дата или сумма" value={summary.unknown_count || 0} caption="Без подстановки даты синхронизации" tone="amber" active={selectedMetric === "unknown"} onClick={() => setSelectedMetric(selectedMetric === "unknown" ? "" : "unknown")}/>
+      <Metric title="Заявки на возврат" value={loading && !data ? "—" : (summary.requests || 0)} caption="Не равны возврату денег" active={selectedMetric === "requests"} onClick={() => setSelectedMetric(selectedMetric === "requests" ? "" : "requests")}/>
+      <Metric title="Подтверждённые возвраты" value={loading && !data ? "—" : (summary.confirmed_count || 0)} caption="Финансовый источник подтвердил" tone="green" active={selectedMetric === "confirmed"} onClick={() => setSelectedMetric(selectedMetric === "confirmed" ? "" : "confirmed")}/>
+      <Metric title="Сумма подтверждённых возвратов" value={loading && !data ? "—" : (summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено")} caption="KZT · изолировано от отчётов" active={selectedMetric === "confirmed_amount"} onClick={() => setSelectedMetric(selectedMetric === "confirmed_amount" ? "" : "confirmed_amount")}/>
+      <Metric title="На проверке" value={loading && !data ? "—" : (summary.pending_count || 0)} caption="Дата или сумма могут отсутствовать" tone="amber" active={selectedMetric === "pending"} onClick={() => setSelectedMetric(selectedMetric === "pending" ? "" : "pending")}/>
+      <Metric title="Отклонённые" value={loading && !data ? "—" : (summary.rejected_count || 0)} active={selectedMetric === "rejected"} onClick={() => setSelectedMetric(selectedMetric === "rejected" ? "" : "rejected")}/>
+      <Metric title="Не подтверждены дата или сумма" value={loading && !data ? "—" : (summary.unknown_count || 0)} caption="Без подстановки даты синхронизации" tone="amber" active={selectedMetric === "unknown"} onClick={() => setSelectedMetric(selectedMetric === "unknown" ? "" : "unknown")}/>
     </div>
     <section className="returns-reconciliation"><div className="returns-reconciliation-title"><PackageCheck size={18}/><strong>Финансовая сверка возвратов</strong><span>Тестовый режим</span></div><div className="returns-reconciliation-grid"><div><small>Текущая сумма отчёта</small><strong>Требует выбора финансового источника</strong></div><div><small>Подтверждённые возвраты за период</small><strong>{summary.confirmed_amount ? returnAmount(summary.confirmed_amount) : "Не подтверждено"}</strong></div><div><small>Уже учтено / ещё не учтено</small><strong>{summary.accounted_amount || summary.not_accounted_amount ? `${money(summary.accounted_amount)} / ${money(summary.not_accounted_amount)}` : "Сверка не выполнена"}</strong></div><div><small>Отдельный скорректированный итог</small><strong>Не рассчитывается автоматически</strong></div></div><p>Автовычитание отключено: возврат не уменьшается повторно, если он уже есть в отчёте. Выручка, прибыль, выплата и денежный поток сверяются отдельно.</p></section>
 
