@@ -383,7 +383,7 @@ export default function App() {
             <div className="avatar small">{auth.user.name[0]}</div>
           </div>
         </header>
-        <main>
+        <main data-page={page}>
           <div className="page-heading">
             <div>
               <div className="eyebrow">
