@@ -174,6 +174,7 @@ export default function MarketplaceReturns({ ctx }) {
     setActionError("");
     try {
       await api("/marketplace-returns/discover", { method: "POST", body: { account_id: accountId } });
+      setPollTick((n) => n + 1);
       if (!silent) ctx.notify("Проверка сохранённых данных возвратов запущена");
     } catch (e) { setActionError(e.message); }
     finally { lock.current = false; setBusyAccount(null); }
