@@ -976,6 +976,7 @@ function ReportPage({ page, ctx }) {
     {name:"Kaspi", revenue:dashboardKaspiSummary.data?.api_revenue, returns:dashboardKaspiSummary.data?.api_returns, apiLoading:dashboardKaspiSummary.loading, apiError:dashboardKaspiSummary.error},
     {name:"Wildberries", revenue:dashboardWbSummary.data?.api_revenue, returns:dashboardWbSummary.data?.api_returns, apiLoading:dashboardWbSummary.loading, apiError:dashboardWbSummary.error},
   ] : (r?.channels || []);
+  const dashboardRevenueTotal = dashboardChannels.reduce((total, row) => total + (Number(row.revenue) || 0), 0);
   if (usesDashboard && dashLoading && !loadedReport) return <Spinner />;
   if (usesDashboard && dashError && !loadedReport) return <ErrorBox error={dashError} />;
   if (usesDashboard && !loadedReport) {
@@ -1315,7 +1316,7 @@ function ReportPage({ page, ctx }) {
                             0,
                             Math.min(
                               100,
-                              ((Number(c.revenue) || 0) / Math.max(r.revenue, 1)) * 100,
+                              ((Number(c.revenue) || 0) / Math.max(dashboardRevenueTotal, 1)) * 100,
                             ),
                           ) + "%",
                         background: [
