@@ -47,6 +47,7 @@ import "../style.css";
 const flat = groups.flatMap((g) => g[1]);
 const channels = ["Kaspi", "Wildberries", "Ozon", "Offline", "B2B"];
 const KaspiPreorder = lazy(() => import("../features/KaspiPreorder"));
+const MarketplaceReturns = lazy(() => import("../features/MarketplaceReturns"));
 const AI_JOB_TIMEOUT_MS = 15 * 60 * 1000;
 async function waitForAIJob(id, onUpdate = () => {}) {
   const deadline = Date.now() + AI_JOB_TIMEOUT_MS;
@@ -933,6 +934,7 @@ function ReportPage({ page, ctx }) {
     );
   }
   if (page === "forecast") return <Forecast ctx={ctx} />;
+  if (page === "marketplace-returns") return <Suspense fallback={<Spinner />}><MarketplaceReturns ctx={ctx} /></Suspense>;
   if (page === "profit" || page === "accounting")
     return (
       <>
