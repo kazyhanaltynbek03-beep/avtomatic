@@ -1231,7 +1231,7 @@ def marketplace_returns_sync_status(company_id: int | None = None,
     if company_id is not None: scope(u, company_id); q = q.where(Account.company_id == company_id)
     return {"items": [{"account_id": a.id, "marketplace": a.channel, "store": a.name,
                        "status": state.status, "scanned": state.scanned, "found": state.found,
-                       "error": state.error, "completed_at": state.completed_at}
+                       "error": state.error, "started_at": state.started_at, "completed_at": state.completed_at}
                       for state, a in db.execute(q)]}
 
 
