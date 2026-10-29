@@ -840,12 +840,12 @@ function ExpenseOperations({ ctx, channelFilter }) {
   const [category, setCategory] = useState("all");
   const pageSize = 200;
 
-  const buildPath = (offset = 0) => {
+  const buildPath = useCallback((offset = 0) => {
     const params = new URLSearchParams({start:ctx.start, end:ctx.end, limit:String(pageSize), offset:String(offset)});
     if (ctx.company) params.set("company_id", ctx.company);
     if (channelFilter !== "all") params.set("channel", channelFilter);
     return "/expenses/operations?" + params.toString();
-  };
+  }, [ctx.start, ctx.end, ctx.company, channelFilter]);
 
   useEffect(() => {
     let alive = true;
@@ -863,7 +863,7 @@ function ExpenseOperations({ ctx, channelFilter }) {
       if (alive) setLoading(false);
     });
     return () => { alive = false; };
-  }, [ctx.start, ctx.end, ctx.company, ctx.refresh, channelFilter]);
+  }, [buildPath, ctx.refresh]);
 
   const loadMore = async () => {
     if (loadingMore || items.length >= total) return;
