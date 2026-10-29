@@ -2171,6 +2171,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .marketplace-allocation>.marketplace-quantity{display:grid;grid-template-columns:1fr;gap:7px;align-content:start;line-height:1.4}
 .marketplace-allocation>.marketplace-quantity input{display:block}
 .marketplace-allocation>.marketplace-account-status{display:block;line-height:1.5}
+.marketplace-order-status{font-size:12px;letter-spacing:0;font-weight:700;padding:6px 10px;border-radius:999px;white-space:nowrap}
+.marketplace-order-status--delivered{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
+.marketplace-order-status--in_delivery{background:#dbeafe;color:#1d4ed8;border:1px solid #bfdbfe}
+.marketplace-order-status--waiting{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
+.marketplace-order-status--canceled{background:#fee2e2;color:#b91c1c;border:1px solid #fecaca}
+.marketplace-order-status--returns{background:#ffedd5;color:#c2410c;border:1px solid #fed7aa}
 .marketplace-size-allocation{grid-column:1/-1;display:grid;gap:8px;min-width:0}
 .marketplace-size-allocation>strong{color:#52675d;font-size:12px;line-height:1.4}
 .marketplace-size-allocation>div{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:9px}
