@@ -2709,3 +2709,72 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
 .returns-list-heading span,.returns-list-heading>small{color:#78877f;font-size:12px}
 .returns-list-heading>small{white-space:nowrap}
 @media(max-width:760px){.returns-list-section{gap:9px}.returns-list-heading h3{font-size:17px}.returns-list-heading span,.returns-list-heading>small{font-size:11px}}
+
+/* AI workspace: readable conversation and responsive controls */
+.chat-shell{grid-template-columns:minmax(190px,220px) minmax(0,1fr) minmax(180px,205px);gap:12px;height:calc(100dvh - 150px);min-height:620px}
+.chat-head{align-items:center;gap:14px}
+.chat-title{display:flex;align-items:center;gap:12px;min-width:0;flex:1}
+.chat-title>div{min-width:0}
+.chat-title h2{line-height:1.3;overflow-wrap:anywhere}
+.chat-history-toggle,.chat-history-close{display:none}
+.chat-head-controls select{height:42px;padding:8px 10px;border-radius:12px}
+.chat-head-controls select:first-child{max-width:230px}
+.chat-head-controls select:last-child{max-width:190px}
+.chat-messages{padding:22px clamp(18px,3vw,48px)}
+.chat-row.assistant .chat-bubble{width:min(100%,900px);max-width:100%;padding:16px 18px}
+.chat-row.user .chat-bubble{width:fit-content;max-width:min(78%,740px)}
+.chat-bubble{overflow-wrap:anywhere}
+.chat-text{font-size:14px;line-height:1.7}
+.chat-agents{padding:12px}
+.agent-mini{padding:10px 8px;gap:10px}
+.agent-mini small{white-space:normal;line-height:1.3;max-width:none}
+.chat-composer{padding:12px 18px 14px}
+.composer-row{padding:8px}
+.attach-btn,.send-btn{width:42px;height:42px;border-radius:13px}
+@media(max-width:1100px){
+  .chat-shell{grid-template-columns:minmax(190px,220px) minmax(0,1fr)}
+  .chat-agents{display:none}
+}
+@media(max-width:700px){
+  .chat-shell{position:relative;height:calc(100dvh - 150px);min-height:480px}
+  .chat-sidebar{display:none}
+  .chat-sidebar.history-open{display:flex;position:absolute;z-index:35;inset:0 auto auto 0;width:min(88vw,330px);height:calc(100dvh - 205px);max-height:720px;box-shadow:0 18px 50px rgba(14,43,32,.22)}
+  .chat-history-close{display:flex;align-items:center;gap:7px;width:100%;min-height:40px;margin-bottom:8px;padding:8px 10px;border:1px solid #dce7e1;border-radius:11px;background:#fff;color:#35584a;font-weight:650}
+  .chat-main{height:100%;border-radius:18px}
+  .chat-head{display:flex;flex-wrap:wrap;align-items:flex-start;padding:12px;gap:10px}
+  .chat-title{flex:1 1 100%;gap:9px}
+  .chat-history-toggle{display:flex;align-items:center;justify-content:center;gap:6px;flex:0 0 auto;min-height:38px;padding:7px 10px;border:1px solid #dce7e1;border-radius:11px;background:#fff;color:#315746;font-size:12px;font-weight:650}
+  .chat-head .eyebrow{display:block;font-size:9px;letter-spacing:.1em}
+  .chat-head h2{font-size:15px;margin:3px 0 0}
+  .chat-head-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100%;gap:7px}
+  .chat-head-controls select,.chat-head-controls select:first-child,.chat-head-controls select:last-child{width:100%;max-width:none;min-height:42px;font-size:11px;padding:7px 8px}
+  .chat-messages{padding:14px 11px}
+  .chat-row{margin:10px 0}
+  .chat-row.assistant .chat-bubble{width:100%;padding:13px 14px}
+  .chat-row.user .chat-bubble{max-width:88%;padding:11px 13px}
+  .chat-role{font-size:10px}
+  .chat-text{font-size:14px;line-height:1.65}
+  .chat-composer{padding:9px 9px calc(9px + env(safe-area-inset-bottom))}
+  .chat-composer>small{display:none}
+  .composer-row{gap:7px;border-radius:16px}
+  .composer-row textarea{min-height:38px;max-height:120px;padding:8px 5px!important;font-size:14px}
+  .attach-btn,.send-btn{width:42px;height:42px;flex:0 0 42px}
+  .chat-empty{margin:24px auto}
+  .chat-empty .ai-workflows{grid-template-columns:1fr}
+}
+@media(max-width:390px){
+  .chat-head{padding:10px}
+  .chat-history-toggle{padding:6px 8px;font-size:11px}
+  .chat-head-controls{grid-template-columns:1fr}
+  .chat-row.assistant .chat-bubble{padding:12px}
+  .chat-text{font-size:13px}
+}
+
+.chat-markdown p{margin:0 0 10px}
+.chat-markdown p:last-child{margin-bottom:0}
+.chat-markdown h3{margin:14px 0 7px;color:#173d2e;font-size:15px;line-height:1.4}
+.chat-markdown ul{margin:6px 0 12px;padding-left:22px}
+.chat-markdown li{padding:2px 0 2px 2px}
+.chat-markdown strong{color:#183e2f}
+.chat-history-close{cursor:pointer}
+.chat-history-toggle{cursor:pointer}
