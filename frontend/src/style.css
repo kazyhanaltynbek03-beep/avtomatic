@@ -2370,3 +2370,9 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
 @media(max-width:390px){
   .toolbar>.periods{grid-template-columns:none}
 }
+
+/* Product entry and per-item stock actions */
+.product-form-help{margin:12px 0;padding:11px 13px;border:1px solid #e0e9e3;border-radius:12px;background:#f7faf8;color:#65766d;font-size:12px;line-height:1.5}
+.stock-item-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.stock-item-actions button{min-height:38px;padding:7px 11px;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px}
+@media(max-width:600px){.stock-item-actions button{flex:1;min-height:42px}}
