@@ -157,6 +157,8 @@ export default function MarketplaceReturns({ ctx }) {
   const summary = data?.summary || {};
   const stores = data?.integrations || [];
   const active = stores.filter((x) => x.active && x.mode === "api");
+  const autoEligible = active.filter((x) => x.marketplace === "Kaspi" || x.marketplace === "Wildberries");
+  const autoEligibleKey = autoEligible.map((x) => x.account_id).join(",");
   const progressByAccount = Object.fromEntries((syncData?.items || []).map((x) => [x.account_id, x]));
 
   useEffect(() => { setOffset(0); }, [marketplace, search, ctx.company, ctx.start, ctx.end, selectedAccountId, selectedMetric]);
@@ -180,10 +182,10 @@ export default function MarketplaceReturns({ ctx }) {
     finally { lock.current = false; setBusyAccount(null); }
   };
   useEffect(() => {
-    if (!data || !syncData || !active.length) return;
+    if (!data || !syncData || !autoEligible.length) return;
     let cancelled = false;
     const startOnce = async () => {
-      for (const store of active) {
+      for (const store of autoEligible) {
         const accountId = Number(store.account_id);
         if (!accountId || autoStarted.current.has(accountId)) continue;
         autoStarted.current.add(accountId);
@@ -194,7 +196,7 @@ export default function MarketplaceReturns({ ctx }) {
     };
     startOnce();
     return () => { cancelled = true; };
-  }, [data, syncData, active.length, ctx.company]);
+  }, [data, syncData, autoEligibleKey, ctx.company]);
 
   const previewStatement = async (file, accountId = statementAccount) => {
     if (!file || !accountId) return;
