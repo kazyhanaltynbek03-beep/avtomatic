@@ -2343,3 +2343,30 @@ button.kaspi-report-total:hover,button.kaspi-report-total:focus-visible{outline:
   .marketplace-inbox>.row-actions[aria-label="Отчёты маркетплейса"]{grid-template-columns:1fr}
   .kaspi-report-summary{grid-template-columns:1fr}
 }
+
+/* Restore the original one-row, swipeable period picker on phones. */
+@media(max-width:700px){
+  .toolbar>.periods{
+    display:flex;
+    grid-template-columns:none;
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior-x:contain;
+    scrollbar-width:none;
+    scroll-snap-type:x proximity;
+  }
+  .toolbar>.periods::-webkit-scrollbar{display:none}
+  .toolbar>.periods button{
+    flex:0 0 auto;
+    min-width:max-content;
+    white-space:nowrap;
+    padding:7px 10px;
+    scroll-snap-align:start;
+  }
+  .toolbar>.periods button:last-child:nth-child(3n+1){grid-column:auto}
+}
+@media(max-width:390px){
+  .toolbar>.periods{grid-template-columns:none}
+}
