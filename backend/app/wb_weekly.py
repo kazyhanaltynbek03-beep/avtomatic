@@ -655,7 +655,7 @@ def create_client_template_xlsx(report, raw_rows, unit_costs=None):
         return is_return_operation(p) and not is_return_reversal(p)
 
     groups = OrderedDict()
-    names, costs, expense_lines = {}, dict(unit_costs or {}), []
+    names, costs, expense_lines = dict(report.get("product_names") or {}), dict(unit_costs or {}), []
     expense_fields = [
         (("penalty",), "Айыппұл", "Штраф"),
         (("paidStorage", "storageFee", "storage_fee"), "Сақтау", "Хранение"),
@@ -752,6 +752,8 @@ def create_client_template_xlsx(report, raw_rows, unit_costs=None):
             if as_day(end) and sunday > as_day(end): sunday = as_day(end)
             row[1] = f"{monday.isoformat()} – {sunday.isoformat()}"
         expenses.append(row)
+    if not expense_lines:
+        expenses.append(["", "", "", "", "", 0])
     expense_total = expenses.max_row + 1
     expenses.cell(expense_total, 1, "БАРЛЫҒЫ")
     expenses.cell(expense_total, 6, f"=SUM(F2:F{expense_total-1})" if expense_total > 2 else 0)
