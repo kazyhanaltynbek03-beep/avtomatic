@@ -212,8 +212,8 @@ def create_xlsx(report):
         "Продано, шт.", "Возвращено, шт.", "Итого, шт.",
         "Выручка, ₸", "Возвраты, ₸", "Чистый доход, ₸",
         "Себестоимость за шт., ₸", "Себестоимость, ₸",
-        "Налог, %", "Налог, ₸", "Комиссия, ₸", "Логистика, ₸",
-        "Прибыль после налога, комиссий, логистики и рекламы, ₸",
+        "Налог, %", "Налог, ₸", "Комиссия, ₸", "Логистика, ₸", "Реклама, ₸",
+        "Прибыль после расходов, ₸",
     ]
     sheet.append(headers)
     for cell in sheet[4]:
@@ -236,9 +236,10 @@ def create_xlsx(report):
     for index, width in enumerate(widths, 1):
         sheet.column_dimensions[chr(64 + index)].width = width
     sheet.row_dimensions[4].height = 42
-    for row in sheet.iter_rows(min_row=5, min_col=9):
-        for cell in row:
-            cell.number_format = '#,##0.00'
+    for cells in sheet.iter_rows(min_row=5):
+        for column in (9, 10, 11, 12, 13, 15, 16, 17, 18, 19):
+            cells[column - 1].number_format = '#,##0.00'
+        cells[13].number_format = '0.00"%"'
     output = BytesIO()
     book.save(output)
     return output.getvalue()
