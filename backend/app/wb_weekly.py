@@ -754,7 +754,7 @@ def create_client_template_xlsx(report, raw_rows, unit_costs=None):
         expenses.append(row)
     expense_total = expenses.max_row + 1
     expenses.cell(expense_total, 1, "БАРЛЫҒЫ")
-    expenses.cell(expense_total, 6, f"=SUM(F2:F{expense_total-1})")
+    expenses.cell(expense_total, 6, f"=SUM(F2:F{expense_total-1})" if expense_total > 2 else 0)
     last_order = max(2, orders.max_row)
     summary_rows = [
         ("Тапсырыстар саны", f"=COUNTA(Тапсырыстар!A2:A{last_order})"),
@@ -785,6 +785,27 @@ def create_client_template_xlsx(report, raw_rows, unit_costs=None):
         summary.cell(i, 2, f'=SUMIF(Тапсырыстар!E2:E{last_order},A{i},Тапсырыстар!I2:I{last_order})-SUMIF(Тапсырыстар!E2:E{last_order},A{i},Тапсырыстар!J2:J{last_order})')
         for col, source in ((3, "O"), (4, "Q"), (5, "R"), (6, "S")):
             summary.cell(i, col, f'=SUMIF(Тапсырыстар!E2:E{last_order},A{i},Тапсырыстар!{source}2:{source}{last_order})')
+    weekly_title = max(45, 24 + len(article_list))
+    summary.cell(weekly_title, 1, "Апта бойынша")
+    weekly_header = weekly_title + 1
+    for col, value in enumerate(["Есеп аптасы", "Тапсырыстардан таза түсім, ₸", "Жалпы шығындар, ₸", "WB банкке аударды (есептік), ₸", "Өзіндік құн, ₸", "Салық, ₸", "Таза пайда, ₸"], 1):
+        summary.cell(weekly_header, col, value)
+    weeks = sorted({str(row[3]) for row in order_data if row[3]} | {str(row[1]) for row in expense_lines if row[1]})
+    if not weeks:
+        weeks = [f"{start} – {end}"]
+    for idx, week in enumerate(weeks, weekly_header + 1):
+        summary.cell(idx, 1, safe(week))
+        summary.cell(idx, 2, f'=SUMIF(Тапсырыстар!D2:D{last_order},A{idx},Тапсырыстар!O2:O{last_order})')
+        summary.cell(idx, 3, f"=SUMIF('Жалпы шығындар'!B2:B{expense_total-1},A{idx},'Жалпы шығындар'!F2:F{expense_total-1})")
+        summary.cell(idx, 4, f"=B{idx}-C{idx}")
+        summary.cell(idx, 5, f'=SUMIF(Тапсырыстар!D2:D{last_order},A{idx},Тапсырыстар!Q2:Q{last_order})')
+        summary.cell(idx, 6, f'=Баптаулар!B4*D{idx}')
+        summary.cell(idx, 7, f"=D{idx}-E{idx}-F{idx}")
+    weekly_total = weekly_header + len(weeks) + 1
+    summary.cell(weekly_total, 1, "БАРЛЫҒЫ")
+    for col in range(2, 8):
+        summary.cell(weekly_total, col, f"=SUM({get_column_letter(col)}{weekly_header+1}:{get_column_letter(col)}{weekly_total-1})")
+
     for ws in wb.worksheets:
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
