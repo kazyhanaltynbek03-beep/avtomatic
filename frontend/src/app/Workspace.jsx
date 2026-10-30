@@ -958,20 +958,22 @@ function ReportPage({ page, ctx }) {
   };
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") : null;
-  const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
-    page === "forecast" ? null : reportPath,
-    ctx.refresh,
-    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
-  );
   const { data: dash, error: dashError, loading: dashLoading } = useLoad(
     usesDashboard ? summaryPath : null,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  // Match Kaspi/WB turnover to the dedicated marketplace pages. Profit and cost
-  // reports continue to use the existing finance engine.
-  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
-  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
+  // Load dashboard work in sequence: the headline first, then the detailed report,
+  // then marketplace breakdowns. Parallel full-history scans can exhaust Render memory.
+  const reportEnabled = page !== "forecast" && (!usesDashboard || Boolean(dash?.report || dashError));
+  const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
+    reportEnabled ? reportPath : null,
+    ctx.refresh,
+    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
+  );
+  const marketplaceDetailsEnabled = usesDashboard && Boolean(loadedReport || reportError);
+  const dashboardKaspiSummary = useLoad(marketplaceDetailsEnabled ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:marketplaceDetailsEnabled ? 900 : 0});
+  const dashboardWbSummary = useLoad(marketplaceDetailsEnabled ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:marketplaceDetailsEnabled ? 900 : 0});
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
