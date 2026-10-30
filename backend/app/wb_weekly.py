@@ -602,6 +602,250 @@ def build_report(db, account, start: date, end: date, period="weekly"):
     return status
 
 
+def create_client_template_xlsx(report, raw_rows, unit_costs=None):
+    """Export WB Finance API rows in the client's editable four-sheet layout.
+
+    Export formatting and formulas are isolated from build_report's calculations.
+    """
+    from collections import OrderedDict
+    from datetime import date, timedelta
+
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Жиынтық"
+    settings = wb.create_sheet("Баптаулар")
+    orders = wb.create_sheet("Тапсырыстар")
+    expenses = wb.create_sheet("Жалпы шығындар")
+    start = str(report.get("start") or report.get("week_start") or "")
+    end = str(report.get("end") or report.get("week_end") or "")
+    summary["A1"] = f"WB жиынтық: {start} – {end}"
+    settings["A1"] = "Wildberries: тапсырыстар бойынша пайда"
+    settings["A2"] = f"Кезең: {start} – {end} (WB Finance API)"
+    settings["A4"], settings["B4"], settings["C4"] = "Салық мөлшерлемесі", 0.10, "10% әдепкі мөлшерлеме; жиынтықта WB аударған сомадан есептеледі"
+    settings["A6"] = "Толтыру: C бағанына 1 дананың өзіндік құнын жазыңыз. Сары ұяшықтарды өзгертуге болады."
+    settings["A8"], settings["B8"], settings["C8"] = "Артикул", "Тауар", "Өзіндік құн, ₸/дана"
+
+    def safe(value):
+        if value is None:
+            return ""
+        value = str(value)
+        return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
+
+    def as_day(*values):
+        for value in values:
+            if value:
+                try: return date.fromisoformat(str(value)[:10])
+                except (ValueError, TypeError): pass
+        return None
+
+    def amt(p, *keys):
+        for key in keys:
+            if p.get(key) not in (None, ""):
+                return decimal(p[key])
+        return Decimal(0)
+
+    def op(p):
+        return operation_label(p).lower()
+
+    def sale(p):
+        label = op(p)
+        return not is_return_operation(p) and not is_return_reversal(p) and ("продаж" in label or "sale" in label)
+
+    def returned(p):
+        return is_return_operation(p) and not is_return_reversal(p)
+
+    groups = OrderedDict()
+    names, costs, expense_lines = dict(report.get("product_names") or {}), dict(unit_costs or {}), []
+    expense_fields = [
+        (("penalty",), "Айыппұл", "Штраф"),
+        (("paidStorage", "storageFee", "storage_fee"), "Сақтау", "Хранение"),
+        (("deduction",), "Ұсталым", "Удержание"),
+        (("acceptance",), "Қабылдау", "Приёмка"),
+        (("additionalPayment",), "Қосымша төлем", "Корректировка"),
+        (("advert", "advertisingFee", "advertising_fee"), "Жарнама", "Реклама"),
+    ]
+    for p in raw_rows:
+        if not isinstance(p, dict): continue
+        srid = str(p.get("srid") or p.get("srId") or p.get("rrdId") or p.get("rrd_id") or "")
+        key = srid or f"row:{p.get('rrdId') or p.get('rrd_id') or len(groups)+1}"
+        g = groups.setdefault(key, {"rows": [], "sold": 0, "returned": 0, "seller": Decimal(0), "payout": Decimal(0), "logistics": Decimal(0)})
+        g["rows"].append(p)
+        qty = abs(int(decimal(p.get("quantity"))))
+        if sale(p):
+            g["sold"] += qty
+            retail = amt(p, "retailAmount", "retail_amount")
+            if retail == 0: retail = amt(p, "retailPriceWithDisc", "retail_price_withdisc_rub") * qty
+            g["seller"] += abs(retail)
+        elif returned(p):
+            g["returned"] += qty
+        raw_pay = next((p[k] for k in ("forPay", "ppvzForPay", "ppvz_for_pay") if p.get(k) is not None), None)
+        if raw_pay is not None and (sale(p) or returned(p)):
+            g["payout"] += signed_wb_sale_amount(p, raw_pay)
+        g["logistics"] += abs(amt(p, "deliveryService", "deliveryRub", "delivery_rub"))
+        article = str(p.get("vendorCode") or p.get("vendor_code") or p.get("nmId") or p.get("nm_id") or "")
+        title = str(p.get("title") or p.get("saName") or p.get("sa_name") or p.get("subjectName") or p.get("subject_name") or "")
+        if article: names.setdefault(article, title)
+        day = as_day(p.get("rrdDate"), p.get("rrDt"), p.get("rrDate"), p.get("rr_dt"), p.get("saleDt"), p.get("saleDate"))
+        for fields, label, note in expense_fields:
+            value = abs(amt(p, *fields))
+            if value:
+                expense_lines.append([day.isoformat() if day else "", "", label, safe(p.get("bonus_type_name") or p.get("bonusTypeName") or note), safe(article), float(value)])
+
+    article_list = sorted(set(names) | {str(x) for x in costs}, key=str.lower)
+    settings_last = max(9, 8 + len(article_list))
+    for i, article in enumerate(article_list, 9):
+        settings.cell(i, 1, safe(article))
+        settings.cell(i, 2, safe(names.get(article, "")))
+        if costs.get(article) is not None:
+            settings.cell(i, 3, float(decimal(costs[article])))
+        settings.cell(i, 3).fill = PatternFill("solid", fgColor="FFF2CC")
+        settings.cell(i, 3).number_format = '#,##0.00;[Red]-#,##0.00'
+
+    orders.append([
+        "Тапсырыс нөмірі (Srid)", "Тапсырыс күні", "Соңғы операция күні", "Есеп аптасы", "Артикул", "Тауар", "Схема", "Статус",
+        "Сатылды, дана", "Қайтарылды, дана", "Сатушы бағасы (жеңілдіктен кейін), ₸", "WB аударатын (комиссиядан кейін), ₸",
+        "WB комиссиясы + эквайринг, ₸", "Логистика, ₸", "WB-дан таза түсім, ₸", "Өзіндік құн, ₸/дана",
+        "Өзіндік құн барлығы, ₸", "Салық, ₸", "Таза пайда / шығын, ₸",
+    ])
+    order_data = []
+    for key, g in groups.items():
+        ps = g["rows"]
+        sold, ret = g["sold"], g["returned"]
+        seller_price = g["seller"] * Decimal(max(sold-ret, 0)) / Decimal(sold) if sold and ret else g["seller"]
+        payout = g["payout"]
+        if sold and ret >= sold and payout == 0: payout = Decimal(0)
+        p = ps[0]
+        article = str(p.get("vendorCode") or p.get("vendor_code") or p.get("nmId") or p.get("nm_id") or "")
+        title = next((str(x.get("title") or x.get("saName") or x.get("sa_name") or x.get("subjectName") or x.get("subject_name")) for x in ps if x.get("title") or x.get("saName") or x.get("sa_name") or x.get("subjectName") or x.get("subject_name")), names.get(article, ""))
+        order_day = next((as_day(x.get("orderDt"), x.get("order_dt"), x.get("saleDt"), x.get("saleDate")) for x in ps if as_day(x.get("orderDt"), x.get("order_dt"), x.get("saleDt"), x.get("saleDate"))), None)
+        last_day = next((as_day(x.get("rrdDate"), x.get("rrDt"), x.get("rrDate"), x.get("rr_dt"), x.get("saleDt"), x.get("saleDate")) for x in reversed(ps) if as_day(x.get("rrdDate"), x.get("rrDt"), x.get("rrDate"), x.get("rr_dt"), x.get("saleDt"), x.get("saleDate"))), None)
+        week = ""
+        if last_day:
+            monday = last_day - timedelta(days=last_day.weekday())
+            sunday = monday + timedelta(days=6)
+            if as_day(start) and monday < as_day(start): monday = as_day(start)
+            if as_day(end) and sunday > as_day(end): sunday = as_day(end)
+            week = f"{monday.isoformat()} – {sunday.isoformat()}"
+        scheme = next((str(x[k]) for x in ps for k in ("warehouseType", "warehouse_type", "orderType", "order_type") if x.get(k)), "")
+        if sold and ret: status = "Сатылды → қайтарылды"
+        elif sold: status = "Сатылды"
+        elif ret: status = "Қайтарылды"
+        elif g["logistics"]: status = "Тек логистика (бас тарту / басқа кезеңде сатылған)"
+        else: status = operation_label(p)
+        row = len(order_data) + 2
+        order_data.append([
+            safe(key), order_day.isoformat() if order_day else "", last_day.isoformat() if last_day else "", safe(week),
+            safe(article), safe(title), safe(scheme), safe(status), sold, ret, float(seller_price), float(payout),
+            f"=K{row}-L{row}", float(g["logistics"]), f"=L{row}-N{row}",
+            f'=IFERROR(INDEX(Баптаулар!C9:C{settings_last},MATCH(E{row},Баптаулар!A9:A{settings_last},0)),0)',
+            f"=MAX(I{row}-J{row},0)*P{row}", f"=Баптаулар!B4*O{row}", f"=O{row}-Q{row}-R{row}",
+        ])
+    for row in order_data: orders.append(row)
+
+    expenses.append(["Күні", "Есеп аптасы", "Түрі", "Сипаттама", "Артикул", "Сома, ₸ (+ шығын / − кіріс)"])
+    for row in expense_lines:
+        day = as_day(row[0])
+        if day:
+            monday = day - timedelta(days=day.weekday())
+            sunday = monday + timedelta(days=6)
+            if as_day(start) and monday < as_day(start): monday = as_day(start)
+            if as_day(end) and sunday > as_day(end): sunday = as_day(end)
+            row[1] = f"{monday.isoformat()} – {sunday.isoformat()}"
+        expenses.append(row)
+    if not expense_lines:
+        expenses.append(["", "", "", "", "", 0])
+    expense_total = expenses.max_row + 1
+    expenses.cell(expense_total, 1, "БАРЛЫҒЫ")
+    expenses.cell(expense_total, 6, f"=SUM(F2:F{expense_total-1})" if expense_total > 2 else 0)
+    last_order = max(2, orders.max_row)
+    summary_rows = [
+        ("Тапсырыстар саны", f"=COUNTA(Тапсырыстар!A2:A{last_order})"),
+        ("Сатылды, дана", f"=SUM(Тапсырыстар!I2:I{last_order})"),
+        ("Қайтарылды, дана", f"=SUM(Тапсырыстар!J2:J{last_order})"),
+        ("Сатушы бағасымен сатылым, ₸", f"=SUM(Тапсырыстар!K2:K{last_order})"),
+        ("WB комиссиясы + эквайринг, ₸", f"=SUM(Тапсырыстар!M2:M{last_order})"),
+        ("Логистика, ₸", f"=SUM(Тапсырыстар!N2:N{last_order})"),
+        ("Тапсырыстардан таза түсім, ₸", f"=SUM(Тапсырыстар!O2:O{last_order})"),
+        ("Жалпы шығындар (жарнама, сақтау, айыппұл), ₸", f"='Жалпы шығындар'!F{expense_total}"),
+        ("WB банкке аударды, ₸", "=B9-B10"),
+        ("Өзіндік құн, ₸", f"=SUM(Тапсырыстар!Q2:Q{last_order})"),
+        ("Салық, ₸", "=Баптаулар!B4*B11"),
+        ("ТАЗА ПАЙДА, ₸", "=B11-B12-B13"),
+        ("Маржа (сатылымнан)", "=IF(B6=0,0,B14/B6)"),
+    ]
+    for r, (label, formula) in enumerate(summary_rows, 3):
+        summary.cell(r, 1, label)
+        summary.cell(r, 2, formula)
+        summary.cell(r, 3, "шт." if r in (4, 5) else "%" if r == 15 else "₸")
+    summary["A17"], summary["B17"], summary["C17"] = "Сверка с выплатой WB, ₸", None, "Введите «Итого к оплате» из сводного отчёта WB"
+    summary["A18"], summary["B18"] = "Разница (должна быть 0)", '=IF(B17="","Нет данных для сверки",ROUND(B11-B17,0))'
+    summary["A21"] = "Артикул бойынша"
+    article_headers = ["Артикул", "Сатылды − қайтарылды, дана", "Таза түсім, ₸", "Өзіндік құн, ₸", "Салық, ₸", "Пайда (жалпы шығынға дейін), ₸"]
+    for col, value in enumerate(article_headers, 1): summary.cell(22, col, value)
+    for i, article in enumerate(article_list, 23):
+        summary.cell(i, 1, safe(article))
+        summary.cell(i, 2, f'=SUMIF(Тапсырыстар!E2:E{last_order},A{i},Тапсырыстар!I2:I{last_order})-SUMIF(Тапсырыстар!E2:E{last_order},A{i},Тапсырыстар!J2:J{last_order})')
+        for col, source in ((3, "O"), (4, "Q"), (5, "R"), (6, "S")):
+            summary.cell(i, col, f'=SUMIF(Тапсырыстар!E2:E{last_order},A{i},Тапсырыстар!{source}2:{source}{last_order})')
+    weekly_title = max(45, 24 + len(article_list))
+    summary.cell(weekly_title, 1, "Апта бойынша")
+    weekly_header = weekly_title + 1
+    for col, value in enumerate(["Есеп аптасы", "Тапсырыстардан таза түсім, ₸", "Жалпы шығындар, ₸", "WB банкке аударды (есептік), ₸", "Өзіндік құн, ₸", "Салық, ₸", "Таза пайда, ₸"], 1):
+        summary.cell(weekly_header, col, value)
+    weeks = sorted({str(row[3]) for row in order_data if row[3]} | {str(row[1]) for row in expense_lines if row[1]})
+    if not weeks:
+        weeks = [f"{start} – {end}"]
+    for idx, week in enumerate(weeks, weekly_header + 1):
+        summary.cell(idx, 1, safe(week))
+        summary.cell(idx, 2, f'=SUMIF(Тапсырыстар!D2:D{last_order},A{idx},Тапсырыстар!O2:O{last_order})')
+        summary.cell(idx, 3, f"=SUMIF('Жалпы шығындар'!B2:B{expense_total-1},A{idx},'Жалпы шығындар'!F2:F{expense_total-1})")
+        summary.cell(idx, 4, f"=B{idx}-C{idx}")
+        summary.cell(idx, 5, f'=SUMIF(Тапсырыстар!D2:D{last_order},A{idx},Тапсырыстар!Q2:Q{last_order})')
+        summary.cell(idx, 6, f'=Баптаулар!B4*D{idx}')
+        summary.cell(idx, 7, f"=D{idx}-E{idx}-F{idx}")
+    weekly_total = weekly_header + len(weeks) + 1
+    summary.cell(weekly_total, 1, "БАРЛЫҒЫ")
+    for col in range(2, 8):
+        summary.cell(weekly_total, col, f"=SUM({get_column_letter(col)}{weekly_header+1}:{get_column_letter(col)}{weekly_total-1})")
+
+    for ws in wb.worksheets:
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="2863B4")
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                if isinstance(cell.value, (float, int)):
+                    cell.number_format = '#,##0.00;[Red]-#,##0.00'
+        for col in ws.columns:
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(44, max(12, max(len(str(x.value or "")) for x in list(col)[:100]) + 2))
+    for row in (8,):
+        for cell in settings[row]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="2863B4")
+    for ws, header in ((orders, 1), (expenses, 1)):
+        for cell in ws[header]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="2863B4")
+    for cell in settings[8]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="2863B4")
+    settings["B4"].fill = PatternFill("solid", fgColor="FFF2CC")
+    settings["B4"].number_format = "0%"
+    summary["B17"].fill = PatternFill("solid", fgColor="FFF2CC")
+    summary.freeze_panes = "A3"
+    try:
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
+    except AttributeError:
+        pass
+    data = BytesIO()
+    wb.save(data)
+    return data.getvalue()
+
+
 def create_xlsx(report):
     wb = Workbook(); wb.remove(wb.active)
     t = report.get("totals") or {}; products = report.get("products", []); ops = report.get("operations", [])

@@ -2340,16 +2340,53 @@ def wildberries_finance_sync(tasks: BackgroundTasks, period: str, start: date, e
 
 @app.get("/api/wildberries/finance.xlsx")
 def wildberries_finance_xlsx(period: str, start: date, end: date, account_id: int | None = None,
-                             u=Depends(current_user), db=Depends(get_db)):
+                             template: str = "classic", u=Depends(current_user), db=Depends(get_db)):
     require(u, "analytics")
     period = _wb_finance_period_args(period, start, end)
+    if template not in {"classic", "client"}:
+        raise HTTPException(422, "Шаблон Excel должен быть classic или client")
     account = _wb_week_account(db, u, account_id)
-    from .wb_weekly import build_report, create_xlsx
+    from .wb_weekly import build_report, create_xlsx, create_client_template_xlsx
     report = build_report(db, account, start, end, period=period)
     if report.get("status") != "готов" or not report.get("row_count"):
         raise HTTPException(409, "Финансовый отчёт ещё не получен; скачивание недоступно")
+    if template == "client":
+        prefix = wb_weekly._report_row_prefix(period, start, end)
+        raw_records = list(db.scalars(select(MarketplaceRecord).where(
+            MarketplaceRecord.account_id == account.id,
+            MarketplaceRecord.source == wb_weekly.SOURCE,
+            MarketplaceRecord.external_id.like(prefix + "%"),
+        ).order_by(MarketplaceRecord.id)))
+        article_by_nm = {
+            str((record.payload or {}).get("nmId") or (record.payload or {}).get("nm_id") or ""):
+            str((record.payload or {}).get("vendorCode") or (record.payload or {}).get("vendor_code") or "")
+            for record in raw_records
+            if (record.payload or {}).get("nmId") or (record.payload or {}).get("nm_id")
+        }
+        cost_rows = db.scalars(select(MarketplaceProductCost).where(
+            MarketplaceProductCost.account_id == account.id,
+            MarketplaceProductCost.effective_from <= end,
+        ).order_by(MarketplaceProductCost.effective_from, MarketplaceProductCost.id)).all()
+        unit_costs = {}
+        for cost in cost_rows:
+            article = cost.seller_article or ""
+            if not article and cost.external_key.startswith("sku:"):
+                article = cost.external_key.split(":", 1)[1]
+            if not article and cost.external_key.startswith("product:"):
+                article = article_by_nm.get(cost.external_key.split(":", 1)[1], "")
+            if article:
+                unit_costs[article] = Decimal(cost.unit_cost) / 100
+        product_names = {
+            str(product.get("article") or ""): str(product.get("name") or "")
+            for product in report.get("products", [])
+            if product.get("article") and product.get("name")
+        }
+        export_report = {**report, "product_names": product_names}
+        content = create_client_template_xlsx(export_report, [record.payload or {} for record in raw_records], unit_costs)
+    else:
+        content = create_xlsx(report)
     filename = f"WB-{period}-{start}-{end}.xlsx"
-    return Response(content=create_xlsx(report), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 

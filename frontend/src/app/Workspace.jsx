@@ -2183,7 +2183,9 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
     setExcelError("");
     setDownloadingExcel(true);
     try {
-      await downloadApiFile(`/wildberries/finance.xlsx?${params.toString()}`, `WB-${period}-${range.start}-${range.end}.xlsx`);
+      const exportParams = new URLSearchParams(params);
+      exportParams.set("template", "client");
+      await downloadApiFile(`/wildberries/finance.xlsx?${exportParams.toString()}`, `WB-${period}-${range.start}-${range.end}.xlsx`);
     } catch (error) {
       setExcelError(error.message || "Не удалось скачать Excel");
     } finally {
@@ -2255,7 +2257,7 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
       <label>Поиск товара<input type="search" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Артикул или название"/></label>
       <label>Операции<select value={kind} onChange={(e)=>setKind(e.target.value)}><option value="all">Все</option><option value="sales">Продажи</option><option value="returns">Есть возвраты</option></select></label>
       <button type="button" disabled={!activeAccountId || syncing} onClick={startReportSync}>{syncing ? "Проверяем WB…" : "Проверить WB сейчас"}</button>
-      <button type="button" className="button primary" disabled={downloadingExcel || !activeAccountId} onClick={downloadExcel}>{downloadingExcel ? "Скачиваем Excel…" : "Скачать Excel"}</button>
+      <button type="button" className="button primary" disabled={downloadingExcel || !activeAccountId} onClick={downloadExcel}>{downloadingExcel ? "Скачиваем Excel…" : "Excel как у клиента"}</button>
     </div>
     {syncError && syncError !== report.error && <ErrorBox error={syncError}/>}
     {excelError && <ErrorBox error={excelError}/>}
