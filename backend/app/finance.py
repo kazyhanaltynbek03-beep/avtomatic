@@ -714,16 +714,21 @@ def adjust(db, user, p):
     return {"reference": ref, "movement_ids": [m.id for m in movements]}
 
 
-def marketplace_source_event_days(db, user, company_id=None):
+def marketplace_source_event_days(db, user, company_id=None, account_ids=None, active_only=True):
     """Return source-event dates needed to assess report completeness.
 
     The dashboard summary uses the same candidate rows for selected period,
     today, and month. Read them once and reuse the dates across those windows.
     """
-    account_query = scope_query(select(Account), Account, user).where(Account.active.is_(True))
-    if company_id:
-        account_query = account_query.where(Account.company_id == company_id)
-    account_ids = {account.id for account in db.scalars(account_query)}
+    if account_ids is None:
+        account_query = scope_query(select(Account), Account, user)
+        if active_only:
+            account_query = account_query.where(Account.active.is_(True))
+        if company_id:
+            account_query = account_query.where(Account.company_id == company_id)
+        account_ids = {account.id for account in db.scalars(account_query)}
+    else:
+        account_ids = set(account_ids)
     if not account_ids:
         return []
     source_query = scope_query(
@@ -1011,8 +1016,17 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
     accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     sales = [s for s in rows(Sale) if s.account_id in account_ids]
-    allsales = {s.id: s for s in rows(Sale, False)}
-    returns = [r for r in rows(Return) if allsales.get(r.sale_id) and allsales[r.sale_id].account_id in account_ids]
+    returns_query = scope_query(
+        select(Return).join(Sale, Return.sale_id == Sale.id), Return, user
+    ).where(
+        Sale.account_id.in_(account_ids), Sale.date <= end,
+        Return.date >= start, Return.date <= end,
+    )
+    if company_id:
+        returns_query = returns_query.where(
+            Return.company_id == company_id, Sale.company_id == company_id
+        )
+    returns = list(db.scalars(returns_query))
     pending_return_inspection_units = sum(
         r.quantity for r in returns
         if r.inventory_status in {"requested", "approved", "in_transit", "received", "inspection"}
@@ -1027,27 +1041,12 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
     rev = sum(s.revenue for s in sales) - sum(r.revenue for r in returns)
     pending_cogs_sales = [s for s in sales if s.id in pending_cost_ids]
     pending_return_sales = {r.sale_id for r in returns if r.sale_id in pending_cost_ids}
-    pending_sources=[]
-    from .marketplace_pipeline import _day, Pending
-    source_q=scope_query(select(MarketplaceRecord),MarketplaceRecord,user).where(
-        MarketplaceRecord.status != 'projected',
-        MarketplaceRecord.stage_status != 'ignored_non_financial',
-    )
-    if company_id: source_q=source_q.where(MarketplaceRecord.company_id==company_id)
-    if account_ids: source_q=source_q.where(MarketplaceRecord.account_id.in_(account_ids))
-    else: source_q=source_q.where(MarketplaceRecord.account_id == -1)
-    if account_id: source_q=source_q.where(MarketplaceRecord.account_id==account_id)
-    for raw in db.scalars(source_q):
-        if raw.reason_code=='DUPLICATE_EVENT': continue
-        p=raw.payload or {}; typ=p.get('record_type')
-        op=str(p.get('sellerOperName') or p.get('supplier_oper_name') or p.get('doc_type_name') or '').lower()
-        confirmed=(typ=='sale' or (typ=='realization' and op in {'продажа','sale','возврат','return'})
-                   or (typ=='posting' and p.get('status') in {'delivered','completed'})
-                   or (typ=='order_entry' and p.get('order_status')=='COMPLETED'))
-        if not confirmed: continue
-        try: day=_day(p.get('saleDt') or p.get('sale_dt') or p.get('date') or p.get('completed_date') or p.get('delivered_at') or p.get('shipment_date') or p.get('created_at'), "Asia/Almaty" if typ=='order_entry' else None)
-        except Pending: day=None
-        if day is None or start<=day<=end: pending_sources.append(raw)
+    pending_sources = [
+        day for day in marketplace_source_event_days(
+            db, user, company_id, account_ids=account_ids, active_only=active_only
+        )
+        if day is None or start <= day <= end
+    ]
     profit_complete = not pending_cogs_sales and not pending_return_sales and not pending_sources
     net_profit_complete = profit_complete and pending_return_inspection_units == 0
     restocked_returns = [r for r in returns if r.inventory_status == "restocked"]
