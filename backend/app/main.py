@@ -61,9 +61,9 @@ def _kaspi_sync_paused_for(account_id, start=None, end=None):
         return False
     if int(account_id) not in paused_ids:
         return False
-    # Keep the historical archive paused while allowing the small daily refresh.
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-    if start == today and end == today:
+    # Keep long archive scans paused while allowing bounded dashboard periods.
+    # This covers today/yesterday/week/month but never resumes the old backfill.
+    if start is not None and end is not None and end >= start and (end - start).days <= 31:
         return False
     return True
 
@@ -124,12 +124,14 @@ def _resume_kaspi_jobs_once():
         accounts = list(db.scalars(select(Account).where(
             Account.channel == "Kaspi", Account.active.is_(True), Account.mode == "api")))
         for account in accounts:
-            if _kaspi_sync_paused_for(account.id):
+            settings = dict(account.integration_settings or {})
+            job = dict(settings.get("kaspi_period_job") or {})
+            job_start = date.fromisoformat(job["start"]) if job.get("start") else None
+            job_end = date.fromisoformat(job["end"]) if job.get("end") else None
+            if _kaspi_sync_paused_for(account.id, job_start, job_end):
                 _pause_kaspi_job(db, account)
                 db.commit()
                 continue
-            settings = dict(account.integration_settings or {})
-            job = dict(settings.get("kaspi_period_job") or {})
             heartbeat = account.last_sync
             if heartbeat is not None and heartbeat.tzinfo is None:
                 heartbeat = heartbeat.replace(tzinfo=timezone.utc)
@@ -4665,6 +4667,16 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     )
     job = dict(settings.get("kaspi_period_job") or {})
     if job.get("start") != str(start) or job.get("end") != str(bounded_end) or job.get("status") == "done":
+        # Keep the paused long-range archive job and its cursor available for
+        # later resumption when a short dashboard period is requested.
+        if job.get("status") == "paused" and job.get("start") and job.get("end"):
+            old_start, old_end = date.fromisoformat(job["start"]), date.fromisoformat(job["end"])
+            if _kaspi_sync_paused_for(acc.id, old_start, old_end):
+                paused_jobs = list(settings.get("kaspi_period_paused_jobs") or [])
+                if not any(x.get("start") == job.get("start") and x.get("end") == job.get("end")
+                           for x in paused_jobs):
+                    paused_jobs.append(dict(job))
+                settings["kaspi_period_paused_jobs"] = paused_jobs[-20:]
         job = {"start":str(start), "end":str(bounded_end), "mode":report_mode,
                "user_id":u.id, "batches":0, "records":0}
     job.update(status="running", failures=0)
