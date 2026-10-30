@@ -314,8 +314,9 @@ def create_xlsx(report):
     sheet.append(["Период", f'{report["start"]} — {report["end"]}'])
     sheet.append([])
     headers = [
-        "Артикул", "SKU", "Товар", "Маркетплейс", "Магазин",
-        "Продано, шт.", "Возвращено, шт.", "Итого, шт.",
+        "Артикул", "Внутренний SKU", "Товар", "Площадки и магазины",
+        "Карточек МП", "Цена продажи, ₸", "Остаток общий, шт.",
+        "Продано, шт.", "Возвращено, шт.", "Чисто продано, шт.",
         "Выручка, ₸", "Возвраты, ₸", "Чистый доход, ₸",
         "Себестоимость за шт., ₸", "Себестоимость, ₸",
         "Налог, %", "Налог, ₸", "Комиссия, ₸", "Логистика, ₸", "Реклама, ₸",
@@ -329,8 +330,9 @@ def create_xlsx(report):
     for row in report["items"]:
         amount = lambda key: round(row[key] / 100, 2) if row.get(key) is not None else None
         sheet.append([
-            row["article"], row["sku"], row["product_name"], row["channel"],
-            row["account_name"], row["sold_units"], row["returned_units"],
+            row["article"], row["sku"], row["product_name"], row.get("marketplace_names", ""),
+            row.get("marketplace_card_count", 0), row.get("selling_price_tenge", 0),
+            row.get("available_stock", 0), row["sold_units"], row["returned_units"],
             row["net_units"], amount("sold_revenue"), amount("returned_revenue"),
             amount("net_revenue"), row["unit_cost_tenge"], amount("cogs"),
             row["tax_rate_percent"], amount("tax"), amount("commission"),
@@ -338,14 +340,33 @@ def create_xlsx(report):
         ])
     sheet.freeze_panes = "A5"
     sheet.auto_filter.ref = sheet.dimensions
-    widths = [18, 18, 36, 18, 24, 14, 16, 14, 18, 18, 18, 22, 18, 12, 16, 16, 16, 16, 24]
+    widths = [18, 18, 36, 32, 12, 18, 16, 14, 14, 16, 18, 18, 18, 22, 18, 12, 16, 16, 16, 16, 24]
     for index, width in enumerate(widths, 1):
         sheet.column_dimensions[chr(64 + index)].width = width
     sheet.row_dimensions[4].height = 42
     for cells in sheet.iter_rows(min_row=5):
-        for column in (9, 10, 11, 12, 13, 15, 16, 17, 18, 19):
+        for column in (6, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21):
             cells[column - 1].number_format = '#,##0.00'
-        cells[13].number_format = '0.00"%"'
+        cells[15].number_format = '0.00"%"'
+    detail = book.create_sheet("Разрез по магазинам")
+    detail.append(["Внутренний SKU", "Товар", "Маркетплейс", "Магазин", "Продано, шт.", "Возвращено, шт.", "Чистый доход, ₸", "Комиссия, ₸", "Логистика, ₸", "Реклама, ₸"])
+    for cell in detail[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="176A52")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for row in report["items"]:
+        for part in row.get("marketplace_breakdown", []):
+            detail.append([
+                row["sku"], row["product_name"], part["channel"], part["account_name"],
+                part["sold_units"], part["returned_units"],
+                round((part["sold_revenue"] - part["returned_revenue"]) / 100, 2),
+                round(part["commission"] / 100, 2), round(part["logistics"] / 100, 2),
+                round(part["advertising"] / 100, 2),
+            ])
+    detail.freeze_panes = "A2"
+    detail.auto_filter.ref = detail.dimensions
+    for column, width in enumerate([18, 36, 18, 24, 14, 16, 18, 16, 16, 16], 1):
+        detail.column_dimensions[chr(64 + column)].width = width
     output = BytesIO()
     book.save(output)
     return output.getvalue()
