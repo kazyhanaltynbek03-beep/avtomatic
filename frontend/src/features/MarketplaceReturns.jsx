@@ -15,7 +15,7 @@ const labels = {
 };
 const showDate = (value) => value ? new Date(`${value}T12:00:00+06:00`).toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty" }) : "Не подтверждено";
 const returnAmount = (value) => value == null ? "Не подтверждено" : `−${money(value)}`;
-const returnDate = (item) => item.request_date || item.financial_return_date;
+const returnDate = (item) => item.financial_return_date || (item.return_status === "requested" ? item.request_date : null);
 const storeLabel = (store) => store?.store || store?.name || store?.account_name || store?.marketplace || "магазин";
 
 function Metric({ title, value, caption, tone = "", onClick, active = false }) {
@@ -30,6 +30,7 @@ function ReturnDetails({ item }) {
     <dt>Дата выдачи</dt><dd>{showDate(item.issue_date)}</dd>
     <dt>Дата заявки</dt><dd>{showDate(item.request_date)}</dd>
     <dt>Дата финансовой операции</dt><dd>{showDate(item.financial_return_date)}</dd>
+    {item.return_delivery_cost != null && <><dt>Расход обратной доставки</dt><dd>{returnAmount(item.return_delivery_cost)}</dd></>}
     <dt>Обнаружено системой</dt><dd>{showDate(item.detected_date)}</dd>
     <dt>Причина</dt><dd>{item.reason || "Не указана источником"}</dd>
     <dt>Экспертиза / дефект</dt><dd>{[item.examination, item.defect].filter(Boolean).join(" · ") || "Не зафиксировано"}</dd>
@@ -267,7 +268,9 @@ export default function MarketplaceReturns({ ctx }) {
   };
   const importStatement = async () => {
     if (lock.current || !statementFile || !statementAccount) return;
-    const required = ["external_return_id", "external_order_id", "financial_return_date", "amount"];
+    const required = statementPreview?.kaspi_cabinet_returns
+      ? ["external_order_id", "financial_return_date", "amount", "sku", "quantity"]
+      : ["external_return_id", "external_order_id", "financial_return_date", "amount"];
     if (required.some((key) => !statementMapping[key])) { setActionError("Сопоставьте ID возврата, исходный заказ, дату финансовой операции и сумму."); return; }
     lock.current = true; setStatementBusy(true); setActionError("");
     try {
@@ -302,10 +305,13 @@ export default function MarketplaceReturns({ ctx }) {
       {statementBusy && <small className="returns-import-note">Читаем файл…</small>}
       {statementMessage && <div className="returns-import-success">{statementMessage}</div>}
       {statementPreview && <div className="returns-import-preview">
-        <strong>{statementFile?.name} · {statementPreview.row_count} строк</strong>
-        <div className="returns-mapping-grid">{[["external_return_id","ID возврата · обязательно"],["external_order_id","Исходный заказ · обязательно"],["financial_return_date","Дата операции · обязательно"],["amount","Сумма · обязательно"],["sku","Артикул / SKU"],["product_name","Название товара"],["quantity","Количество"],["reason","Причина"],["currency","Валюта"]].map(([key,label]) => <label key={key}>{label}<select value={statementMapping[key] || ""} onChange={(e) => setStatementMapping((old) => ({...old,[key]:e.target.value}))}><option value="">Не выбрано</option>{statementPreview.headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></label>)}</div>
+        <strong>{statementFile?.name} · лист {statementPreview.sheet_name || "выписки"} · {statementPreview.row_count} строк</strong>
+        {statementPreview.kaspi_cabinet_returns && <p className="returns-import-note">Kaspi кабинет: идентификатора отдельной операции в этом листе нет. Сайт создаст внутренний ключ строки для безопасного повторного импорта; он не выдаётся за ID Kaspi.</p>}
+        <div className="returns-mapping-grid">{(statementPreview.kaspi_cabinet_returns
+          ? [["external_order_id","Исходный заказ · обязательно"],["financial_return_date","Фактическая дата возврата · обязательно"],["amount","Возвращено покупателю · обязательно"],["sku","Код товара · обязательно"],["product_name","Название товара"],["quantity","Количество · обязательно"],["return_delivery_cost","Расход обратной доставки"]]
+          : [["external_return_id","ID возврата · обязательно"],["external_order_id","Исходный заказ · обязательно"],["financial_return_date","Дата операции · обязательно"],["amount","Сумма · обязательно"],["sku","Артикул / SKU"],["product_name","Название товара"],["quantity","Количество"],["reason","Причина"],["currency","Валюта"]]).map(([key,label]) => <label key={key}>{label}<select value={statementMapping[key] || ""} onChange={(e) => setStatementMapping((old) => ({...old,[key]:e.target.value}))}><option value="">Не выбрано</option>{statementPreview.headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></label>)}</div>
         {statementPreview.sample?.length > 0 && <div className="returns-sample-wrap"><table><thead><tr>{statementPreview.headers.map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>{statementPreview.sample.slice(0,3).map((row,i) => <tr key={i}>{statementPreview.headers.map((h) => <td key={h}>{String(row[h] ?? "")}</td>)}</tr>)}</tbody></table></div>}
-        <small className="returns-import-note">Проверьте, что выбранная дата — дата фактической финансовой операции, а сумма относится к возврату покупателю.</small>
+        <small className="returns-import-note">{statementPreview.kaspi_cabinet_returns ? "Импорт запишет подтверждённые строки в изолированный журнал возвратов с датой из этого листа. Суммы продаж и прибыли не будут пересчитаны." : "Проверьте, что выбранная дата — дата фактической финансовой операции, а сумма относится к возврату покупателю."}</small>
         <button type="button" className="primary" disabled={statementBusy || !statementAccount} onClick={importStatement}>Импортировать в отдельный журнал</button>
       </div>}
     </details>}
