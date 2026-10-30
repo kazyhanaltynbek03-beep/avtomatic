@@ -2435,7 +2435,15 @@ def auto_match_marketplace_products(p: MarketplaceAutoMatchIn, tasks: Background
         scope(u, p.company_id)
         account_q = account_q.where(Account.company_id == p.company_id)
     accounts = list(db.scalars(account_q.order_by(Account.company_id, Account.channel, Account.id)))
-    product_q = select(Product).where(Product.active.is_(True), Product.catalog_kind == "master")
+    product_q = scope_query(
+        select(Product).where(Product.active.is_(True), Product.catalog_kind == "master"),
+        Product,
+        u,
+    )
+    if p.company_id is not None:
+        product_q = product_q.where(Product.id.in_(select(ProductCompany.product_id).where(
+            ProductCompany.company_id == p.company_id
+        )))
     if p.product_ids is not None:
         selected_ids = list(dict.fromkeys(p.product_ids))
         product_q = product_q.where(Product.id.in_(selected_ids)) if selected_ids else product_q.where(Product.id == -1)
