@@ -23,7 +23,6 @@ import {
   History,
   Settings,
   Store,
-  BriefcaseBusiness,
 } from "lucide-react";
 export const groups = [
   [
