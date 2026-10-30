@@ -1790,12 +1790,38 @@ function Stock({ ctx }) {
       ) : error ? (
         <ErrorBox error={error} />
       ) : (
-        <div className="qor-item-grid qor-stock-list">{displayStock.map((row) => {
-          const product = ctx.refs.products?.find((p) => p.id === row.product_id);
-          const companyIds = (row.company_ids || product?.company_ids || []).map(Number);
-          const productCompany = ctx.company || (companyIds.length === 1 ? companyIds[0] : "");
-          return <StockItemCard key={row.product_id} row={row} product={product} company={productCompany} ctx={ctx}/>;
-        })}</div>
+        <>
+          <div className="qor-stock-desktop table-scroll">
+            <table className="qor-stock-table">
+              <thead><tr><th>Товар / SKU</th><th>Карточки маркетплейсов</th><th>Текущий остаток</th><th>Продано за месяц</th><th>Себестоимость</th><th>Стоимость остатка</th><th>Действия</th></tr></thead>
+              <tbody>{displayStock.map((row) => {
+                const product = ctx.refs.products?.find((p) => p.id === row.product_id);
+                const companyIds = (row.company_ids || product?.company_ids || []).map(Number);
+                const productCompany = ctx.company || (companyIds.length === 1 ? companyIds[0] : "");
+                const links = (product?.marketplace_links || []).filter(link => link.active && link.mapping_status === "linked");
+                const linkLabels = links.map(link => link.channel + " · " + (link.account_name || link.account_id) + (link.external_key ? " · " + link.external_key : ""));
+                return <tr key={row.product_id}>
+                  <td><div className="qor-stock-product-cell"><ProductImage product={product}/><span><b>{row.name || product?.name || "Товар"}</b><small>Артикул · {product?.article || "—"} · SKU · {row.sku || "—"} · Штрихкод · {product?.barcode || "—"}</small></span></div></td>
+                  <td>{linkLabels.length ? linkLabels.map((label,index)=><small className="qor-stock-link" key={row.product_id + "-" + index}>{label}</small>) : <span className="muted">Карточки не связаны</span>}</td>
+                  <td><b>{row.quantity ?? 0} шт.</b>{Number(row.min_stock || product?.min_stock || 0)>0 && <small className="qor-table-sub">Минимум · {row.min_stock ?? product?.min_stock} шт.</small>}</td>
+                  <td>{row.sold ?? 0} шт.</td>
+                  <td>{product?.purchase_cost ? money(product.purchase_cost) : "—"}</td>
+                  <td>{row.value == null ? "—" : money(row.value)}</td>
+                  <td><div className="qor-stock-row-actions">
+                    {productCompany && can(ctx.auth,"inventory",true) && <><button type="button" className="stock-step-button add" aria-label={"Добавить остаток: " + row.name} title="Добавить приход" onClick={()=>ctx.open("adjustments",{company_id:Number(productCompany),product_id:Number(row.product_id),date:today(),quantity:1,unit_cost:product?.purchase_cost || 0,kind:"receipt",reason:"Приход товара"})}>+</button><button type="button" className="stock-step-button" aria-label={"Списать остаток: " + row.name} title="Списание" disabled={Number(row.quantity||0)<=0} onClick={()=>ctx.open("adjustments",{company_id:Number(productCompany),product_id:Number(row.product_id),date:today(),quantity:-1,unit_cost:0,kind:"writeoff",reason:"Списание товара"})}>−</button></>}
+                    {can(ctx.auth,"catalog",true) && product && <button type="button" className="secondary" onClick={()=>ctx.open("products",product)}>Изменить товар</button>}
+                  </div></td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
+          <div className="qor-stock-mobile qor-item-grid qor-stock-list">{displayStock.map((row) => {
+            const product = ctx.refs.products?.find((p) => p.id === row.product_id);
+            const companyIds = (row.company_ids || product?.company_ids || []).map(Number);
+            const productCompany = ctx.company || (companyIds.length === 1 ? companyIds[0] : "");
+            return <StockItemCard key={row.product_id} row={row} product={product} company={productCompany} ctx={ctx}/>;
+          })}</div>
+        </>
       )}
       <section className="panel stock-lot-history">
         <div className="section-heading"><div><h3>История приходов по партиям</h3><p className="muted">Каждое поступление хранится отдельной строкой: дата, принято, продано, возвращено и остаток партии.</p></div></div>
@@ -3269,7 +3295,7 @@ function EditModal({ kind, item, ctx, close }) {
   ));
   const [submissionRef] = useState(() => globalThis.crypto.randomUUID());
   const submitLock = useRef(false);
-  const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {}) || JSON.stringify(marketplaceIdRows) !== JSON.stringify(initialMarketplaceIdRows);
+  const dirty = fields.some((f) => String(values[f.key] ?? "") !== String(initial[f.key] ?? "")) || (!editing && kind === "products" && (initialQuantity !== "0" || initialReceiptDate !== today())) || JSON.stringify(outboundAllocations) !== JSON.stringify(item?.marketplace_stock_allocations || {}) || JSON.stringify(marketplaceIdRows) !== JSON.stringify(initialMarketplaceIdRows);
   const requestClose = useCallback(() => {
     if (dirty && !globalThis.confirm("Есть несохранённые изменения. Закрыть без сохранения?")) return;
     close();
@@ -3368,6 +3394,14 @@ function EditModal({ kind, item, ctx, close }) {
         else payload[f.key] = v;
       }
       if (kind === "products") {
+        if (!editing) {
+          const quantity = Number(initialQuantity);
+          if (!Number.isInteger(quantity) || quantity < 0) throw new Error("Количество должно быть целым числом от 0");
+          if (quantity > 0 && Number(values.purchase_cost || 0) <= 0) throw new Error("Для начального остатка укажите себестоимость за единицу");
+          if (quantity > 0 && !initialReceiptDate) throw new Error("Укажите дату поступления товара");
+          payload.initial_quantity = quantity;
+          payload.initial_receipt_date = quantity > 0 ? initialReceiptDate : null;
+        }
         payload.marketplace_stock_allocations = outboundAllocations;
         const specifications = payload.specifications || {};
         if (productCompanyId) {
@@ -3659,7 +3693,14 @@ function EditModal({ kind, item, ctx, close }) {
         {kind === "products" && (!productWizard || productWizardStep === 0) && <p className="muted product-form-help">SKU создан автоматически — при необходимости его можно изменить. Внутренний ID назначается системой. Служебные данные карточки сохраняются автоматически.</p>}
         {kind === "products" && (!productWizard || productWizardStep === 1) && <section className="product-photo-step wide"><div className="product-photo-picker"><label className="secondary">Добавить фото с камеры или устройства<input type="file" accept="image/*" capture="environment" multiple onChange={e=>{addProductPhotos(e.target.files);e.target.value=""}}/></label><small>Фотографии уменьшаются до 1200 px и сохраняются вместе с товаром в PostgreSQL. До 8 фото.</small></div><div className="product-photo-preview-grid">{(()=>{try{return JSON.parse(values.media || "[]").map((src,index)=><figure key={`${index}-${src.slice(0,24)}`}><img src={src} alt={`Фото товара ${index+1}`}/><button type="button" aria-label={`Удалить фото ${index+1}`} onClick={()=>set("media",JSON.stringify(JSON.parse(values.media || "[]").filter((_,i)=>i!==index)))}>×</button></figure>)}catch{return null}})()}</div></section>}
         {kind === "products" && (!productWizard || productWizardStep === 2) && <div className="form-grid product-price-step">{fields.filter(f=>["price","purchase_cost","min_price"].includes(f.key)).map(f=><label key={f.key}>{f.label}{input(f)}</label>)}</div>}
-        {kind === "products" && (!productWizard || productWizardStep === 3) && <section className="product-stock-step wide"><div className="form-grid">{fields.filter(f=>["min_stock","active"].includes(f.key)).map(f=><label key={f.key} className={f.type === "checkbox" ? "check-label" : ""}>{f.label}{input(f)}</label>)}</div><p className="muted">Фактический первый приход и дата поступления записываются отдельной операцией в разделе «Единый склад» после сохранения карточки товара.</p></section>}
+        {kind === "products" && (!productWizard || productWizardStep === 3) && <section className="product-stock-step wide">
+          <div className="form-grid">
+            {fields.filter(f=>["min_stock","active"].includes(f.key)).map(f=><label key={f.key} className={f.type === "checkbox" ? "check-label" : ""}>{f.label}{input(f)}</label>)}
+            {!editing && <label>Количество при поступлении, шт.<input type="number" min="0" max="1000000000" step="1" value={initialQuantity} onChange={e=>setInitialQuantity(e.target.value)}/><small>Начальный приход попадёт в журнал склада.</small></label>}
+            {!editing && <label>Дата поступления<input type="date" value={initialReceiptDate} onChange={e=>setInitialReceiptDate(e.target.value)} required={Number(initialQuantity)>0}/></label>}
+          </div>
+          <p className="muted">{editing ? "Изменения остатка сохраняйте через кнопки + и − на складе: каждое движение останется в истории." : "Если указано количество, начальная партия и карточка товара сохранятся вместе. Для этой партии используется себестоимость выше."}</p>
+        </section>}
         {kind === "products" && (!productWizard || productWizardStep === 4) && <details className="product-marketplace-setup" open={Boolean(item?._openMarketplaceSetup || (editing && (item?.marketplace_mappings || []).length) || productWizardStep === 4)}>
           <summary>
             <span><b>Связать Kaspi и Wildberries</b><small>Связь и лимит остатка сохраняются в QOR после сохранения товара. Повторно вводить их после синхронизации не нужно.</small></span>
