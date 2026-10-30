@@ -3269,7 +3269,9 @@ function EditModal({ kind, item, ctx, close }) {
     [aiFacts, setAiFacts] = useState(""),
     [aiBusy, setAiBusy] = useState(false),
     [aiQuestions, setAiQuestions] = useState([]),
-    [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""});
+    [accountCredentials, setAccountCredentials] = useState({token:"", client_id:"", api_key:""}),
+    [initialQuantity, setInitialQuantity] = useState("0"),
+    [initialReceiptDate, setInitialReceiptDate] = useState(today());
   const initialMarketplaceIdRows = item?._marketplaceLinkAccountId
     ? [{account_id:String(item._marketplaceLinkAccountId), id_type:ctx.refs.accounts?.find(a=>String(a.id)===String(item._marketplaceLinkAccountId))?.channel === "Wildberries" ? "product" : "sku", external_id:""}]
     : [{account_id:"", id_type:"sku", external_id:""}];
