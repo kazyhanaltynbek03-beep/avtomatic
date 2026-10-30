@@ -983,8 +983,8 @@ function ReportPage({ page, ctx }) {
   const dashboardKaspiSyncRef = useRef(new Set());
   const dashboardAccounts = ctx.refs.accounts || [];
   const dashboardCompany = ctx.company;
-  const dashboardStart = dashboardStart;
-  const dashboardEnd = dashboardEnd;
+  const dashboardStart = ctx.start;
+  const dashboardEnd = ctx.end;
   const dashboardReload = ctx.reload;
   const dashboardCanSyncKaspi = can(ctx.auth, "accounts", true);
   useEffect(() => {
@@ -1021,7 +1021,7 @@ function ReportPage({ page, ctx }) {
     })();
     return () => { cancelled = true; };
   }, [page, loadedReport, dashboardKaspiSummary.loading, dashboardKaspiSummary.data,
-      ctx.auth, ctx.refs.accounts, ctx.company, dashboardStart, dashboardEnd, ctx.reload]);
+      dashboardCanSyncKaspi, dashboardAccounts, dashboardCompany, dashboardStart, dashboardEnd, dashboardReload]);
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
