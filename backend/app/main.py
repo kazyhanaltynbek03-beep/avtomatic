@@ -4264,35 +4264,38 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
             local_end = (today_local if end >= today_local.date() else
                          datetime.combine(end + timedelta(days=1), datetime.min.time(), ZoneInfo("Asia/Almaty")))
             event_start = datetime.combine(start, datetime.min.time(), ZoneInfo("Asia/Almaty"))
+            # Keep only small per-order counts in memory. Loading every cached JSON
+            # payload (including raw Kaspi attributes) on each resumed scan can
+            # exceed the Render instance memory limit as history grows.
             cached_children_by_order = {}
-            known_orders = {}
-            order_ids_with_entries = set()
-            if status_only:
-                # Known orders with cached line items need only a status refresh.
-                for cached in db.scalars(select(MarketplaceRecord).where(
-                    MarketplaceRecord.account_id == acc.id,
-                    MarketplaceRecord.source == "kaspi",
-                )).all():
-                    child = cached.payload or {}
-                    record_type = child.get("record_type")
-                    order_id = str(child.get("order_id") or "")
-                    if record_type == "order" and child.get("code"):
-                        known_orders[order_id] = str(child["code"])
-                    elif record_type in {"order_entry", "delivery_charge", "return_delivery_charge"}:
-                        cached_children_by_order.setdefault(order_id, []).append(child)
-                        if record_type == "order_entry":
-                            order_ids_with_entries.add(order_id)
-            known_order_ids = [code for oid, code in known_orders.items() if oid in order_ids_with_entries]
+            known_order_ids = []
             known_entry_counts = {}
-            for cached in db.scalars(select(MarketplaceRecord).where(
-                MarketplaceRecord.account_id == acc.id, MarketplaceRecord.source == "kaspi",
-                MarketplaceRecord.payload["record_type"].as_string() == "order",
-            )):
-                p = cached.payload or {}
-                oid = str(p.get("order_id") or "")
-                count = sum(x.get("record_type") == "order_entry" for x in cached_children_by_order.get(oid, []))
-                if p.get("entries_complete") is True and count > 0 and count == p.get("entries_count"):
-                    known_entry_counts[str(p.get("code") or "")] = count
+            if status_only:
+                entry_counts = {
+                    str(order_id): int(count)
+                    for order_id, count in db.execute(text(
+                        "SELECT payload->>'order_id', count(*) FROM marketplace_records "
+                        "WHERE account_id=:account_id AND source='kaspi' "
+                        "AND payload->>'record_type'='order_entry' GROUP BY payload->>'order_id'"
+                    ), {"account_id": acc.id})
+                    if order_id
+                }
+                order_meta = db.execute(text(
+                    "SELECT payload->>'order_id', payload->>'code', "
+                    "payload->>'entries_complete', payload->>'entries_count' "
+                    "FROM marketplace_records WHERE account_id=:account_id AND source='kaspi' "
+                    "AND payload->>'record_type'='order'"
+                ), {"account_id": acc.id})
+                for order_id, code, complete, expected in order_meta:
+                    count = entry_counts.get(str(order_id or ""), 0)
+                    if code and count:
+                        known_order_ids.append(str(code))
+                    try:
+                        expected_count = int(expected or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if code and complete == "true" and count > 0 and count == expected_count:
+                        known_entry_counts[str(code)] = count
             progress_key = _kaspi_period_sync_key(report_mode, start, end)
             settings = dict(acc.integration_settings or {})
             progress = dict(settings.get("kaspi_period_progress") or {})
@@ -4313,6 +4316,25 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                     db.rollback()
                     return
                 if status_only:
+                    # Fetch cached line/charge payloads only for the current
+                    # API page, rather than retaining the entire account history.
+                    page_order_ids = {
+                        str((row or {}).get("order_id") or "")
+                        for row in result.records
+                        if (row or {}).get("record_type") == "order" and (row or {}).get("order_id")
+                    }
+                    cached_children_by_order = {}
+                    if page_order_ids:
+                        cached_payloads = db.scalars(select(MarketplaceRecord.payload).where(
+                            MarketplaceRecord.account_id == acc.id,
+                            MarketplaceRecord.source == "kaspi",
+                            MarketplaceRecord.payload["record_type"].as_string().in_(
+                                ["order_entry", "delivery_charge", "return_delivery_charge"]),
+                            MarketplaceRecord.payload["order_id"].as_string().in_(page_order_ids),
+                        )).all()
+                        for child in cached_payloads:
+                            child = child or {}
+                            cached_children_by_order.setdefault(str(child.get("order_id") or ""), []).append(child)
                     present = {str(row.get("external_id") or "") for row in result.records}
                     propagated = []
                     for order in result.records:
