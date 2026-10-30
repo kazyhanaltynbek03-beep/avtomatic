@@ -721,6 +721,8 @@ def marketplace_source_event_days(db, user, company_id=None):
     today, and month. Read them once and reuse the dates across those windows.
     """
     account_query = scope_query(select(Account), Account, user).where(Account.active.is_(True))
+    if company_id:
+        account_query = account_query.where(Account.company_id == company_id)
     account_ids = {account.id for account in db.scalars(account_query)}
     if not account_ids:
         return []
