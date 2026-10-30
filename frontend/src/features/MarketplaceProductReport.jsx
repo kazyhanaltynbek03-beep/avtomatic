@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, RefreshCw, Save } from "lucide-react";
+import { Download, Save } from "lucide-react";
 import { api, downloadApiFile } from "../services/api";
 import { money } from "../utils/formatters";
 import { can } from "../utils/permissions";
