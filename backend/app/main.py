@@ -1747,6 +1747,8 @@ def expense_operations(start: date, end: date, company_id: int | None = None,
                        offset: int = Query(default=0, ge=0),
                        u=Depends(current_user), db=Depends(get_db)):
     """Return individual posted expense rows and sale-level marketplace charges."""
+    import heapq
+
     require(u, "finance")
     if end < start:
         raise HTTPException(422, "Дата окончания раньше даты начала")
@@ -1766,16 +1768,22 @@ def expense_operations(start: date, end: date, company_id: int | None = None,
         Expense.date >= start, Expense.date <= end)
     if company_id is not None:
         expenses_q = expenses_q.where(Expense.company_id == company_id)
-    expenses = list(db.scalars(expenses_q))
 
     sales_q = scope_query(select(Sale), Sale, u).where(
         Sale.date >= start, Sale.date <= end, Sale.account_id.in_(account_ids or {-1}))
     if company_id is not None:
         sales_q = sales_q.where(Sale.company_id == company_id)
-    sales = list(db.scalars(sales_q))
-    product_ids = {sale.product_id for sale in sales}
-    products = {product.id: product for product in db.scalars(
-        select(Product).where(Product.id.in_(product_ids or {-1})))}
+    product_ids_q = scope_query(select(Sale.product_id), Sale, u).where(
+        Sale.date >= start, Sale.date <= end, Sale.account_id.in_(account_ids or {-1}))
+    if company_id is not None:
+        product_ids_q = product_ids_q.where(Sale.company_id == company_id)
+    product_ids_q = product_ids_q.distinct()
+    products = {
+        product_id: (product_name, product_sku)
+        for product_id, product_name, product_sku in db.execute(
+            select(Product.id, Product.name, Product.sku).where(Product.id.in_(product_ids_q))
+        )
+    }
 
     category_labels = {
         "Marketplace commission": "Комиссия маркетплейса",
@@ -1790,49 +1798,57 @@ def expense_operations(start: date, end: date, company_id: int | None = None,
         "Marketplace other expenses": "Прочие расходы маркетплейса",
         "Реклама": "Реклама",
     }
-    rows = []
-    for expense in expenses:
-        account = accounts.get(expense.account_id)
-        row_channel = account.channel if account else "Offline"
-        if channel and row_channel != channel:
-            continue
-        rows.append({
-            "key": f"expense:{expense.id}", "date": str(expense.date),
-            "channel": row_channel, "account_name": account.name if account else "—",
-            "category": category_labels.get(expense.category, expense.category or "Прочие расходы"),
-            "amount": expense.amount, "record_type": "expense",
-            "record_id": expense.id, "reference": expense.reference or "—",
-            "product_id": None, "product_name": "", "sku": "",
-            "quantity": None, "status": "Проведено",
-            "description": expense.description or expense.project or "",
-        })
-    sale_categories = (
-        ("commission", "Комиссия маркетплейса"),
-        ("logistics", "Логистика"),
-        ("advertising", "Реклама"),
-    )
-    for sale in sales:
-        account = accounts.get(sale.account_id)
-        row_channel = account.channel if account else "Offline"
-        if channel and row_channel != channel:
-            continue
-        product = products.get(sale.product_id)
-        for field, category in sale_categories:
-            amount = int(getattr(sale, field, 0) or 0)
-            if not amount:
+    total = 0
+
+    def operation_rows():
+        nonlocal total
+        for expense in db.scalars(expenses_q.execution_options(yield_per=500)):
+            account = accounts.get(expense.account_id)
+            row_channel = account.channel if account else "Offline"
+            if channel and row_channel != channel:
                 continue
-            rows.append({
-                "key": f"sale:{sale.id}:{field}", "date": str(sale.date),
+            total += 1
+            yield {
+                "key": f"expense:{expense.id}", "date": str(expense.date),
                 "channel": row_channel, "account_name": account.name if account else "—",
-                "category": category, "amount": amount, "record_type": "sale_charge",
-                "record_id": sale.id, "reference": sale.reference or "—",
-                "product_id": sale.product_id, "product_name": product.name if product else "",
-                "sku": product.sku if product else "", "quantity": sale.quantity,
-                "status": "Проведено", "description": "",
-            })
-    rows.sort(key=lambda row: (row["date"], row["record_id"], row["key"]), reverse=True)
-    total = len(rows)
-    page = rows[offset:offset + limit]
+                "category": category_labels.get(expense.category, expense.category or "Прочие расходы"),
+                "amount": expense.amount, "record_type": "expense",
+                "record_id": expense.id, "reference": expense.reference or "—",
+                "product_id": None, "product_name": "", "sku": "",
+                "quantity": None, "status": "Проведено",
+                "description": expense.description or expense.project or "",
+            }
+        sale_categories = (
+            ("commission", "Комиссия маркетплейса"),
+            ("logistics", "Логистика"),
+            ("advertising", "Реклама"),
+        )
+        for sale in db.scalars(sales_q.execution_options(yield_per=500)):
+            account = accounts.get(sale.account_id)
+            row_channel = account.channel if account else "Offline"
+            if channel and row_channel != channel:
+                continue
+            product_name, product_sku = products.get(sale.product_id, ("", ""))
+            for field, category in sale_categories:
+                amount = int(getattr(sale, field, 0) or 0)
+                if not amount:
+                    continue
+                total += 1
+                yield {
+                    "key": f"sale:{sale.id}:{field}", "date": str(sale.date),
+                    "channel": row_channel, "account_name": account.name if account else "—",
+                    "category": category, "amount": amount, "record_type": "sale_charge",
+                    "record_id": sale.id, "reference": sale.reference or "—",
+                    "product_id": sale.product_id, "product_name": product_name,
+                    "sku": product_sku, "quantity": sale.quantity,
+                    "status": "Проведено", "description": "",
+                }
+
+    page = heapq.nlargest(
+        offset + limit,
+        operation_rows(),
+        key=lambda row: (row["date"], row["record_id"], row["key"]),
+    )[offset:offset + limit]
     return {"start": str(start), "end": str(end), "items": page,
             "total": total, "limit": limit, "offset": offset}
 
