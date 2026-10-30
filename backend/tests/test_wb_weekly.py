@@ -331,3 +331,49 @@ def test_dated_cost_shows_each_week_and_late_return_reduces_next_week(client, mo
         assert returned["totals"]["profit"] == "-5000"
 
 
+
+
+def test_client_template_xlsx_matches_customer_workbook_structure_and_tax_basis():
+    report = {"start": "2026-07-06", "end": "2026-07-12", "status": "готов", "row_count": 3}
+    raw_rows = [
+        {
+            "rrdId": 1, "srid": "order-1", "nmId": 123, "vendorCode": "sku-a", "title": "Товар A",
+            "orderDt": "2026-07-06", "rrdDate": "2026-07-07", "quantity": 1,
+            "supplier_oper_name": "Продажа", "retailAmount": "1000", "forPay": "800",
+            "deliveryService": "100", "penalty": "20", "warehouseType": "FBW",
+        },
+        {
+            "rrdId": 2, "srid": "order-1", "nmId": 123, "vendorCode": "sku-a", "title": "Товар A",
+            "orderDt": "2026-07-06", "rrdDate": "2026-07-10", "quantity": 1,
+            "supplier_oper_name": "Возврат", "retailAmount": "0", "forPay": "-800",
+            "deliveryService": "50", "warehouseType": "FBW",
+        },
+        {
+            "rrdId": 3, "srid": "order-2", "nmId": 456, "vendorCode": "sku-b", "title": "Товар B",
+            "orderDt": "2026-07-07", "rrdDate": "2026-07-08", "quantity": 0,
+            "supplier_oper_name": "Логистика", "deliveryService": "200",
+        },
+    ]
+    data = wb_weekly.create_client_template_xlsx(report, raw_rows, {"sku-a": 300})
+    book = load_workbook(BytesIO(data), data_only=False)
+    assert book.sheetnames == ["Жиынтық", "Баптаулар", "Тапсырыстар", "Жалпы шығындар"]
+    settings = book["Баптаулар"]
+    orders = book["Тапсырыстар"]
+    summary = book["Жиынтық"]
+    expenses = book["Жалпы шығындар"]
+    assert settings["B4"].value == 0.10
+    assert settings["C9"].value == 300
+    assert orders.max_row == 3  # repeated sale and return operations are one order line
+    assert orders["H2"].value == "Сатылды → қайтарылды"
+    assert orders["I2"].value == 1 and orders["J2"].value == 1
+    assert orders["N2"].value == 150
+    assert orders["M2"].value == "=K2-L2"
+    assert orders["O2"].value == "=L2-N2"
+    assert orders["P2"].value.startswith("=IFERROR(INDEX(Баптаулар!C9:C")
+    assert orders["Q2"].value == "=MAX(I2-J2,0)*P2"
+    assert orders["R2"].value == "=Баптаулар!B4*O2"
+    assert summary["B11"].value == "=B9-B10"
+    assert summary["B13"].value == "=Баптаулар!B4*B11"
+    assert summary["B14"].value == "=B11-B12-B13"
+    assert expenses["F2"].value == 20
+    assert expenses["F3"].value == "=SUM(F2:F2)"
