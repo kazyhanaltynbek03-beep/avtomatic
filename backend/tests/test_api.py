@@ -50,7 +50,7 @@ def test_rbac_company_scope(client):
 
 
 
-def test_product_initial_receipt_is_atomic_and_rejects_missing_cost(client):
+def test_product_initial_receipt_is_atomic_and_validates_cost_and_date(client):
     payload = {
         "sku": "INITIAL-RECEIPT-TEST",
         "name": "Initial stock test",
@@ -80,6 +80,17 @@ def test_product_initial_receipt_is_atomic_and_rejects_missing_cost(client):
     rejected = client.post("/api/data/products", json=invalid)
     assert rejected.status_code == 422
     assert client.get("/api/data/products?search=INITIAL-RECEIPT-NO-COST").json()["total"] == 0
+
+    rollback_payload = {
+        **payload,
+        "sku": "INITIAL-RECEIPT-ROLLBACK",
+        "initial_receipt_date": "2026-10-11",
+    }
+    rollback = client.post("/api/data/products", json=rollback_payload)
+    assert rollback.status_code == 422
+    assert client.get("/api/data/products?search=INITIAL-RECEIPT-ROLLBACK").json()["total"] == 0
+    with SessionLocal() as db:
+        assert db.scalar(select(Batch.id).where(Batch.product_id == product["id"] + 1)) is None
 
 
 def test_master_crud_and_audit(client):
