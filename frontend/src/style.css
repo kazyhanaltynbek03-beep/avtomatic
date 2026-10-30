@@ -2839,3 +2839,16 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
   flex: 0 1 auto;
   flex-wrap: wrap;
 }
+
+
+/* Kaspi custom report mobile controls: prevent date and action clipping. */
+.marketplace-client-report{min-width:0;overflow:hidden}
+.marketplace-client-report>form.row-actions{display:flex;flex-wrap:wrap;align-items:flex-end;min-width:0;padding:0 14px}
+.marketplace-client-report>form.row-actions>label{display:grid;flex:1 1 180px;min-width:0;gap:5px}
+.marketplace-client-report>form.row-actions input[type="date"]{width:100%;min-width:0;max-width:100%;box-sizing:border-box}
+.marketplace-client-report>form.row-actions>button{flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+@media(max-width:560px){
+  .marketplace-client-report>form.row-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;width:100%;box-sizing:border-box}
+  .marketplace-client-report>form.row-actions>label{width:100%;min-width:0}
+  .marketplace-client-report>form.row-actions>button{grid-column:1/-1;width:100%;min-height:46px;justify-content:center}
+}
