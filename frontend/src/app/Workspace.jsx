@@ -164,6 +164,7 @@ export default function App() {
     [modal, setModal] = useState(null),
     [settings, setSettings] = useState({});
   const [marketplaceStoreByChannel, setMarketplaceStoreByChannel] = useState({Kaspi:"", Wildberries:""});
+  const [marketplaceReportChannel, setMarketplaceReportChannel] = useState("");
   const noticeTimer = useRef(null);
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -289,6 +290,8 @@ export default function App() {
     end,
     refresh,
     marketplaceAccountId,
+    marketplaceReportChannel,
+    setMarketplaceReportChannel,
     onNotificationCount: setNotificationCount,
     notify,
     navigate,
@@ -442,8 +445,8 @@ export default function App() {
               (!["companies", "users"].includes(page) ||
                 auth.user.role === "Owner") && (
                 <>
-                  {page === "dashboard" && <button className="secondary" onClick={() => navigate("marketplace-product-report")}>
-                    <FileText size={17} /> Отчёт по товарам
+                  {page === "dashboard" && <button className="secondary" onClick={() => { setMarketplaceReportChannel(""); navigate("marketplace-product-report"); }}>
+                    <FileText size={17} /> Сводный отчёт по SKU
                   </button>}
                   <button className="primary" onClick={() => setModal({ kind: page === "dashboard" ? "sales" : page })}>
                     <Plus size={18} />
@@ -2517,7 +2520,7 @@ function MarketplaceInbox({ channel, ctx }) {
     ["Чистая прибыль", incomplete ? "—" : m.net_profit, incomplete ? (fxPending ? "Прибыль ожидает курс/проведение и FIFO — ложное значение не показываем" : "Не показываем ложную прибыль: есть продажи без FIFO") : (m.margin == null ? "Маржа —" : `Маржа ${decimal(m.margin)}%`), {source:"ledger",metric:"net_profit",title:"Чистая прибыль по проведённым операциям"}],
   ];
   return <div className="panel marketplace-inbox">
-    <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><div className="row-actions"><button type="button" className={showClientReport?"primary":""} aria-expanded={showClientReport} onClick={()=>setShowClientReport(v=>!v)}>{showClientReport?"Скрыть отдельный отчёт":"Отчёт за период · Excel"}</button>{state.loading ? <span className="pill" role="status" aria-live="polite">Загружаем API…</span> : state.error ? <span className="pill marketplace-read-error" role="alert" title={state.error}>Ошибка чтения API</span> : <span className="pill">{state.data?.total ?? 0} API-записей</span>}</div></div>
+    <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><div className="row-actions"><button type="button" className="secondary" onClick={()=>{ctx.setMarketplaceReportChannel(channel);ctx.navigate("marketplace-product-report");}}>Сводный отчёт по SKU</button><button type="button" className={showClientReport?"primary":""} aria-expanded={showClientReport} onClick={()=>setShowClientReport(v=>!v)}>{showClientReport?"Скрыть отдельный отчёт":"Отчёт за период · Excel"}</button>{state.loading ? <span className="pill" role="status" aria-live="polite">Загружаем API…</span> : state.error ? <span className="pill marketplace-read-error" role="alert" title={state.error}>Ошибка чтения API</span> : <span className="pill">{state.data?.total ?? 0} API-записей</span>}</div></div>
     {showClientReport&&<ClientMarketplaceReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount}/>}
     {(channel === "Kaspi" || channel === "Wildberries") && <div className="row-actions" role="group" aria-label="Отчёты маркетплейса"><button type="button" className={!ordersMode?"primary":""} aria-pressed={!ordersMode} onClick={()=>setOrdersMode(false)}>Продажи и финансы</button><button type="button" className={ordersMode?"primary":""} aria-pressed={ordersMode} onClick={()=>setOrdersMode(true)}>Заказы и доставка</button></div>}
     {ordersMode ? <MarketplaceOrdersReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount} canRefresh={can(ctx.auth,"accounts",true)}/> : <>
