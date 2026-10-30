@@ -2,9 +2,10 @@
 from alembic import op
 import sqlalchemy as sa
 import json
+from datetime import datetime, timezone
 
 revision = "d57c9e1a4b20"
-down_revision = ("8b4f2a1c9001", "90dae75ab0be")
+down_revision = "b2d8e3f4a501"
 branch_labels = None
 depends_on = None
 
@@ -68,11 +69,11 @@ def upgrade():
             )
 
     if associations:
-        now = sa.func.now()
+        association_table = sa.Table("product_companies", metadata, autoload_with=bind)
+        created_at = datetime.now(timezone.utc)
         bind.execute(
-            sa.insert(sa.Table("product_companies", metadata, autoload_with=bind)),
-            [{"created_at": bind.execute(sa.select(now)).scalar_one(),
-              "product_id": product_id, "company_id": company_id}
+            sa.insert(association_table),
+            [{"created_at": created_at, "product_id": product_id, "company_id": company_id}
              for product_id, company_id in sorted(associations)],
         )
 
