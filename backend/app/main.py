@@ -2376,7 +2376,13 @@ def wildberries_finance_xlsx(period: str, start: date, end: date, account_id: in
                 article = article_by_nm.get(cost.external_key.split(":", 1)[1], "")
             if article:
                 unit_costs[article] = Decimal(cost.unit_cost) / 100
-        content = create_client_template_xlsx(report, [record.payload or {} for record in raw_records], unit_costs)
+        product_names = {
+            str(product.get("article") or ""): str(product.get("name") or "")
+            for product in report.get("products", [])
+            if product.get("article") and product.get("name")
+        }
+        export_report = {**report, "product_names": product_names}
+        content = create_client_template_xlsx(export_report, [record.payload or {} for record in raw_records], unit_costs)
     else:
         content = create_xlsx(report)
     filename = f"WB-{period}-{start}-{end}.xlsx"
