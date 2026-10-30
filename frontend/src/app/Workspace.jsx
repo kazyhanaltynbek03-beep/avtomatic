@@ -2239,7 +2239,6 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const active=Boolean(range);
   const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
-  const retryPending=summary.data?.source_quality?.progress?.some(p=>p.status==="retry");
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
   const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
   const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh);
