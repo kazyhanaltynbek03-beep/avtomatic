@@ -96,6 +96,20 @@ class ProductCompany(Record, Base):
     __table_args__ = (UniqueConstraint("product_id", "company_id", name="uq_product_company"),)
 
 
+class MarketplaceProductReportSetting(Record, Base):
+    """Per-company manual cost and tax rate for the isolated product report."""
+    __tablename__ = "marketplace_product_report_settings"
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    unit_cost_cents: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tax_rate_bps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    __table_args__ = (
+        UniqueConstraint("company_id", "product_id", name="uq_marketplace_product_report_setting"),
+        CheckConstraint("unit_cost_cents IS NULL OR unit_cost_cents >= 0"),
+        CheckConstraint("tax_rate_bps IS NULL OR (tax_rate_bps >= 0 AND tax_rate_bps <= 10000)"),
+    )
+
+
 class Account(Record, Base):
     __tablename__ = "accounts"
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
