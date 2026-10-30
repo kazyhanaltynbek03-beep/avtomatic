@@ -980,6 +980,42 @@ function ReportPage({ page, ctx }) {
   );
   const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
   const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
+  const dashboardKaspiSyncRef = useRef(new Set());
+  useEffect(() => {
+    if (page !== "dashboard" || !loadedReport || dashboardKaspiSummary.loading ||
+        !dashboardKaspiSummary.data || !can(ctx.auth, "accounts", true)) return;
+    const accounts = (ctx.refs.accounts || []).filter(a =>
+      a.active !== false && a.channel === "Kaspi" &&
+      (!ctx.company || String(a.company_id) === String(ctx.company))
+    );
+    if (!accounts.length) return;
+    const accountIds = accounts.map(a => String(a.id)).sort();
+    const key = accountIds.join(",") + ":" + ctx.start + ":" + ctx.end;
+    if (dashboardKaspiSyncRef.current.has(key)) return;
+    dashboardKaspiSyncRef.current.add(key);
+    let cancelled = false;
+    (async () => {
+      try {
+        await Promise.all(accounts.map(a => api(
+          `/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=issued`,
+          {method:"POST", timeoutMs:10000}
+        )));
+        for (let attempt = 0; attempt < 24 && !cancelled; attempt++) {
+          await new Promise(resolve => window.setTimeout(resolve, 5000));
+          const statuses = await Promise.all(accounts.map(a => api(`/accounts/${a.id}/sync-status`)));
+          if (statuses.every(s => s.status !== "running")) {
+            if (!cancelled) ctx.reload();
+            return;
+          }
+        }
+        if (!cancelled) ctx.reload();
+      } catch (_) {
+        dashboardKaspiSyncRef.current.delete(key);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [page, loadedReport, dashboardKaspiSummary.loading, dashboardKaspiSummary.data,
+      ctx.auth, ctx.refs.accounts, ctx.company, ctx.start, ctx.end, ctx.reload]);
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
