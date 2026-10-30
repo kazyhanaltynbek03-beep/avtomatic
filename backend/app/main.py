@@ -3376,17 +3376,17 @@ def dashboard_summary(
     """
     require(u, "analytics")
     today = business_today()
-    # The selected report is loaded separately for charts and drilldowns. This
-    # endpoint returns only date-scoped KPI data so the overview can paint quickly.
-    selected = f.report_headline(db, u, start, end, company_id)
+    # Reuse the same marketplace completeness scan across all three date windows.
+    pending_source_days = f.marketplace_source_event_days(db, u, company_id)
+    selected = f.report_headline(db, u, start, end, company_id, pending_source_days)
     month_start = today.replace(day=1)
     month_report = (
         selected if (start, end) == (month_start, today)
-        else f.report_headline(db, u, month_start, today, company_id)
+        else f.report_headline(db, u, month_start, today, company_id, pending_source_days)
     )
     today_report = (
         selected if (start, end) == (today, today)
-        else f.report_headline(db, u, today, today, company_id)
+        else f.report_headline(db, u, today, today, company_id, pending_source_days)
     )
 
     def channels(report):
