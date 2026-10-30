@@ -3543,7 +3543,7 @@ def dashboard_summary(
     today = business_today()
     # Reuse the same marketplace completeness scan across all three date windows.
     pending_source_days = f.marketplace_source_event_days(db, u, company_id)
-    selected = f.report_headline(db, u, start, end, company_id, pending_source_days)
+    selected = f.report_headline(db, u, start, end, company_id, pending_source_days, include_balances=False)
     month_start = today.replace(day=1)
     month_report = (
         selected if (start, end) == (month_start, today)
