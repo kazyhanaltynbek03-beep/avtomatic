@@ -26,7 +26,7 @@ function Metric({ title, value, caption, tone = "", onClick, active = false }) {
 
 function ReturnDetails({ item }) {
   return <details className="returns-detail"><summary>Подробности</summary><dl>
-    <dt>ID возврата маркетплейса</dt><dd>{item.external_return_id || "Не указан источником"}</dd>\n    <dt>ID товара в системе</dt><dd>{item.product_id ?? "Товар ещё не сопоставлен"}</dd>\n    <dt>Дата первоначального заказа</dt><dd>{showDate(item.order_date)}</dd>
+    <dt>ID возврата маркетплейса</dt><dd>{item.generated_return_id ? "В исходном листе отсутствует" : item.external_return_id || "Не указан источником"}</dd>\n    <dt>ID товара в системе</dt><dd>{item.product_id ?? "Товар ещё не сопоставлен"}</dd>\n    <dt>Дата первоначального заказа</dt><dd>{showDate(item.order_date)}</dd>
     <dt>Дата выдачи</dt><dd>{showDate(item.issue_date)}</dd>
     <dt>Дата заявки</dt><dd>{showDate(item.request_date)}</dd>
     <dt>Дата финансовой операции</dt><dd>{showDate(item.financial_return_date)}</dd>
