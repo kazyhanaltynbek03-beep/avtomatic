@@ -3,11 +3,11 @@ from datetime import date
 from io import BytesIO
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, func
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from .models import Account, MarketplaceProductReportSetting, Product, ProductCompany, Return, Sale
+from .models import Account, Batch, MarketplaceProductMapping, MarketplaceProductReportSetting, Product, ProductCompany, Return, Sale
 from .security import require, scope
 
 
@@ -154,10 +154,116 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             round(tax_rate / 100, 2) if tax_rate is not None else None
         )
         items.append(row)
-    items.sort(key=lambda row: (
-        row["product_name"].casefold(), row["channel"], row["account_name"].casefold()
-    ))
-    return {"start": str(start), "end": str(end), "items": items, "total": len(items)}
+    # The customer report is keyed by the internal SKU. Marketplace cards and
+    # stores are detail beneath that product, never separate summary rows.
+    batch_rows = db.execute(
+        select(
+            Batch.company_id, Batch.product_id,
+            func.coalesce(func.sum(Batch.quantity), 0),
+            func.coalesce(func.sum(Batch.total_cost), 0),
+            func.coalesce(func.sum(Batch.remaining), 0),
+        ).where(
+            Batch.company_id.in_(company_ids or {-1}),
+            Batch.product_id.in_(product_ids or {-1}),
+        ).group_by(Batch.company_id, Batch.product_id)
+    ).all()
+    batch_stats = {
+        (company, product_id): {
+            "quantity": int(quantity or 0), "total_cost": int(total_cost or 0),
+            "stock": int(stock or 0),
+        }
+        for company, product_id, quantity, total_cost, stock in batch_rows
+    }
+    combined = {}
+    marketplace_groups = {}
+    amount_fields = (
+        "sold_units", "sold_revenue", "returned_units", "returned_revenue",
+        "restocked_returned_units", "commission", "logistics", "advertising",
+    )
+    for item in items:
+        key = (item["company_id"], item["product_id"])
+        row = combined.get(key)
+        if row is None:
+            row = {**item, **{field: 0 for field in amount_fields}}
+            row["marketplace_breakdown"] = []
+            combined[key] = row
+        for field in amount_fields:
+            row[field] += int(item.get(field) or 0)
+        breakdown_key = (key[0], key[1], item["channel"], item["account_id"])
+        detail = marketplace_groups.get(breakdown_key)
+        if detail is None:
+            detail = {
+                "channel": item["channel"], "account_id": item["account_id"],
+                "account_name": item["account_name"],
+                **{field: 0 for field in amount_fields},
+            }
+            marketplace_groups[breakdown_key] = detail
+        for field in amount_fields:
+            detail[field] += int(item.get(field) or 0)
+
+    links = list(db.scalars(select(MarketplaceProductMapping).where(
+        MarketplaceProductMapping.company_id.in_(company_ids or {-1}),
+        MarketplaceProductMapping.product_id.in_(product_ids or {-1}),
+        MarketplaceProductMapping.account_id.in_(account_ids or {-1}),
+    )))
+    linked_cards = defaultdict(list)
+    for link in links:
+        account = account_map.get(link.account_id)
+        if account:
+            linked_cards[(link.company_id, link.product_id)].append({
+                "channel": link.channel, "store": account.name,
+                "external_id": link.external_key,
+            })
+
+    products_for_price = products
+    for key, row in combined.items():
+        stats = batch_stats.get(key, {})
+        product = products_for_price.get(key[1])
+        row["available_stock"] = stats.get("stock", 0)
+        row["selling_price_tenge"] = round((product.price or 0) / 100, 2) if product else 0
+        media = (product.media or []) if product else []
+        first_media = media[0] if media else ""
+        row["photo"] = (first_media.get("url") or first_media.get("src") or "") if isinstance(first_media, dict) else str(first_media or "")
+        unit_cost = row.get("unit_cost_cents")
+        if unit_cost is None and stats.get("quantity", 0) > 0:
+            unit_cost = round(stats["total_cost"] / stats["quantity"])
+            row["unit_cost_cents"] = unit_cost
+        tax_rate = row.get("tax_rate_bps")
+        row["net_units"] = row["sold_units"] - row["returned_units"]
+        row["net_revenue"] = row["sold_revenue"] - row["returned_revenue"]
+        row["cogs"] = (
+            (row["sold_units"] - row["restocked_returned_units"]) * unit_cost
+            if unit_cost is not None else None
+        )
+        row["tax"] = (
+            round(row["net_revenue"] * tax_rate / 10000)
+            if tax_rate is not None else None
+        )
+        row["profit"] = (
+            row["net_revenue"] - row["cogs"] - row["tax"]
+            - row["commission"] - row["logistics"] - row["advertising"]
+            if row["cogs"] is not None and row["tax"] is not None else None
+        )
+        row["unit_cost_tenge"] = round(unit_cost / 100, 2) if unit_cost is not None else None
+        row["tax_rate_percent"] = round(tax_rate / 100, 2) if tax_rate is not None else None
+        row["marketplace_breakdown"] = sorted(
+            (detail for detail_key, detail in marketplace_groups.items()
+             if detail_key[:2] == key),
+            key=lambda detail: (detail["channel"], detail["account_name"].casefold()),
+        )
+        row["marketplace_cards"] = sorted(
+            linked_cards.get(key, []), key=lambda link: (link["channel"], link["store"].casefold(), link["external_id"])
+        )
+        row["marketplace_card_count"] = len(row["marketplace_cards"])
+        row["marketplace_names"] = ", ".join(
+            f'{detail["channel"]} · {detail["account_name"]}'
+            for detail in row["marketplace_breakdown"]
+        )
+        row["channel"] = " + ".join(sorted({detail["channel"] for detail in row["marketplace_breakdown"]}))
+        row["account_name"] = ", ".join(sorted({detail["account_name"] for detail in row["marketplace_breakdown"]}))
+    consolidated = list(combined.values())
+    consolidated.sort(key=lambda row: row["product_name"].casefold())
+    return {"start": str(start), "end": str(end), "items": consolidated, "total": len(consolidated)}
 
 
 def save_setting(db, user, company_id, product_id, unit_cost_tenge, tax_rate_percent):
