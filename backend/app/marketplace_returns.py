@@ -237,6 +237,7 @@ def serialize_return(row, account, product=None):
         "quantity": row.quantity, "order_date": row.order_date, "issue_date": row.issue_date,
         "request_date": row.request_date, "financial_return_date": row.financial_return_date,
         "detected_date": row.detected_date, "amount": row.amount,
+        "return_delivery_cost": (row.raw_data or {}).get("return_delivery_cost_tiyn"),
         "currency": row.currency, "status": row.return_status,
         "financial_status": row.financial_status, "accounted_status": row.accounted_status,
         "reason": row.reason, "guarantee_case": row.guarantee_case,
