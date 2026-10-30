@@ -1468,10 +1468,13 @@ def marketplace_report_xlsx(channel: str, start: date, end: date,
             ("Продано, шт.", "api_units", "Количество из строк Kaspi API"),
             ("Возвраты API", "api_returns", "Фактическая сумма возврата не предоставляется API"),
             ("Возвраты, шт.", "api_return_units", "Количество из строк Kaspi API"),
+            ("Доставка продавца API, выданные заказы", "api_logistics", "deliveryCostForSeller, только COMPLETED и по completionDate; отдельно от финансовой формулы QOR"),
+            ("Обратная доставка API", "api_return_logistics", "Только отдельные returnDeliveryCostForSeller с датой возврата"),
+            ("Возвращённые единицы без даты", "api_undated_return_units", "Не отнесены к периоду и не вычитаются из продаж"),
             ("Строки без конвертации", "api_unconverted", "Требуют проверки даты/суммы"),
         ]:
             value = summary.get(key) if api_available else None
-            if key in {"api_gross_revenue", "api_revenue", "api_returns"} and value is not None:
+            if key in {"api_gross_revenue", "api_revenue", "api_returns", "api_logistics", "api_return_logistics"} and value is not None:
                 value = value / 100
             overview.append([label, value, note])
         for label, key, note in [
@@ -1585,7 +1588,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     sync_errors = [error for status, error in display_sync if error and status != 'running']
     last_sync = max((a.last_sync for a in accounts if a.last_sync), default=None)
     if not ids:
-        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':None,'api_revenue':None,'api_units':None,'api_returns':None,'api_return_units':None,'api_unconverted':0,'api_data_available':False,'sync_status':'not_connected','sync_errors':[],'last_sync':None,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'marketplace_fines':None,'marketplace_fines_rows':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
+        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':None,'api_revenue':None,'api_units':None,'api_returns':None,'api_return_units':None,'api_logistics':None,'api_logistics_rows':0,'api_return_logistics':None,'api_return_logistics_rows':0,'api_undated_return_units':0,'api_unconverted':0,'api_data_available':False,'sync_status':'not_connected','sync_errors':[],'last_sync':None,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'marketplace_fines':None,'marketplace_fines_rows':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
 
     sales = list(db.scalars(select(Sale).where(Sale.account_id.in_(ids), Sale.date >= start, Sale.date <= end)))
     period_returns = list(db.scalars(select(Return).join(Sale, Return.sale_id == Sale.id).where(Sale.account_id.in_(ids), Return.date >= start, Return.date <= end)))
@@ -1609,7 +1612,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     fine_expenses = [x for x in expenses if any(term in str(x.category or "").casefold() for term in ("штраф", "penalty", "penalties", "fine", "fines"))]
     marketplace_fines = sum(x.amount for x in fine_expenses) if fine_expenses else None
 
-    api_gross_revenue=api_revenue=api_units=api_unconverted=api_returns=api_return_units=settlement_accrued=settlement_rows=settlement_unconverted=0
+    api_gross_revenue=api_revenue=api_units=api_unconverted=api_returns=api_return_units=api_logistics=api_logistics_rows=api_return_logistics=api_return_logistics_rows=api_undated_return_units=settlement_accrued=settlement_rows=settlement_unconverted=0
     raw_kaspi_commission_bases = {}
     api_data_available = False
     raw_q = select(MarketplaceRecord.account_id, MarketplaceRecord.payload).where(MarketplaceRecord.account_id.in_(ids), MarketplaceRecord.source == channel.lower())
@@ -1662,14 +1665,35 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                                 raw_kaspi_commission_bases[key]=raw_kaspi_commission_bases.get(key,0)+sale_amount
                         if returned:
                             return_dt=p.get('returned_date') or p.get('return_date')
-                            return_day=marketplace_pipeline._day(return_dt, 'Asia/Almaty')
-                            if start<=return_day<=end:
-                                api_returns += sale_amount
-                                api_return_units += qty
-                                api_revenue -= sale_amount
-                                api_units -= qty
+                            if not return_dt:
+                                api_undated_return_units += qty
+                            else:
+                                return_day=marketplace_pipeline._day(return_dt, 'Asia/Almaty')
+                                if start<=return_day<=end:
+                                    api_returns += sale_amount
+                                    api_return_units += qty
+                                    api_revenue -= sale_amount
+                                    api_units -= qty
                     except marketplace_pipeline.Pending:
                         api_unconverted += 1
+            elif src == 'kaspi' and typ in {'delivery_charge', 'return_delivery_charge'}:
+                order_status = str(p.get('order_status') or '').upper()
+                if typ == 'delivery_charge' and order_status == 'COMPLETED':
+                    event_dt = p.get('completed_date') or p.get('completion_date')
+                elif typ == 'return_delivery_charge' and order_status == 'RETURNED':
+                    event_dt = p.get('returned_date') or p.get('return_date')
+                else:
+                    event_dt = None
+                if event_dt:
+                    event_day = marketplace_pipeline._day(event_dt, 'Asia/Almaty')
+                    if start <= event_day <= end:
+                        charge_cents = marketplace_pipeline._cents(p.get('amount'), by_id[account_id], 'KZT', db, event_dt)
+                        if typ == 'delivery_charge':
+                            api_logistics += charge_cents
+                            api_logistics_rows += 1
+                        else:
+                            api_return_logistics += charge_cents
+                            api_return_logistics_rows += 1
         except (marketplace_pipeline.Pending, ValueError, TypeError, KeyError):
             continue
     if channel == "Kaspi":
@@ -1685,7 +1709,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     if quality:
         source_complete = source_complete and quality["coverage_complete"] and quality["data_complete"]
     api_unknown = channel == 'Kaspi'  and not api_data_available and sync_status not in {'done','partial'}
-    return {'channel':channel,'start':str(start),'end':str(end),'revenue':revenue,'units':units,'api_gross_revenue':None if api_unknown else api_gross_revenue,'api_revenue':None if api_unknown else api_revenue,'api_units':None if api_unknown else api_units,'api_returns':None if api_unknown else api_returns,'api_return_units':None if api_unknown else api_return_units,'api_unconverted':api_unconverted,'api_data_available':api_data_available or sync_status in {'done','partial'},'sync_status':sync_status,'sync_errors':sync_errors,'last_sync':last_sync.isoformat() if last_sync else None,
+    return {'channel':channel,'start':str(start),'end':str(end),'revenue':revenue,'units':units,'api_gross_revenue':None if api_unknown else api_gross_revenue,'api_revenue':None if api_unknown else api_revenue,'api_units':None if api_unknown else api_units,'api_returns':None if api_unknown else api_returns,'api_return_units':None if api_unknown else api_return_units,'api_logistics':api_logistics if channel == 'Kaspi' else None,'api_logistics_rows':api_logistics_rows if channel == 'Kaspi' else 0,'api_return_logistics':api_return_logistics if channel == 'Kaspi' else None,'api_return_logistics_rows':api_return_logistics_rows if channel == 'Kaspi' else 0,'api_undated_return_units':api_undated_return_units if channel == 'Kaspi' else 0,'api_unconverted':api_unconverted,'api_data_available':api_data_available or sync_status in {'done','partial'},'sync_status':sync_status,'sync_errors':sync_errors,'last_sync':last_sync.isoformat() if last_sync else None,
         'pending_sales':pending,'pending_return_inspection_units':pending_return_inspection_units,'pending_reasons':{'COGS_PENDING':pending} if pending else {},'financial_complete':not pending and not api_unconverted and not pending_return_inspection_units and (source_complete if channel == 'Kaspi' else True),
         'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'marketplace_fines':marketplace_fines,'marketplace_fines_rows':len(fine_expenses),'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'commission_estimate_suppressed':commission_estimate_suppressed,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
