@@ -159,7 +159,7 @@ def test_configured_backfill_is_targeted_and_queued_once(client,monkeypatch):
         assert not db.get(Account,2).integration_settings
 
 
-def test_summary_never_assigns_a_return_to_the_issue_date(client):
+def test_summary_uses_completion_date_for_return_missing_event_date(client):
     from app.db import SessionLocal
     from app.models import Account,MarketplaceRecord
     with SessionLocal() as db:
@@ -169,6 +169,7 @@ def test_summary_never_assigns_a_return_to_the_issue_date(client):
                      "quantity":1,"total_price":100,"completed_date":1784000000000}))
         db.commit()
     result=client.get("/api/marketplace-summary?channel=Kaspi&account_id=1&start=2026-07-08&end=2026-09-25").json()
-    assert result["api_return_units"]==0
-    assert result["api_unconverted"]==1
-    assert result["source_complete"] is False
+    assert result["api_return_units"]==1
+    assert result["api_undated_return_units"]==1
+    assert result["api_unconverted"]==0
+    assert result["source_complete"] is True
