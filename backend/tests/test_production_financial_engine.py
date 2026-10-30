@@ -14,6 +14,8 @@ PERIOD='start=2026-10-01&end=2026-10-31&company_id=1'
 def prepare(client):
     with SessionLocal() as db:
         acc=db.get(Account,1);acc.channel='Wildberries'
+        # The marketplace card maps to the client's existing QOR SKU.
+        db.get(Product,1).article='NEW-WB'
         staged(db,acc,'realization:prod-shape',record_type='realization',doc_type_name='Продажа',
             nm_id=99001,sa_name='NEW-WB',subject_name='Regression product',quantity=13,
             retail_amount='733808',currency='KZT',sale_dt='2026-10-02',rr_dt='2026-10-02',srid='WB-REGRESSION')
@@ -160,7 +162,7 @@ def test_operation_fx_is_frozen_and_date_required(client,monkeypatch):
     monkeypatch.setattr(mp.exchange_rates,'fetch_nbk_rate',lambda *a,**k: (_ for _ in ()).throw(Exception('offline')))
     with SessionLocal() as db:
         acc=db.get(Account,1);acc.channel='Wildberries';acc.settlement_currency='RUB';acc.settlement_fx_rate=99999
-        row=staged(db,acc,'fx-sale',record_type='sale',saleID='S1',srid='FX',nmId=20,vendorCode='FX',priceWithDisc=100,date='2026-10-02');rid=row.id;db.commit()
+        row=staged(db,acc,'fx-sale',record_type='sale',saleID='S1',srid='FX',nmId=20,vendorCode='A',priceWithDisc=100,date='2026-10-02');rid=row.id;db.commit()
     assert client.post('/api/accounts/1/reprocess').json()['pending_reasons']['FX_REQUIRED:RUB']==1
     assert client.put('/api/accounts/1/settlement',json={'currency':'RUB','fx_rate':55000,'effective_date':'2026-10-02'}).status_code==200
     client.post('/api/accounts/1/reprocess')
