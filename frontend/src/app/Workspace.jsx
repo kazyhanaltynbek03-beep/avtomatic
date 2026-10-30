@@ -30,6 +30,7 @@ import {
   Send,
   Package,
   Wallet,
+  CalendarDays,
   TrendingUp,
   Layers,
   ShieldCheck,
@@ -1012,7 +1013,7 @@ function ReportPage({ page, ctx }) {
     const timer = window.setTimeout(() => setDashboardStalled(true), 30000);
     return () => window.clearTimeout(timer);
   }, [usesDashboard, dashLoading, dash?.report, ctx.start, ctx.end, ctx.company, ctx.refresh]);
-  if (usesDashboard && !loadedReport && !dash?.report && dashLoading) {
+  if (page === "dashboard" && !dash?.report && dashLoading) {
     if (!dashboardStalled) return <Spinner />;
     return <section className="panel dashboard-load-warning" role="status">
       <strong>Краткая сводка загружается дольше обычного</strong>
@@ -1020,8 +1021,8 @@ function ReportPage({ page, ctx }) {
       <button className="secondary" type="button" onClick={() => { setDashboardStalled(false); ctx.reload(); }}>Повторить загрузку</button>
     </section>;
   }
-  if (usesDashboard && !loadedReport && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
-  if (usesDashboard && !loadedReport) {
+  if (page === "dashboard" && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
+  if (page === "dashboard") {
     const fast = dash?.report || {};
     const headline = [
       ["Оборот сегодня", dash?.today?.revenue, "На " + (dash?.as_of || "")],
@@ -1031,32 +1032,79 @@ function ReportPage({ page, ctx }) {
       ["Чистая прибыль месяца", dash?.month?.net_profit, "С начала месяца"],
     ];
     const kpis = [
-      ["Оборот", fast.revenue, "За вычетом возвратов"],
-      ["Валовая прибыль", fast.gross_profit, "Выручка − себестоимость"],
-      ["Чистая прибыль", fast.net_profit, "После учтённых расходов"],
-      ["Маржинальность", fast.margin == null ? "—" : decimal(fast.margin) + "%", "Чистая прибыль / выручка"],
+      ["Выручка за период", fast.revenue, Wallet, "За вычетом возвратов"],
+      ["Валовая прибыль", fast.gross_profit, Layers, "Выручка минус себестоимость"],
+      ["Чистая прибыль", fast.net_profit, TrendingUp, "После учтённых расходов"],
+      ["Продано единиц", fast.units, Package, "Количество по операциям"],
     ];
+    const channelColors = { kaspi:"#ed4c4c", wildberries:"#8c38ce", ozon:"#2473dd", offline:"#40856a", b2b:"#d5a426" };
+    const quickChannels = (fast.channel_summary || []).map((row) => ({
+      ...row,
+      channel: row.channel || row.name || "Другие",
+      revenue: Number(row.revenue) || 0,
+    }));
+    const quickChannelTotal = quickChannels.reduce((sum, row) => sum + Math.max(0, row.revenue), 0);
+    const marketplaceCards = ["Kaspi", "Wildberries"].map((name) => {
+      const row = quickChannels.find((item) => String(item.channel).trim().toLowerCase() === name.toLowerCase());
+      return { name, revenue: row?.revenue ?? null, returns: row?.returns ?? null, units: row?.quantity ?? null };
+    });
+    const chartChannels = quickChannels.filter((row) => row.revenue > 0);
     return (
-      <>
-        <div className="dashboard-headline">
-          {headline.map(([title, value, note]) => <div className="headline-card" key={title}><span>{title}</span><strong>{money(value)}</strong><small>{note}</small></div>)}
+      <div className="qor-overview qor-overview-quick">
+        <div className="qor-quick-headline" aria-label="Ключевые показатели">
+          {headline.slice(0, 3).map(([title, value, note], index) => {
+            const Icon = [Wallet, CalendarDays, TrendingUp][index];
+            return <article className="qor-quick-headline-card" key={title}>
+              <i><Icon size={16}/></i><div><small>{title}</small><strong>{value == null ? "—" : money(value)}</strong><span>{note}</span></div>
+            </article>;
+          })}
         </div>
-        <div className="kpis">
-          {kpis.map(([title, value, note], i) => <div className={"kpi " + (i === 2 ? "featured" : "")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}
+        <div className="qor-overview-kpis qor-quick-kpis">
+          {kpis.map(([title, value, Icon, note], index) => <article className="qor-overview-kpi" key={title}>
+            <div className="qor-overview-kpi-top"><span>{title}</span><i className={index === 2 ? "is-profit" : ""}><Icon size={17}/></i></div>
+            <strong>{value == null ? "—" : index === 3 ? decimal(value) : money(value)}</strong><small>{note}</small>
+          </article>)}
         </div>
-        <div className="panel report-loading-inline">
-          <strong>Краткий обзор готов.</strong>
-          <p>Подробные графики и операции открываются в разделе «Аналитика». Сводный отчёт по внутренним SKU доступен отдельно и объединяет связанные карточки Kaspi и Wildberries.</p>
-          <div className="row-actions">
-            <button className="secondary" type="button" onClick={() => ctx.navigate("analytics")}>Подробная аналитика</button>
-            <button className="primary" type="button" onClick={() => { ctx.setMarketplaceReportChannel(""); ctx.navigate("marketplace-product-report"); }}>Сводный отчёт по SKU</button>
-          </div>
+        <section className="qor-quick-marketplaces" aria-label="Продажи по маркетплейсам">
+          {marketplaceCards.map((row) => {
+            const key = row.name.toLowerCase(), color = channelColors[key];
+            const share = quickChannelTotal && row.revenue != null ? Math.min(100, Math.max(0, row.revenue / quickChannelTotal * 100)) : 0;
+            return <article className={`qor-quick-marketplace qor-quick-marketplace--${key}`} key={row.name}>
+              <div className="qor-quick-marketplace-mark">{row.name === "Wildberries" ? "WB" : "K"}</div>
+              <div className="qor-quick-marketplace-body"><div><strong>{row.name}</strong><span>{row.units == null ? "Продажи за период" : `${decimal(row.units)} шт. продано`}</span></div>
+                <b>{row.revenue == null ? "Нет данных в сводке" : money(row.revenue)}</b>
+                <div className="qor-quick-marketplace-track"><i style={{width:`${share}%`,background:color}}/></div>
+                <small>{row.returns == null ? "Возвраты: —" : `Возвраты: ${money(row.returns)}`}</small>
+              </div>
+            </article>;
+          })}
+        </section>
+        <div className="qor-quick-charts">
+          <section className="panel qor-quick-channel-chart">
+            <div className="panel-heading"><div><h2>Продажи по каналам</h2><span>Доля выручки за выбранный период</span></div><span className="qor-chart-caption">{ctx.start} — {ctx.end}</span></div>
+            {chartChannels.length ? <div className="qor-quick-channel-list">{chartChannels.sort((a,b)=>b.revenue-a.revenue).map((row) => {
+              const color = channelColors[String(row.channel).toLowerCase()] || "#40856a", share = quickChannelTotal ? row.revenue / quickChannelTotal * 100 : 0;
+              return <div className="qor-quick-channel-row" key={row.channel}><div><span><i style={{background:color}}/>{row.channel}</span><b>{money(row.revenue)}</b></div><div className="qor-quick-channel-track"><i style={{width:`${share}%`,background:color}}/></div><small>{decimal(share)}% выручки</small></div>;
+            })}</div> : <Empty text="За выбранный период нет продаж по каналам"/>}
+          </section>
+          <section className="panel qor-quick-share-panel">
+            <div className="panel-heading"><div><h2>Структура продаж</h2><span>Распределение по каналам</span></div></div>
+            {chartChannels.length ? <>
+              <div className="qor-quick-share-chart"><ResponsiveContainer width="100%" height={188}><PieChart>
+                <Pie data={chartChannels} dataKey="revenue" nameKey="channel" innerRadius={55} outerRadius={78} paddingAngle={3} stroke="none">
+                  {chartChannels.map((row) => <Cell key={row.channel} fill={channelColors[String(row.channel).toLowerCase()] || "#40856a"}/>)}
+                </Pie><Tooltip formatter={(value) => money(value)}/>
+              </PieChart></ResponsiveContainer></div>
+              <p className="qor-quick-share-total">Выручка по каналам <strong>{money(quickChannelTotal)}</strong></p>
+            </> : <Empty text="Нет данных для диаграммы"/>}
+          </section>
         </div>
-      </>
+        <div className="qor-quick-footer"><div><strong>Нужна подробная аналитика?</strong><span>Отчёт по объединённым SKU открывается отдельной кнопкой сверху.</span></div><button className="secondary" type="button" onClick={() => ctx.navigate("analytics")}>Открыть аналитику <span aria-hidden="true">→</span></button></div>
+      </div>
     );
   }
-  if ((!usesDashboard && page !== "forecast" && reportLoading)) return <Spinner />;
-  if (!usesDashboard && page !== "forecast" && reportError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
+  if ((page === "analytics" || (!usesDashboard && page !== "forecast")) && reportLoading) return <Spinner />;
+  if ((page === "analytics" || (!usesDashboard && page !== "forecast")) && reportError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
   if (page === "alerts") {
     if (systemAlertsLoading && !systemAlerts) return <div className="panel" role="status"><Spinner/><p>Загружаем проверки рабочего пространства…</p></div>;
     if (systemAlertsError) return <div className="panel"><ErrorBox error={systemAlertsError}/><button className="secondary" onClick={()=>setAlertRetry(value=>value+1)}>Повторить загрузку</button></div>;
