@@ -2285,7 +2285,7 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
       <label>С<input type="date" value={start} onChange={e=>setStart(e.target.value)} required/></label>
       <label>По<input type="date" value={end} onChange={e=>setEnd(e.target.value)} required/></label>
       <button className="primary" type="submit" disabled={busy||!accounts.length}>{busy?"Готовим…":"Показать отчёт"}</button>
-      {channel==="Kaspi"&&<button type="button" disabled={!range||busy} onClick={download}>{busy?"Формируем…":reportReady?"Скачать Excel":"Скачать предварительный Excel"}</button>}
+      {channel==="Kaspi"&&<button type="button" disabled={!range||busy} onClick={download}>{busy?"Формируем…":"Скачать Excel"}</button>}
     </form>
     {error&&<ErrorBox error={error}/>}{notice&&<p className="muted" role="status" aria-live="polite">{notice}</p>}
     {active&&<>
@@ -2298,6 +2298,19 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
           <div className="marketplace-report-summary">
         {[ ["Продажи API",apiAvailable?summary.data?.api_gross_revenue:null], ["Продажи после возвратов",apiAvailable?summary.data?.api_revenue:null], ["Единиц продано",!apiAvailable?"Нет данных":summary.data?.api_units==null?"—":`${summary.data.api_units} шт.`], ["Возвраты",!apiAvailable?"Нет данных":summary.data?.api_returns==null?"—":summary.data.api_returns], ["Единиц возврата",!apiAvailable?"Нет данных":summary.data?.api_return_units==null?"—":`${summary.data.api_return_units} шт.`] ].map(([label,value])=><article className="kpi" key={label}><span>{label}</span><strong>{typeof value==="number"?money(value):value??"Нет подтверждённых данных"}</strong></article>)}
           </div>
+          <h4>Финансовая оценка QOR · KZT</h4>
+          <div className="marketplace-report-summary">
+            {[
+              ["К перечислению · оценка", apiAvailable ? summary.data?.kaspi_estimated_proceeds : null, "Расчёт QOR, не подтверждение выплаты Kaspi Pay."],
+              ["Комиссия · учтено / оценка", summary.data?.commission || summary.data?.commission_estimated ? summary.data.commission : null, summary.data?.commission_estimated ? "Оценка модели: " + money(summary.data.commission_estimated) + "." : "Показывает только учтённые в QOR расходы."],
+              ["Логистика · учтено", summary.data?.logistics ? summary.data.logistics : null, "Уже сохранённые расходы QOR."],
+              ["Обратная логистика · учтено", summary.data?.return_logistics ? summary.data.return_logistics : null, "Уже сохранённые расходы QOR."],
+              ["Реклама · учтено", summary.data?.advertising ? summary.data.advertising : null, "Уже сохранённые расходы QOR."],
+              ["Прибыль QOR", summary.data?.net_profit, summary.data?.financial_complete ? "Текущий расчёт финансового ядра QOR." : "Предварительно: источник или затраты ещё не подтверждены."],
+              ["Штрафы · учтено в QOR", summary.data?.marketplace_fines, "Kaspi API заказов штрафы не передаёт. Здесь только уже внесённые в QOR расходы категории «штраф/fine»."]
+            ].map(([label,value,note])=><article className="kpi" key={label}><span>{label}</span><strong>{typeof value==="number"?money(value):value??"Нет подтверждённых данных"}</strong><small>{note}</small></article>)}
+          </div>
+          <p className="muted">Предварительные показатели обновляются по мере поступления API-строк. Даты и суммы фактических возвратов, банковские выплаты и не загруженные штрафы нельзя подтвердить этим API-отчётом.</p>
           {summary.data?.sync_errors?.length>0&&<ErrorBox error={summary.data.sync_errors.join("; ")}/>}
           <p className="muted">Kaspi API подтверждает позиции и статусы возвратов, но не отдаёт фактические дату и сумму возврата. Поэтому неподтверждённые суммы в отчёте остаются пустыми.</p>
           {sales.loading?<Spinner/>:sales.error?<ErrorBox error={sales.error}/>:<><h4>Продажи API · {sales.data?.items?.length||0} строк</h4><div className="table-wrap"><table className="data-table"><thead><tr><th>Дата выдачи</th><th>Магазин</th><th>ID заказа</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма API</th><th>Статус</th></tr></thead><tbody>{(sales.data?.items||[]).slice(0,1000).map(x=><tr key={`${x.account_id}:${x.id}`}><td>{x.event_date||"—"}</td><td>{x.store}</td><td>{x.reference}</td><td>{x.product_name}<small>{x.sku}</small></td><td>{x.quantity??"—"}</td><td>{x.amount==null?"—":money(Number(x.amount)*100)}</td><td>{x.status}</td></tr>)}</tbody></table></div></>}

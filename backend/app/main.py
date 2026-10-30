@@ -1358,6 +1358,20 @@ def marketplace_report_xlsx(channel: str, start: date, end: date,
             if key in {"api_gross_revenue", "api_revenue", "api_returns"} and value is not None:
                 value = value / 100
             overview.append([label, value, note])
+        for label, key, note in [
+            ("Комиссия QOR", "commission", "Учтённые расходы и/или оценка текущей модели; не финансовая выписка Kaspi Pay."),
+            ("Оценочная часть комиссии", "commission_estimated", "Оценка существующей модели QOR; не фактическая сумма списания Kaspi."),
+            ("Логистика QOR", "logistics", "Уже учтённые в QOR расходы за период."),
+            ("Обратная логистика QOR", "return_logistics", "Уже учтённые в QOR расходы за период."),
+            ("Реклама QOR", "advertising", "Уже учтённые в QOR расходы за период."),
+            ("Оценка суммы к перечислению", "kaspi_estimated_proceeds", "Расчётная оценка QOR, не подтверждение выплаты Kaspi Pay."),
+            ("Прибыль QOR", "net_profit", "Существующий расчёт QOR; может быть пустым, если не хватает подтверждённых затрат."),
+            ("Штрафы, учтённые в QOR", "marketplace_fines", "Только расходы с категорией «штраф/fine», уже внесённые в QOR. Kaspi API заказов штрафы не возвращает."),
+        ]:
+            value = summary.get(key)
+            if value is not None:
+                value = value / 100
+            overview.append([label, value, note])
         sale_ws = book.create_sheet("Продажи API")
         headers = ["Дата выдачи", "Магазин", "ID заказа", "Товар", "SKU", "Количество", "Сумма API", "Валюта", "Статус"]
         sale_ws.append(headers)
@@ -1455,7 +1469,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     sync_errors = [error for status, error in display_sync if error and status != 'running']
     last_sync = max((a.last_sync for a in accounts if a.last_sync), default=None)
     if not ids:
-        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':None,'api_revenue':None,'api_units':None,'api_returns':None,'api_return_units':None,'api_unconverted':0,'api_data_available':False,'sync_status':'not_connected','sync_errors':[],'last_sync':None,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
+        return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':None,'api_revenue':None,'api_units':None,'api_returns':None,'api_return_units':None,'api_unconverted':0,'api_data_available':False,'sync_status':'not_connected','sync_errors':[],'last_sync':None,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'marketplace_fines':None,'marketplace_fines_rows':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
 
     sales = list(db.scalars(select(Sale).where(Sale.account_id.in_(ids), Sale.date >= start, Sale.date <= end)))
     period_returns = list(db.scalars(select(Return).join(Sale, Return.sale_id == Sale.id).where(Sale.account_id.in_(ids), Return.date >= start, Return.date <= end)))
@@ -1476,6 +1490,8 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     return_logistics = sum(x.amount for x in expenses if x.category == "Marketplace return logistics")
     advertising += sum(x.amount for x in expenses if x.category == "Реклама")
     other = sum(x.amount for x in expenses if x.category not in {"Marketplace commission","Marketplace commission VAT","Marketplace logistics","Marketplace return logistics","Реклама"})
+    fine_expenses = [x for x in expenses if any(term in str(x.category or "").casefold() for term in ("штраф", "penalty", "penalties", "fine", "fines"))]
+    marketplace_fines = sum(x.amount for x in fine_expenses) if fine_expenses else None
 
     api_gross_revenue=api_revenue=api_units=api_unconverted=api_returns=api_return_units=settlement_accrued=settlement_rows=settlement_unconverted=0
     raw_kaspi_commission_bases = {}
@@ -1555,7 +1571,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
     api_unknown = channel == 'Kaspi'  and not api_data_available and sync_status not in {'done','partial'}
     return {'channel':channel,'start':str(start),'end':str(end),'revenue':revenue,'units':units,'api_gross_revenue':None if api_unknown else api_gross_revenue,'api_revenue':None if api_unknown else api_revenue,'api_units':None if api_unknown else api_units,'api_returns':None if api_unknown else api_returns,'api_return_units':None if api_unknown else api_return_units,'api_unconverted':api_unconverted,'api_data_available':api_data_available or sync_status in {'done','partial'},'sync_status':sync_status,'sync_errors':sync_errors,'last_sync':last_sync.isoformat() if last_sync else None,
         'pending_sales':pending,'pending_return_inspection_units':pending_return_inspection_units,'pending_reasons':{'COGS_PENDING':pending} if pending else {},'financial_complete':not pending and not api_unconverted and not pending_return_inspection_units and (source_complete if channel == 'Kaspi' else True),
-        'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'commission_estimate_suppressed':commission_estimate_suppressed,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
+        'cogs':cogs,'costs':commission+logistics+return_logistics+advertising+other,'marketplace_fines':marketplace_fines,'marketplace_fines_rows':len(fine_expenses),'commission':commission,'commission_estimated':commission_estimated,'commission_rate':commission_rate,'commission_estimate_suppressed':commission_estimate_suppressed,'logistics':logistics,'return_logistics':return_logistics,'kaspi_estimated_proceeds':kaspi_estimated_proceeds,'advertising':advertising,'returns':return_revenue,'return_units':return_units,
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
         'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':source_complete,'source_quality':quality}
 
