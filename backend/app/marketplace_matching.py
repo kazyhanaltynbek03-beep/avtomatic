@@ -8,7 +8,7 @@ import unicodedata
 
 from sqlalchemy import select
 
-from .models import Account, Batch, MarketplaceProductMapping, MarketplaceRecord, Product, Sale
+from .models import Account, Batch, MarketplaceProductMapping, MarketplaceRecord, Product, ProductCompany, Sale
 from . import marketplace_pipeline
 
 
@@ -102,6 +102,10 @@ def match_staged_catalog(db, accounts, products):
                 "per_account": [], "catalog_accounts": 0, "_new_wb_pairs": []}
 
     company_ids_by_product = defaultdict(set)
+    for product_id, company_id in db.execute(select(
+        ProductCompany.product_id, ProductCompany.company_id
+    ).where(ProductCompany.product_id.in_(product_ids))):
+        company_ids_by_product[int(product_id)].add(int(company_id))
     for product in products:
         for company_id in (product.specifications or {}).get("_qor_company_ids", []):
             try:
