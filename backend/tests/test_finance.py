@@ -67,7 +67,7 @@ def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch)
     periods = []
 
     def counted_headline(db, user, start, end, company_id=None, pending_source_days=None, include_balances=True):
-        periods.append((start, end, company_id))
+        periods.append((start, end, company_id, include_balances))
         return original_headline(db, user, start, end, company_id, pending_source_days, include_balances)
 
     monkeypatch.setattr(main.f, "report_headline", counted_headline)
@@ -78,8 +78,8 @@ def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch)
 
     assert response.status_code == 200, response.text
     assert periods == [
-        (date(2026, 10, 1), today, None),
-        (today, today, None),
+        (date(2026, 10, 1), today, None, False),
+        (today, today, None, False),
     ]
 
 
