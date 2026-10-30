@@ -52,8 +52,34 @@ KASPI_API_HISTORY_DAYS = max(1, int(os.getenv("KASPI_API_HISTORY_DAYS", "370")))
 CLAUDE_SKILL_INSTALL_LOCK = threading.Lock()
 
 
+def _kaspi_sync_paused_for(account_id):
+    raw = os.getenv("KASPI_PAUSE_ACCOUNT_IDS", "")
+    try:
+        paused_ids = {int(value.strip()) for value in raw.split(",") if value.strip()}
+    except ValueError:
+        logger.error("Invalid KASPI_PAUSE_ACCOUNT_IDS; pausing no accounts")
+        return False
+    return int(account_id) in paused_ids
+
+
+def _pause_kaspi_job(db, account):
+    settings = dict(account.integration_settings or {})
+    job = dict(settings.get("kaspi_period_job") or {})
+    if job.get("status") in {"running", "retry"}:
+        job.update(status="paused", paused_at=now().isoformat(),
+                   pause_reason="Остановлено по запросу; сохранённый курсор оставлен")
+        settings["kaspi_period_job"] = job
+        account.integration_settings = settings
+        account.sync_status = "partial"
+        account.sync_error = "KASPI_PERIOD_PAUSED: сохранённый курсор оставлен"
+        account.last_sync = now()
+        db.add(account)
+
+
 def sync_status_for_display(account, at=None):
     """Hide abandoned running states after the last persisted sync heartbeat."""
+    if account.channel == "Kaspi" and _kaspi_sync_paused_for(account.id):
+        return "paused", "Фоновый обход остановлен; сохранённый курсор оставлен."
     status = account.sync_status or "never"
     error = account.sync_error or ""
     if status.lower() != "running":
@@ -92,6 +118,10 @@ def _resume_kaspi_jobs_once():
         accounts = list(db.scalars(select(Account).where(
             Account.channel == "Kaspi", Account.active.is_(True), Account.mode == "api")))
         for account in accounts:
+            if _kaspi_sync_paused_for(account.id):
+                _pause_kaspi_job(db, account)
+                db.commit()
+                continue
             settings = dict(account.integration_settings or {})
             job = dict(settings.get("kaspi_period_job") or {})
             heartbeat = account.last_sync
@@ -4308,6 +4338,11 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                 "known_order_ids":known_order_ids}, separators=(",", ":"))
             pages = records = inserted_total = updated_total = 0
             while cursor:
+                if _kaspi_sync_paused_for(account_id):
+                    db.refresh(acc)
+                    _pause_kaspi_job(db, acc)
+                    db.commit()
+                    return
                 # Do not occupy a pooled DB connection while waiting on Kaspi.
                 db.commit()
                 result = worker.fetch(cursor)
@@ -4459,6 +4494,12 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     scope(u, acc.company_id)
     if acc.channel != "Kaspi" or acc.mode != "api" or not acc.active:
         raise HTTPException(409, "Активная API-интеграция Kaspi не найдена")
+    if _kaspi_sync_paused_for(acc.id):
+        _pause_kaspi_job(db, acc)
+        db.commit()
+        return {"ok":True,"status":"paused","account_id":acc.id,
+                "saved_cursor":True,"start":str(start),"end":str(end),
+                "message":"Фоновая загрузка остановлена; уже сохранённые данные и курсор сохранены."}
     if end < start or (end - start).days > 366:
         raise HTTPException(422, "Укажите корректный период не длиннее 367 дней")
     sync_is_running = sync_status_for_display(acc)[0] == "running"
