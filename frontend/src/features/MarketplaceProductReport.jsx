@@ -9,7 +9,7 @@ const moneyCell = (value) => value == null ? "—" : money(value);
 const keyOf = (row) => `${row.company_id}:${row.product_id}`;
 
 export default function MarketplaceProductReport({ ctx }) {
-  const [channel, setChannel] = useState("");
+  const [channel, setChannel] = useState(ctx.marketplaceReportChannel || "");
   const [accountId, setAccountId] = useState("");
   const [data, setData] = useState(null);
   const [drafts, setDrafts] = useState({});
@@ -25,6 +25,8 @@ export default function MarketplaceProductReport({ ctx }) {
     (!channel || account.channel === channel) &&
     (!ctx.company || String(account.company_id) === String(ctx.company))
   );
+
+  useEffect(() => { setChannel(ctx.marketplaceReportChannel || ""); setAccountId(""); }, [ctx.marketplaceReportChannel]);
 
   const params = useMemo(() => {
     const query = new URLSearchParams({ start: ctx.start, end: ctx.end });
@@ -68,6 +70,7 @@ export default function MarketplaceProductReport({ ctx }) {
   const items = data?.items || [];
   const totals = items.reduce((sum, row) => ({
     sold: sum.sold + Number(row.sold_units || 0),
+    stock: sum.stock + Number(row.available_stock || 0),
     returned: sum.returned + Number(row.returned_units || 0),
     revenue: sum.revenue + Number(row.net_revenue || 0),
     cost: sum.cost + (row.cogs == null ? 0 : Number(row.cogs)),
@@ -76,7 +79,7 @@ export default function MarketplaceProductReport({ ctx }) {
     logistics: sum.logistics + Number(row.logistics || 0),
     profit: sum.profit + (row.profit == null ? 0 : Number(row.profit)),
     incomplete: sum.incomplete || row.profit == null,
-  }), { sold: 0, returned: 0, revenue: 0, cost: 0, tax: 0, commission: 0, logistics: 0, profit: 0, incomplete: false });
+  }), { sold: 0, stock: 0, returned: 0, revenue: 0, cost: 0, tax: 0, commission: 0, logistics: 0, profit: 0, incomplete: false });
 
   const edit = (row, field, value) => {
     const key = keyOf(row);
@@ -134,7 +137,7 @@ export default function MarketplaceProductReport({ ctx }) {
         .pmr-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
         .pmr-controls select{min-height:38px;border:1px solid #dce6df;border-radius:8px;background:#fff;padding:0 12px;color:#29483b}
         .pmr-scroll{overflow:auto;border:1px solid #d5dfec;border-radius:8px}
-        .pmr-table{width:100%;border-collapse:collapse;min-width:900px;table-layout:fixed;font-size:11px}
+        .pmr-table{width:100%;border-collapse:collapse;min-width:1420px;table-layout:fixed;font-size:11px}
         .pmr-table th{background:#2863b4;color:#fff;text-align:left;font-weight:700;padding:9px 7px;white-space:normal;line-height:1.2;border:1px solid #1d559e}
         .pmr-table th:nth-child(1){width:20%}.pmr-table th:nth-child(2){width:10%}.pmr-table th:nth-child(3){width:10%}.pmr-table th:nth-child(4){width:12%}.pmr-table th:nth-child(5){width:14%}.pmr-table th:nth-child(6){width:13%}.pmr-table th:nth-child(7){width:12%}.pmr-table th:nth-child(8){width:9%}
         .pmr-table td{border:1px solid #dce4ee;padding:8px 7px;vertical-align:middle;overflow-wrap:anywhere}
@@ -146,7 +149,7 @@ export default function MarketplaceProductReport({ ctx }) {
         .pmr-edit-inline input{width:72px;max-width:100%;border:1px solid #d4dfeb;border-radius:5px;padding:5px 6px;font-size:11px}
         .pmr-row-save{width:100%;justify-content:center!important;padding:5px!important;font-size:10px!important;margin-top:2px}
         .pmr-actions{display:flex;gap:6px;justify-content:flex-end}
-        .pmr-summary{display:grid;grid-template-columns:repeat(5,minmax(100px,1fr));gap:10px;margin:14px 0}
+        .pmr-summary{display:grid;grid-template-columns:repeat(6,minmax(100px,1fr));gap:10px;margin:14px 0}
         .pmr-stat{border:1px solid #e8eee9;border-radius:9px;padding:12px;background:#fbfcfb}
         .pmr-stat small{display:block;color:#78877e;font-size:11px}.pmr-stat strong{display:block;margin-top:4px;font-size:15px}
         .pmr-mobile{display:none}
@@ -174,11 +177,11 @@ export default function MarketplaceProductReport({ ctx }) {
       `}</style>
       <div className="pmr-head">
         <div>
-          <h2>Отчёт по товарам маркетплейсов</h2>
-          <p>Продажи и возвраты из синхронизированных данных за выбранный период.</p>
+          <h2>Сводный финансовый отчёт по товарам</h2>
+          <p>Один внутренний SKU объединяет продажи всех привязанных карточек и магазинов.</p>
         </div>
         <button className="secondary" type="button" disabled={downloading || !items.length} onClick={exportExcel}>
-          <Download size={16}/>{downloading ? "Готовим Excel…" : "Скачать готовый Excel"}
+          <Download size={16}/>{downloading ? "Готовим Excel…" : "Скачать сводный Excel"}
         </button>
       </div>
       <div className="pmr-controls">
@@ -190,11 +193,12 @@ export default function MarketplaceProductReport({ ctx }) {
           <option value="">Все магазины</option>
           {accounts.map((account) => <option key={account.id} value={account.id}>{account.channel} · {account.name}</option>)}
         </select>
-        <span className="pmr-note">Период: {ctx.start} — {ctx.end}. Налог указан ставкой для товара и считается от чистой выручки.</span>
+        <span className="pmr-note">Период: {ctx.start} — {ctx.end}. Сводка объединяет связанные товары; ниже видны комиссии, логистика и реклама из проведённых продаж. Налог и себестоимость сохраняются для внутреннего SKU.</span>
       </div>
       <ErrorBox error={error}/>
       <div className="pmr-summary">
         <div className="pmr-stat"><small>Продано</small><strong>{totals.sold}</strong></div>
+        <div className="pmr-stat"><small>Общий остаток</small><strong>{totals.stock}</strong></div>
         <div className="pmr-stat"><small>Возвращено</small><strong>{totals.returned}</strong></div>
         <div className="pmr-stat"><small>Чистая выручка</small><strong>{moneyCell(totals.revenue)}</strong></div>
         <div className="pmr-stat"><small>Налог</small><strong>{totals.incomplete ? "Заполните ставку" : moneyCell(totals.tax)}</strong></div>
@@ -204,7 +208,7 @@ export default function MarketplaceProductReport({ ctx }) {
         <div className="pmr-scroll">
           <table className="pmr-table">
             <thead><tr>
-              <th>Артикул / SKU и товар</th><th>Площадка / магазин</th><th>Продано / возврат</th>
+              <th>Внутренний товар / SKU</th><th>Площадки, магазины и карточки</th><th>Цена продажи</th><th>Общий остаток</th><th>Продано / возврат</th>
               <th>Чистая выручка</th><th>Себестоимость</th><th>Налог</th>
               <th>Комиссия / логистика / реклама</th><th>Прибыль</th>
             </tr></thead>
@@ -215,7 +219,9 @@ export default function MarketplaceProductReport({ ctx }) {
                   <div className="pmr-product-name">{row.product_name}</div>
                   <div className="pmr-product-meta">{row.article || row.sku}{row.article && row.sku && row.article !== row.sku ? ` · ${row.sku}` : ""}</div>
                 </td>
-                <td>{row.channel}<small>{row.account_name}</small></td>
+                <td>{row.marketplace_names || "Нет продаж за период"}<small>{row.marketplace_card_count} привязанных карточек</small></td>
+                <td>{moneyCell(row.selling_price_tenge)}</td>
+                <td><strong>{row.available_stock ?? 0}</strong><small>шт. на едином складе</small></td>
                 <td><strong>{row.sold_units} / {row.returned_units}</strong><small>шт. продано / возврат</small></td>
                 <td>{moneyCell(row.net_revenue)}</td>
                 <td><div className="pmr-cell-stack">
@@ -241,8 +247,10 @@ export default function MarketplaceProductReport({ ctx }) {
           const key = keyOf(row), draft = drafts[key] || {};
           return <article className="pmr-card" key={`${key}:${row.account_id}`}>
             <div className="pmr-card-title"><strong>{row.product_name}</strong><b>{row.sku}</b></div>
-            <div className="pmr-meta">{row.article || "Артикул не указан"} · {row.channel} · {row.account_name}</div>
+            <div className="pmr-meta">Артикул: {row.article || "не указан"} · {row.marketplace_names || "продаж в периоде нет"} · {row.marketplace_card_count} карточек</div>
             <div className="pmr-card-grid">
+              <div><span>Цена продажи</span><b>{moneyCell(row.selling_price_tenge)}</b></div>
+              <div><span>Остаток на складе</span><b>{row.available_stock ?? 0} шт.</b></div>
               <div><span>Продано / возврат</span><b>{row.sold_units} / {row.returned_units} шт.</b></div>
               <div><span>Чистая выручка</span><b>{moneyCell(row.net_revenue)}</b></div>
               <div><span>Себестоимость</span><b>{moneyCell(row.cogs)}</b></div>
