@@ -963,7 +963,7 @@ function ReportPage({ page, ctx }) {
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  const { data: dash, error: dashError } = useLoad(
+  const { data: dash, error: dashError, loading: dashLoading } = useLoad(
     usesDashboard ? summaryPath : null,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
@@ -992,19 +992,20 @@ function ReportPage({ page, ctx }) {
   ];
   useEffect(() => {
     setDashboardStalled(false);
-    if (!usesDashboard || !reportLoading || loadedReport) return;
-    const timer = window.setTimeout(() => setDashboardStalled(true), 12000);
+    if (!usesDashboard || !dashLoading || dash?.report) return;
+    const timer = window.setTimeout(() => setDashboardStalled(true), 30000);
     return () => window.clearTimeout(timer);
-  }, [usesDashboard, reportLoading, loadedReport, page, ctx.start, ctx.end, ctx.company, ctx.refresh]);
-  if (usesDashboard && reportLoading && !loadedReport && !dash?.report) {
+  }, [usesDashboard, dashLoading, dash?.report, page, ctx.start, ctx.end, ctx.company, ctx.refresh]);
+  if (usesDashboard && !loadedReport && !dash?.report && dashLoading) {
     if (!dashboardStalled) return <Spinner />;
     return <section className="panel dashboard-load-warning" role="status">
-      <strong>Обзор загружается дольше обычного</strong>
-      <p>Сервер пока не вернул данные. Попробуйте обновить обзор; расчёты отчётов не менялись.</p>
+      <strong>Краткая сводка загружается дольше обычного</strong>
+      <p>Сервер пока не вернул сводку. Можно повторить загрузку; подробный отчёт и расчёты не изменялись.</p>
       <button className="secondary" type="button" onClick={() => { setDashboardStalled(false); ctx.reload(); }}>Повторить загрузку</button>
     </section>;
   }
-  if (usesDashboard && reportError && !loadedReport && !dash?.report) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
+  if (usesDashboard && !loadedReport && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
+  if (usesDashboard && !loadedReport && !dash?.report && reportError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
   if (usesDashboard && !loadedReport) {
     const fast = dash?.report || {};
     const headline = [
