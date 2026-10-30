@@ -520,7 +520,12 @@ def access_query(db, u, entity, search="", company_id=None, account_id=None):
         )
     elif entity == "expenses":
         q = q.where(or_(Expense.account_id.is_(None), Expense.account_id.in_(select(Account.id).where(Account.active.is_(True)))))
-    if company_id and hasattr(model, "company_id"):
+    if company_id and entity == "products":
+        scope(u, company_id)
+        q = q.where(Product.id.in_(select(ProductCompany.product_id).where(
+            ProductCompany.company_id == company_id
+        )))
+    elif company_id and hasattr(model, "company_id"):
         scope(u, company_id)
         q = q.where(model.company_id == company_id)
     if account_id and hasattr(model, "account_id"):
@@ -2615,10 +2620,7 @@ def product_marketplace_mapping(product_id: int, p: ProductMarketplaceIdIn,
     )
     if sync_state == "running" and not abandoned_kaspi_period_sync:
         raise HTTPException(409, "Синхронизация магазина ещё выполняется. Дождитесь завершения и повторите связь.")
-    scope(u, account.company_id)
-    product_company_ids = {int(value) for value in ((product.specifications or {}).get("_qor_company_ids") or []) if str(value).isdigit()}
-    if product_company_ids and account.company_id not in product_company_ids:
-        raise HTTPException(422, "Товар и магазин должны принадлежать одной компании")
+    scope_product(db, u, product.id, account.company_id)
     raw_id = p.external_id.strip()
     if not raw_id or any(ch.isspace() for ch in raw_id):
         raise HTTPException(422, "Укажите ID без пробелов")
@@ -2832,6 +2834,13 @@ def listing(
     rows = []
     for obj in db.scalars(q.order_by(model.id.desc()).offset(offset).limit(limit)):
         row = dump(obj)
+        if entity == "products":
+            company_ids = product_company_ids(db, obj.id)
+            if not company_ids:
+                company_ids = {int(value) for value in ((obj.specifications or {}).get("_qor_company_ids") or []) if str(value).isdigit()}
+            if u.role != "Owner":
+                company_ids.intersection_update(set(u.company_ids or []))
+            row["company_ids"] = sorted(company_ids)
         if entity == "accounts":
             row["sync_status"], row["sync_error"] = sync_status_for_display(obj)
         rows.append(row)
@@ -3052,8 +3061,10 @@ def validate_master(db, u, entity, p, existing=None):
         f.get_company(db, u, p.company_id)
     if entity == "products":
         scoped_companies = (p.specifications or {}).get("_qor_company_ids", [])
-        if not isinstance(scoped_companies, list) or len(scoped_companies) > 50:
-            raise HTTPException(422, "Некорректная привязка товара к компаниям")
+        if existing is not None:
+            scoped_companies = sorted(set(scoped_companies or []) | product_company_ids(db, existing.id))
+        if not isinstance(scoped_companies, list) or len(scoped_companies) > 50 or (existing is None and not scoped_companies):
+            raise HTTPException(422, "Укажите компанию для товара")
         for company_id in scoped_companies:
             try:
                 company_id = int(company_id)
@@ -3168,6 +3179,9 @@ def create_master(
     obj = model(**master_values(p, entity))
     db.add(obj)
     db.flush()
+    if entity == "products":
+        for company_id in (obj.specifications or {}).get("_qor_company_ids", []):
+            ensure_product_company(db, obj.id, int(company_id))
     audit(db, u, "create", entity, obj.id, {"after": dump(obj)})
     db.commit()
     if entity == "products": _schedule_wb_sync_for_product(tasks, obj.id)
@@ -3187,6 +3201,7 @@ def edit_master(
         raise HTTPException(404, "Не найдено")
     if entity == "products":
         obj = db.scalar(select(Product).where(Product.id == id).with_for_update().execution_options(populate_existing=True))
+        scope_product(db, u, obj.id)
     if hasattr(obj, "company_id"):
         scope(u, obj.company_id)
     p = schema.model_validate(payload)
@@ -3201,6 +3216,8 @@ def edit_master(
     for k, v in master_values(p, entity, obj).items():
         setattr(obj, k, v)
     if entity == "products":
+        for company_id in (obj.specifications or {}).get("_qor_company_ids", []):
+            ensure_product_company(db, obj.id, int(company_id))
         obj.version += 1
     audit(db, u, "update", entity, id, {"before": before, "after": dump(obj)})
     db.commit()
@@ -3222,6 +3239,8 @@ def delete_master(entity: str, id: int, u=Depends(current_user), db=Depends(get_
     obj = db.get(model, id)
     if not obj:
         raise HTTPException(404, "Не найдено")
+    if entity == "products":
+        scope_product(db, u, obj.id)
     if hasattr(obj, "company_id"):
         scope(u, obj.company_id)
     if entity == "accounts":
@@ -3489,8 +3508,10 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
     rows = []
     for product in products:
         specs = product.specifications or {}
-        company_ids = {int(value) for value in (specs.get("_qor_company_ids") or []) if str(value).isdigit()}
-        if company_id is not None and company_ids and company_id not in company_ids:
+        company_ids = product_company_ids(db, product.id)
+        if not company_ids:
+            company_ids = {int(value) for value in (specs.get("_qor_company_ids") or []) if str(value).isdigit()}
+        if company_id is not None and company_id not in company_ids:
             continue
         if u.role != "Owner" and company_ids and not company_ids.intersection(u.company_ids):
             continue
@@ -3501,7 +3522,7 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
         days = max(1, (today - month_start).days + 1)
         row = {
             "product_id": product.id, "sku": product.sku, "name": product.name,
-            "quantity": quantity, "value": value, "min_stock": int(product.min_stock or 0),
+            "company_ids": sorted(company_ids), "quantity": quantity, "value": value, "min_stock": int(product.min_stock or 0),
             "sold": sold, "unit_cost": f.rounded(value, quantity) if quantity > 0 else 0,
             "days_of_stock": round(quantity / (sold / days), 1) if sold > 0 else None,
             "turnover_days": round(days * quantity / sold, 1) if sold > 0 else None,
@@ -3527,7 +3548,9 @@ def inventory_count(p: s.StockCountIn, tasks: BackgroundTasks, u=Depends(current
             raise HTTPException(409, "Ключ операции уже использован для другой корректировки")
         db.commit()
         return {"ok": True, "replayed": True, "movement_id": old.target_id, **old.payload["result"]}
-    product = f.lock_product(db, p.product_id)
+    f.get_company(db, u, p.company_id)
+    product = scope_product(db, u, p.product_id, p.company_id)
+    f.lock_product(db, product.id)
     current = db.scalar(select(func.coalesce(func.sum(Batch.remaining), 0)).where(
         Batch.company_id == p.company_id, Batch.product_id == product.id
     )) or 0
