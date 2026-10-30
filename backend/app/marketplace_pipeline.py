@@ -5,10 +5,9 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import uuid
 from sqlalchemy import select
-from .models import Account, MarketplaceRecord, MarketplaceProductMapping, Product, Sale, Expense, CanonicalEvent
+from .models import Account, MarketplaceRecord, MarketplaceProductMapping, Product, ProductCompany, Sale, Expense, CanonicalEvent
 from . import schemas as s, canonical, exchange_rates, finance as f
 from . import wb_operation
-from .security import ensure_product_company
 
 CONFIRMED_KASPI = {'COMPLETED'}
 RETURNED_KASPI = {'RETURNED'}
