@@ -3382,11 +3382,11 @@ def dashboard_summary(
     month_start = today.replace(day=1)
     month_report = (
         selected if (start, end) == (month_start, today)
-        else f.report_headline(db, u, month_start, today, company_id, pending_source_days)
+        else f.report_headline(db, u, month_start, today, company_id, pending_source_days, include_balances=False)
     )
     today_report = (
         selected if (start, end) == (today, today)
-        else f.report_headline(db, u, today, today, company_id, pending_source_days)
+        else f.report_headline(db, u, today, today, company_id, pending_source_days, include_balances=False)
     )
 
     def channels(report):
