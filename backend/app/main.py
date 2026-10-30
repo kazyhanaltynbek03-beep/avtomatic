@@ -3060,16 +3060,20 @@ def validate_master(db, u, entity, p, existing=None):
     if hasattr(p, "company_id"):
         f.get_company(db, u, p.company_id)
     if entity == "products":
-        scoped_companies = (p.specifications or {}).get("_qor_company_ids", [])
-        if existing is not None:
-            scoped_companies = sorted(set(scoped_companies or []) | product_company_ids(db, existing.id))
-        if not isinstance(scoped_companies, list) or len(scoped_companies) > 50 or (existing is None and not scoped_companies):
-            raise HTTPException(422, "Укажите компанию для товара")
-        for company_id in scoped_companies:
+        submitted_companies = (p.specifications or {}).get("_qor_company_ids", [])
+        if not isinstance(submitted_companies, list) or len(submitted_companies) > 50:
+            raise HTTPException(422, "Некорректная привязка товара к компаниям")
+        scoped_companies = set()
+        for value in submitted_companies:
             try:
-                company_id = int(company_id)
+                scoped_companies.add(int(value))
             except (TypeError, ValueError):
                 raise HTTPException(422, "Некорректная компания товара")
+        if existing is not None:
+            scoped_companies.update(product_company_ids(db, existing.id))
+        if existing is None and not scoped_companies:
+            raise HTTPException(422, "Укажите компанию для товара")
+        for company_id in scoped_companies:
             if not db.get(Company, company_id):
                 raise HTTPException(422, "Компания товара не найдена")
             scope(u, company_id)
