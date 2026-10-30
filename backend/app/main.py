@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .db import get_db, SessionLocal
 from .models import *
 from .security import *
-from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns, marketplace_matching
+from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns, marketplace_matching, marketplace_product_report
 from .connectors import AccessRequired, connector, load_saved_credentials
 from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
@@ -3380,6 +3380,61 @@ def accounting_summary(company_id: int, start: date, end: date, u=Depends(curren
     payable = sum(max(0, x.total - max(0, purchase_paid.get(x.id, 0))) for x in purchases)
     rules = [dump(x) for x in db.scalars(select(TaxRule).where(TaxRule.company_id == company_id, TaxRule.active == True, TaxRule.valid_from <= end))]
     return {"period": {"start": start, "end": end}, "bank_in": incoming, "bank_out": outgoing, "bank_net": incoming-outgoing, "receivable": receivable, "payable": payable, "tax_rules": rules, "tax_notice": "Ставки являются конфигурацией. Налоговый расчет требует проверки бухгалтером."}
+
+@app.get("/api/marketplace-product-report")
+def get_marketplace_product_report(
+    start: date, end: date, company_id: int | None = None,
+    channel: str | None = None, account_id: int | None = None,
+    u=Depends(current_user), db=Depends(get_db),
+):
+    require(u, "analytics")
+    return marketplace_product_report.build_report(
+        db, u, start, end, company_id, channel, account_id
+    )
+
+
+@app.put("/api/marketplace-product-report/settings")
+def update_marketplace_product_report_setting(
+    payload: dict, u=Depends(current_user), db=Depends(get_db),
+):
+    try:
+        company_id = int(payload["company_id"])
+        product_id = int(payload["product_id"])
+        unit_cost = payload.get("unit_cost_tenge")
+        tax_rate = payload.get("tax_rate_percent")
+        unit_cost = float(unit_cost) if unit_cost not in (None, "") else None
+        tax_rate = float(tax_rate) if tax_rate not in (None, "") else None
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(422, "Проверьте компанию, товар, себестоимость и ставку налога")
+    result = marketplace_product_report.save_setting(
+        db, u, company_id, product_id, unit_cost, tax_rate
+    )
+    audit(db, u, "update", "marketplace_product_report_settings", product_id, {
+        "company_id": company_id, "unit_cost_tenge": unit_cost,
+        "tax_rate_percent": tax_rate,
+    })
+    db.commit()
+    return {"ok": True, **result}
+
+
+@app.get("/api/marketplace-product-report.xlsx")
+def marketplace_product_report_xlsx(
+    start: date, end: date, company_id: int | None = None,
+    channel: str | None = None, account_id: int | None = None,
+    u=Depends(current_user), db=Depends(get_db),
+):
+    require(u, "analytics")
+    report = marketplace_product_report.build_report(
+        db, u, start, end, company_id, channel, account_id
+    )
+    content = marketplace_product_report.create_xlsx(report)
+    filename = f"marketplace-product-report-{start}-{end}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 @app.get("/api/report")
 def get_report(
