@@ -1343,7 +1343,7 @@ def marketplace_record_details(
                 returned = status in {"RETURNED", "KASPI_DELIVERY_RETURN_REQUESTED"}
                 if metric == "returns" and returned:
                     include = True
-                    event_date = p.get("returned_date") or p.get("return_date") or p.get("request_date")
+                    event_date = p.get("returned_date") or p.get("return_date") or p.get("completed_date") or p.get("completion_date")
                     operation = "Заявка на возврат" if status == "KASPI_DELIVERY_RETURN_REQUESTED" else "Возвращённый заказ"
                     amount = None
                 elif metric == "sales" and status == "COMPLETED":
@@ -1413,7 +1413,7 @@ def marketplace_record_details(
     output.sort(key=lambda item: (item["event_date"] or "", item["id"]), reverse=True)
     note = ""
     if channel == "Kaspi" and metric == "returns":
-        note = "Kaspi API подтверждает статус и состав заказа. Фактическую дату и сумму возврата API не отдаёт; они показаны как неподтверждённые до сверки с выпиской. Возвраты без даты остаются видимыми."
+        note = "Kaspi API подтверждает статус и состав заказа, но не фактическую сумму/дату возврата. Если дата возврата отсутствует, прежнее поведение относит заказ к периоду по дате выдачи; это резервная дата, не фактическая дата возврата. Сумма в сводке рассчитана по сумме заказа и не является подтверждённой суммой выплаты."
     elif channel == "Wildberries" and metric == "returns":
         note = "Возвраты взяты из финансовых строк WB по типу операции. Суммы показаны в исходной валюте отчёта; банковское зачисление здесь не подтверждается."
     elif metric == "settlement":
@@ -1625,7 +1625,7 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
         p=payload or {}; typ=str(p.get('record_type') or '').lower(); src=channel.lower()
         if src == 'kaspi' and typ == 'order_entry':
             status_now = str(p.get('order_status') or '').upper()
-            date_field = (p.get('returned_date') or p.get('return_date')) if status_now == 'RETURNED' else p.get('completed_date')
+            date_field = (p.get('returned_date') or p.get('return_date') or p.get('completed_date')) if status_now == 'RETURNED' else p.get('completed_date')
             try:
                 api_data_available = api_data_available or start <= marketplace_pipeline._day(date_field, 'Asia/Almaty') <= end
             except marketplace_pipeline.Pending:
@@ -1671,12 +1671,12 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                             return_dt=p.get('returned_date') or p.get('return_date')
                             if not return_dt:
                                 api_undated_return_units += qty
-                            # Preserve the earlier period view: when Kaspi omits
-                            # the actual return date, group the returned status by
-                            # its return request date. Keep the missing-date count
-                            # visible so this fallback is not mistaken for a
-                            # confirmed financial return date.
-                            return_period_dt = return_dt or p.get('request_date') or p.get('requestDate')
+                            # Historical report behavior: when Kaspi omits an
+                            # actual return date, group the returned order by its
+                            # completion date. Keep the missing-date counter so
+                            # this fallback is never represented as a confirmed
+                            # return-event date.
+                            return_period_dt = return_dt or p.get('completed_date') or p.get('completion_date')
                             if return_period_dt:
                                 return_day=marketplace_pipeline._day(return_period_dt, 'Asia/Almaty')
                                 if start<=return_day<=end:
