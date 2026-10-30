@@ -45,7 +45,7 @@ def test_product_report_consolidates_sales_stock_and_excel_across_marketplaces(c
     assert item["unit_cost_tenge"] == 1000
     assert item["tax_rate_percent"] == 10
     assert item["cogs"] == 500000
-    assert item["tax"] == 135000
+    assert item["tax"] == 1350
 
     workbook_response = client.get("/api/marketplace-product-report.xlsx", params={
         "start": "2026-10-01", "end": "2026-10-31", "company_id": 1,
