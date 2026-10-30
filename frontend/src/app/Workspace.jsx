@@ -2239,12 +2239,6 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const active=Boolean(range);
   const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
-  const retryPending=summary.data?.source_quality?.progress?.some(p=>p.status==="retry");
-  useEffect(()=>{
-    if(channel!=="Kaspi"||!active||(summary.data?.sync_status!=="running"&&!retryPending)) return;
-    const timer=window.setInterval(()=>setRefresh(value=>value+1),30000);
-    return ()=>window.clearInterval(timer);
-  },[channel,active,summary.data?.sync_status,retryPending]);
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
   const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
   const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh);
@@ -2316,8 +2310,6 @@ function MarketplaceInbox({ channel, ctx }) {
   const [kaspiReportMode,setKaspiReportMode] = useState("issued");
   const [summaryReload,setSummaryReload] = useState(0);
   const [kpiDetail,setKpiDetail] = useState(null);
-  const kaspiAutoSyncRef = useRef(new Set());
-  const kaspiLastRefreshRef = useRef(ctx.refresh);
 
   const [showTechnical,setShowTechnical] = useState(false);
   const selectedAccountId = ctx.marketplaceAccountId || "";
@@ -2343,62 +2335,14 @@ function MarketplaceInbox({ channel, ctx }) {
     if (summary.data) summaryCacheRef.current = {path:summaryPath, data:summary.data};
   },[summary.data,summaryPath]);
   const displayedSummary = summary.data || (summary.loading && summaryCacheRef.current.path === summaryPath ? summaryCacheRef.current.data : null);
-  const canSyncKaspi = can(ctx.auth,"accounts",true);
-  const accountKey = scopedAccounts.map(a=>a.id).join(",");
   const ordersCreatedParams = new URLSearchParams({start:ctx.start,end:ctx.end,limit:"100"});
   if (ctx.company) ordersCreatedParams.set("company_id",ctx.company);
   if (selectedAccount) ordersCreatedParams.set("account_id", String(selectedAccount.id));
-  const ordersCreated = useLoad(channel === "Kaspi" ? "/kaspi/orders-created?" + ordersCreatedParams : null, `${ctx.refresh}:${summaryReload}`);
-  useEffect(()=>{
-    if (channel !== "Kaspi" || !accountKey || !canSyncKaspi) return;
-    const forceSync = ctx.refresh !== kaspiLastRefreshRef.current;
-    kaspiLastRefreshRef.current = ctx.refresh;
-    const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}:${ctx.refresh}`;
-    if (kaspiAutoSyncRef.current.has(key)) return;
-    kaspiAutoSyncRef.current.add(key);
-    let cancelled = false;
-    let retryTimer;
-    const requestSync = () => {
-      const requests = accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}&force=${forceSync}`,{method:"POST",timeoutMs:10000}));
-      Promise.allSettled(requests).then(results=>{
-        if (cancelled) return;
-        // A different Kaspi report may currently own the account sync lock.
-        // Retry after it finishes so this selected report is actually fetched.
-        const waitingForOtherSync = results.some(result=>result.status==="fulfilled" && result.value?.already_running);
-        if (waitingForOtherSync) {
-          retryTimer = window.setTimeout(requestSync, 20000);
-          return;
-        }
-        setSummaryReload(v=>v+1);
-      });
-    };
-    // Let the API cache decide whether this range needs a pull. A page view must
-    // never force a historical re-download.
-    requestSync();
-    return ()=>{ cancelled = true; window.clearTimeout(retryTimer); };
-  },[channel,accountKey,ctx.start,ctx.end,ctx.refresh,kaspiReportMode,canSyncKaspi]);
-
-  const activeSync = kaspiReportMode === "created" ? ordersCreated.data?.sync_status === "running" : summary.data?.sync_in_progress && !summary.data?.sync_errors?.length;
+  const ordersCreated = useLoad(channel === "Kaspi" && kaspiReportMode === "created" ? "/kaspi/orders-created?" + ordersCreatedParams : null, `${ctx.refresh}:${summaryReload}`);
+  // Opening or changing a report is read-only: it must not start a historical API scan.
   const m = displayedSummary || {};
   const created = ordersCreated.data || {};
   const activeSyncErrors = kaspiReportMode === "created" ? created.sync_errors : m.sync_errors;
-  useEffect(()=>{
-    if (!activeSync) return;
-    const timer=window.setInterval(()=>setSummaryReload(v=>v+1),20000);
-    return ()=>window.clearInterval(timer);
-  },[activeSync]);
-  useEffect(()=>{
-    const localToday=today();
-    const yesterday=new Date(`${localToday}T00:00:00Z`); yesterday.setUTCDate(yesterday.getUTCDate()-1);
-    const yesterdayKey=yesterday.toISOString().slice(0,10);
-    if(channel!=="Kaspi" || kaspiReportMode!=="issued" || !canSyncKaspi || ctx.start!==ctx.end || ![localToday,yesterdayKey].includes(ctx.end)) return;
-    const interval=ctx.end===localToday?5*60*1000:10*60*1000;
-    const timer=window.setInterval(()=>{
-      Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})))
-        .then(()=>setSummaryReload(v=>v+1));
-    },interval);
-    return ()=>window.clearInterval(timer);
-  },[channel,kaspiReportMode,canSyncKaspi,accountKey,ctx.start,ctx.end]);
   const productParams = new URLSearchParams({channel, limit:"60", start:ctx.start, end:ctx.end});
   if (ctx.company) productParams.set("company_id", ctx.company);
   if (selectedAccount) productParams.set("account_id", String(selectedAccount.id));
