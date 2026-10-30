@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from . import schemas as s, finance as f, canonical
 from .models import Product, ImportRun, Sale, Account, MarketplaceProductMapping, MarketplaceRecord
-from .security import require, audit
+from .security import require, audit, scope, ensure_product_company
 
 KINDS = {
     "opening": ("inventory", s.OpeningInventoryIn),
@@ -388,10 +388,25 @@ def apply(db, user, kind, p):
         specs = dict(values.get("specifications") or {})
         specs.update({"description": p.description, "barcode": p.barcode,
                       "purchase_cost": p.purchase_cost, "custom_fields": p.custom_fields})
+        company_ids = specs.get("_qor_company_ids") or []
+        if not isinstance(company_ids, list):
+            company_ids = [company_ids]
+        if not company_ids and len(user.company_ids or []) == 1:
+            company_ids = [user.company_ids[0]]
+        if not company_ids:
+            raise HTTPException(422, "Выберите компанию для импортируемых товаров")
+        normalized_company_ids = set()
+        for value in company_ids:
+            company_id = int(value)
+            scope(user, company_id)
+            normalized_company_ids.add(company_id)
+        specs["_qor_company_ids"] = sorted(normalized_company_ids)
         values["specifications"] = specs
         obj = Product(**values)
         db.add(obj)
         db.flush()
+        for company_id in normalized_company_ids:
+            ensure_product_company(db, obj.id, company_id)
         audit(db, user, "import", "products", obj.id)
         return obj
     if kind == "b2b":
@@ -441,6 +456,23 @@ def prepare_rows(db, user, kind, rows, mapping, defaults=None):
     defaults = defaults or {}
     rows = [dict(r) for r in rows]
     mapping = dict(mapping)
+    if kind == "products" and defaults.get("company_id"):
+        company_id = int(defaults["company_id"])
+        specs_column = mapping.get("specifications")
+        for row in rows:
+            raw_specs = row.get(specs_column) if specs_column else None
+            if isinstance(raw_specs, str):
+                try:
+                    raw_specs = json.loads(raw_specs or "{}")
+                except (TypeError, ValueError):
+                    raise HTTPException(422, "specifications: укажите корректный JSON")
+            specs = dict(raw_specs or {})
+            ids = specs.get("_qor_company_ids") or []
+            if not isinstance(ids, list):
+                ids = [ids]
+            specs["_qor_company_ids"] = list(dict.fromkeys([*ids, company_id]))
+            row["__qor_product_specifications"] = json.dumps(specs, ensure_ascii=False)
+        mapping["specifications"] = "__qor_product_specifications"
     if kind in ("sales", "b2b", "reports", "purchases", "opening", "stock", "marketplace_reports", "expenses", "bank"):
         if "company_id" not in mapping and defaults.get("company_id"):
             for r in rows: r["__qor_company_id"] = str(defaults["company_id"])

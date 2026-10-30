@@ -191,7 +191,7 @@ def test_kaspi_estimate_respects_explicit_commission_without_double_count(client
 def test_mapping_fifo_retry(client):
     with SessionLocal() as db:
         acc=db.get(Account,1);acc.channel='Wildberries'
-        staged(db,acc,'sale:S1',record_type='sale',supplierArticle='ALIAS',nmId=11,saleID='S1',srid='R1',priceWithDisc=1000,date='2026-10-02',currency='KZT');db.commit()
+        staged(db,acc,'sale:S1',record_type='sale',vendorCode='A',nmId=11,saleID='S1',srid='R1',priceWithDisc=1000,date='2026-10-02',currency='KZT');db.commit()
     assert client.post('/api/accounts/1/reprocess').json()['pending_erp']==1
     inbox=client.get('/api/marketplace-records?status=pending').json()['items'][0]
     assert inbox['stage_status']=='pending_fifo'
@@ -468,10 +468,8 @@ def test_wb_reprocess_preserves_historical_generated_expense(client):
         assert result['reconciled_false_expenses']==0
         assert f.report(db,u,date(2026,10,1),date(2026,10,31),1)['expenses']==10000000
 
-def test_wb_realization_posts_revenue_without_fifo_and_without_precreated_product(client):
-    """A real WB sale must reach the ERP even on a brand-new QOR account.
-    Missing historical cost may delay COGS, never revenue/units.
-    """
+def test_wb_unlinked_realization_waits_for_internal_product_mapping(client):
+    """Marketplace cards must link to a client-created QOR SKU before posting."""
     with SessionLocal() as db:
         acc=db.get(Account,1); acc.channel='Wildberries'; u=db.get(User,1)
         row=staged(db,acc,'realization:9001',record_type='realization',sellerOperName='Продажа',
@@ -480,11 +478,8 @@ def test_wb_realization_posts_revenue_without_fifo_and_without_precreated_produc
         result=mp.project_account(db,u,acc)
         assert result['pending_erp']==1,result
         sale=db.scalar(select(Sale))
-        assert sale and sale.quantity==2 and sale.revenue==2000000 and sale.cogs_pending is True
-        movements=db.scalars(select(Movement).where(Movement.product_id==sale.product_id)).all()
-        assert sum(x.quantity for x in movements)==-2
-        assert any(x.batch_id is None and x.kind=='sale_pending_fifo' for x in movements)
-        assert row.status=='projected'
+        assert sale is None
+        assert row.status=='pending_mapping'
+        assert row.stage_status=='pending_mapping'
         rep=f.report(db,u,date(2026,10,1),date(2026,10,31),1)
-        assert rep['revenue']==2000000 and rep['units']==2
-        assert rep['net_profit'] is None and rep['profit_complete'] is False
+        assert rep['revenue']==0 and rep['units']==0

@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import uuid
 from sqlalchemy import select
-from .models import Account, MarketplaceRecord, MarketplaceProductMapping, Product, Sale, Expense, CanonicalEvent
+from .models import Account, MarketplaceRecord, MarketplaceProductMapping, Product, ProductCompany, Sale, Expense, CanonicalEvent
 from . import schemas as s, canonical, exchange_rates, finance as f
 from . import wb_operation
 
@@ -169,40 +169,6 @@ def _new_qor_sku(db):
     raise RuntimeError("Не удалось создать уникальный внутренний SKU QOR")
 
 
-def ensure_marketplace_product(db, acc, payload):
-    """Create a canonical QOR product from a marketplace item when no mapping exists.
-
-    Marketplace identifiers remain in MarketplaceProductMapping; the visible
-    QOR SKU is generated independently. Inventory and purchase cost stay empty
-    until an authorized user enters them.
-    """
-    seller_sku = _seller_sku(payload)
-    keys = identifiers(payload)
-    stable = next((key for key in keys if key.startswith("product:")), None)
-    if not seller_sku and not stable:
-        return None
-
-    name = _product_name(payload, seller_sku or "Новый товар")
-    product = Product(
-        sku=_new_qor_sku(db),
-        name=name,
-        article=seller_sku,
-        category=payload.get("subject_name") or "Marketplace",
-        price=0,
-        active=True,
-        min_stock=0,
-        specifications={
-            "source": acc.channel,
-            "account_id": acc.id,
-            "external_keys": keys,
-            "auto_created": True,
-        },
-    )
-    _update_product_metadata(product, payload, acc)
-    db.add(product)
-    db.flush()
-    return product
-
 def resolve_product(db, acc, payload):
     keys=identifiers(payload)
     mappings=db.scalars(select(MarketplaceProductMapping).where(
@@ -211,18 +177,27 @@ def resolve_product(db, acc, payload):
     mapped={m.product_id for m in mappings}
     skus=[str(payload[k]).strip() for k in ('supplierArticle','vendorCode','sa_name','offer_id','merchant_code','external_sku') if payload.get(k)]
     if not skus and payload.get('sku') and not str(payload['sku']).isdigit(): skus=[str(payload['sku'])]
-    candidates=db.scalars(select(Product).where((Product.sku.in_(skus))|(Product.article.in_(skus)))).all() if skus else []
+    company_products = select(ProductCompany.product_id).where(
+        ProductCompany.company_id == acc.company_id
+    )
+    candidates=db.scalars(select(Product).where(
+        Product.id.in_(company_products),
+        (Product.sku.in_(skus)) | (Product.article.in_(skus))
+    )).all() if skus else []
     matched=mapped or {p.id for p in candidates}
     if len(matched)>1: raise Pending('MAPPING_AMBIGUOUS:'+','.join(keys))
     if not matched:
         barcodes={k.split(':',1)[1] for k in keys if k.startswith('barcode:')}
         if barcodes:
-            for product in db.scalars(select(Product)):
+            for product in db.scalars(select(Product).where(Product.id.in_(company_products))):
                 specs=product.specifications or {}
                 known=set(map(str,specs.get('barcodes') or [])) | {str(specs.get('barcode') or '')}
                 if known & barcodes: matched.add(product.id)
         if len(matched)>1: raise Pending('MAPPING_AMBIGUOUS:'+','.join(keys))
-    product=db.get(Product,next(iter(matched))) if matched else ensure_marketplace_product(db,acc,payload)
+    product=db.get(Product,next(iter(matched))) if matched else None
+    # Unmatched marketplace cards stay in the staging queue. QOR inventory,
+    # cost and sales must resolve to a client-created internal SKU, never to an
+    # automatically created duplicate product.
     if not product: raise Pending('SKU_NOT_MAPPED:'+','.join(keys))
     if not product.active: raise Pending('MAPPED_PRODUCT_INACTIVE')
     _update_product_metadata(product,payload,acc)

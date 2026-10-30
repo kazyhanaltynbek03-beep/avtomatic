@@ -88,6 +88,14 @@ class Product(Record, Base):
     __table_args__ = (CheckConstraint("price >= 0 AND min_price >= 0 AND recommended_price >= 0 AND min_stock >= 0 AND weight_g >= 0 AND volume_cm3 >= 0 AND fx_rate > 0"),)
 
 
+class ProductCompany(Record, Base):
+    """Tenant ownership for the shared master product catalog."""
+    __tablename__ = "product_companies"
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    __table_args__ = (UniqueConstraint("product_id", "company_id", name="uq_product_company"),)
+
+
 class Account(Record, Base):
     __tablename__ = "accounts"
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))

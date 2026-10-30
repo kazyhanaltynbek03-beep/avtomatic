@@ -8,7 +8,7 @@ import unicodedata
 
 from sqlalchemy import select
 
-from .models import Account, Batch, MarketplaceProductMapping, MarketplaceRecord, Product, Sale
+from .models import Account, Batch, MarketplaceProductMapping, MarketplaceRecord, Product, ProductCompany, Sale
 from . import marketplace_pipeline
 
 
@@ -102,6 +102,10 @@ def match_staged_catalog(db, accounts, products):
                 "per_account": [], "catalog_accounts": 0, "_new_wb_pairs": []}
 
     company_ids_by_product = defaultdict(set)
+    for product_id, company_id in db.execute(select(
+        ProductCompany.product_id, ProductCompany.company_id
+    ).where(ProductCompany.product_id.in_(product_ids))):
+        company_ids_by_product[int(product_id)].add(int(company_id))
     for product in products:
         for company_id in (product.specifications or {}).get("_qor_company_ids", []):
             try:
@@ -177,10 +181,14 @@ def match_staged_catalog(db, accounts, products):
                     duplicate_qor_code = True
                 for identity, keys in catalogue.get((account.id, code), {}).items():
                     matched_groups[identity].update(keys)
-            if duplicate_qor_code or len(matched_groups) > 1:
+            # Multiple marketplace identities can be separate cards/stores for
+            # one ERP SKU. They are safe to link together when the exact SKU/article
+            # resolves to this single QOR product; conflicting characteristics are
+            # checked below. Ambiguity means multiple QOR products share that code.
+            if duplicate_qor_code:
                 per_account[account.id]["review"] += 1
                 review.append({"product_id": product.id, "sku": product.sku, "account_id": account.id,
-                               "account_name": account.name, "reason": "Неоднозначное совпадение артикула",
+                               "account_name": account.name, "reason": "Неоднозначное сопоставление: артикул связан с несколькими товарами QOR",
                                "marketplace_keys": sorted({key for keys in matched_groups.values() for key in keys})})
                 continue
             if not matched_groups:
@@ -198,7 +206,7 @@ def match_staged_catalog(db, accounts, products):
                                "reason": "Артикул совпал, но бренд или характеристики противоречат карточке QOR",
                                "marketplace_keys": sorted({key for keys in matched_groups.values() for key in keys})})
                 continue
-            keys = set(next(iter(matched_groups.values())))
+            keys = set().union(*matched_groups.values()) if matched_groups else set()
             # Do not create a link without a stable marketplace identifier.
             if not keys:
                 continue

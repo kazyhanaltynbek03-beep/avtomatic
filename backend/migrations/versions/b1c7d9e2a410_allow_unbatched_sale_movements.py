@@ -13,10 +13,12 @@ depends_on = None
 
 
 def upgrade():
-    op.alter_column("movements", "batch_id", existing_type=sa.Integer(), nullable=True)
+    with op.batch_alter_table("movements") as batch:
+        batch.alter_column("batch_id", existing_type=sa.Integer(), nullable=True)
 
 
 def downgrade():
-    # Pending marketplace quantity movements can have no purchase batch. Refuse
-    # to make the column mandatory until those rows have been reconciled.
-    op.alter_column("movements", "batch_id", existing_type=sa.Integer(), nullable=True)
+    # Pending marketplace quantity movements can have no purchase batch. Keep
+    # the field nullable until those rows have been reconciled.
+    with op.batch_alter_table("movements") as batch:
+        batch.alter_column("batch_id", existing_type=sa.Integer(), nullable=True)

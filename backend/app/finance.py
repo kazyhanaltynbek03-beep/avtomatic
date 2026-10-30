@@ -10,7 +10,7 @@ from decimal import InvalidOperation
 from sqlalchemy import select, func, case
 from fastapi import HTTPException
 from .models import *
-from .security import scope, scope_query, audit
+from .security import scope, scope_query, audit, scope_product
 
 
 def fail(message):
@@ -140,6 +140,7 @@ def cash_entry(db, **kw):
 def purchase(db, user, p):
     get_company(db, user, p.company_id)
     for pid in sorted(set(x.product_id for x in p.lines)):
+        scope_product(db, user, pid, p.company_id)
         lock_product(db, pid)
     check_date(db, p.company_id, p.date)
     # Purchase lines may use a supplier currency. Convert once at posting time
@@ -283,6 +284,7 @@ def take_fifo(db, cid, pid, quantity, d, allow_partial=False):
 
 def sale(db, user, p, confirmed_marketplace=False):
     get_company(db, user, p.company_id)
+    scope_product(db, user, p.product_id, p.company_id)
     account = check_account(db, p.company_id, p.account_id)
     if p.customer_id:
         customer = db.get(Customer, p.customer_id)
@@ -477,7 +479,9 @@ def reconcile_pending_cogs(db,user,company_id,product_ids=None):
 
 
 def opening_inventory(db,user,p):
-    get_company(db,user,p.company_id); lock_product(db,p.product_id)
+    get_company(db,user,p.company_id)
+    scope_product(db,user,p.product_id,p.company_id)
+    lock_product(db,p.product_id)
     if p.currency=='KZT' and p.fx_rate!=10000: fail('Курс KZT должен быть равен 1')
     total=rounded(p.quantity*p.unit_cost*p.fx_rate,10000)
     batch=Batch(company_id=p.company_id,product_id=p.product_id,date=p.date,quantity=p.quantity,
@@ -652,6 +656,7 @@ def payment(db, user, p):
 
 def adjust(db, user, p):
     get_company(db, user, p.company_id)
+    scope_product(db, user, p.product_id, p.company_id)
     lock_product(db, p.product_id)
     check_date(db, p.company_id, p.date)
     if p.quantity == 0:

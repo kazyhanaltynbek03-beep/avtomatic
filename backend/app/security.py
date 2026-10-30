@@ -27,7 +27,7 @@ except ImportError:
 
     passwords = _Argon2Passwords()
 from .db import get_db
-from .models import User, Session, Audit
+from .models import User, Session, Audit, Product, ProductCompany
 
 PERMISSIONS = {
     "Owner": {"*"},
@@ -119,9 +119,59 @@ def scope(user, company_id):
         raise HTTPException(403, "Компания недоступна")
 
 
+def product_company_ids(db, product_id):
+    return set(db.scalars(
+        select(ProductCompany.company_id).where(ProductCompany.product_id == product_id)
+    ).all())
+
+
+def ensure_product_company(db, product_id, company_id):
+    if db.scalar(select(ProductCompany.id).where(
+        ProductCompany.product_id == product_id,
+        ProductCompany.company_id == company_id,
+    )):
+        return
+    if any(
+        isinstance(row, ProductCompany)
+        and row.product_id == product_id
+        and row.company_id == company_id
+        for row in db.new
+    ):
+        return
+    db.add(ProductCompany(product_id=product_id, company_id=company_id))
+
+
+def require_product_company(db, product_id, company_id):
+    if not db.scalar(select(ProductCompany.id).where(
+        ProductCompany.product_id == product_id,
+        ProductCompany.company_id == company_id,
+    )):
+        raise HTTPException(422, "Товар не привязан к выбранной компании")
+
+
+def scope_product(db, user, product_id, company_id=None):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Товар не найден")
+    if company_id is not None:
+        scope(user, company_id)
+        require_product_company(db, product_id, company_id)
+    elif user.role != "Owner":
+        if not product_company_ids(db, product_id).intersection(set(user.company_ids or [])):
+            raise HTTPException(403, "Товар недоступен для выбранных компаний")
+    return product
+
+
 def scope_query(query, model, user):
-    if user.role != "Owner" and hasattr(model, "company_id"):
-        query = query.where(model.company_id.in_(user.company_ids))
+    if user.role != "Owner":
+        if model is Product:
+            query = query.where(Product.id.in_(
+                select(ProductCompany.product_id).where(
+                    ProductCompany.company_id.in_(user.company_ids or [])
+                )
+            ))
+        elif hasattr(model, "company_id"):
+            query = query.where(model.company_id.in_(user.company_ids))
     return query
 
 

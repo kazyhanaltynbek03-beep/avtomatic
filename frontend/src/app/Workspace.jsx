@@ -1767,8 +1767,8 @@ function Stock({ ctx }) {
   const stockById = new Map((data || []).map(row => [row.product_id, row]));
   const displayStock = (ctx.refs.products || []).filter(p => p.active !== false && (p.catalog_kind || "master") === "master").filter(p => {
     if (!ctx.company) return true;
-    const ids = (p.specifications?._qor_company_ids || []).map(Number);
-    return !ids.length || ids.includes(Number(ctx.company));
+    const ids = (p.company_ids || p.specifications?._qor_company_ids || []).map(Number);
+    return ids.includes(Number(ctx.company));
   }).map(p => stockById.get(p.id) || {product_id:p.id, sku:p.sku, name:p.name, quantity:0, sold:0, value:0});
   return (
     <div className="panel">
@@ -1798,7 +1798,8 @@ function Stock({ ctx }) {
       ) : (
         <div className="qor-item-grid qor-stock-list">{displayStock.map((row) => {
           const product = ctx.refs.products?.find((p) => p.id === row.product_id);
-          const productCompany = product?.specifications?._qor_company_ids?.[0] || ctx.company || "";
+          const companyIds = (row.company_ids || product?.company_ids || []).map(Number);
+          const productCompany = ctx.company || (companyIds.length === 1 ? companyIds[0] : "");
           return <StockItemCard key={row.product_id} row={row} product={product} company={productCompany} ctx={ctx}/>;
         })}</div>
       )}
@@ -1847,6 +1848,7 @@ function StockItemCard({row,product,company,ctx}) {
     const amount=Number(quantity);
     const cost=Number(String(unitCost).replace(",","."));
     if(!Number.isInteger(amount)||amount<1){setError("Введите целое количество не меньше 1");return;}
+    if(!company){setError("Выберите компанию в верхнем фильтре склада");return;}
     if(!date){setError("Выберите дату движения");return;}
     if(receipt&&(!Number.isFinite(cost)||cost<=0||unitCost==="")){setError("Укажите себестоимость за единицу больше 0 ₸, чтобы партия корректно участвовала в расчёте себестоимости");return;}
     if(!receipt&&amount>current){setError("Нельзя списать больше текущего остатка");return;}
@@ -1873,12 +1875,13 @@ function StockItemCard({row,product,company,ctx}) {
         {marketplaceBadges.map(({key, icon, label, stores}) => <span key={key} className={`stock-marketplace-badge is-${key}`} aria-label={`${label}, магазинов: ${stores}`}><b aria-hidden="true">{icon}</b>{label}{stores > 1 && <small>×{stores}</small>}</span>)}
         {!marketplaceBadges.length && <span className="stock-marketplace-unlinked">Карточки не связаны</span>}
       </div>
+      {!company && <p className="muted">Выберите одну компанию в верхнем фильтре, чтобы менять остаток.</p>}
       <div className="stock-quantity-control" aria-label="Остаток товара">
         <span>Остаток</span>
         <div>
-          <button type="button" className="stock-step-button" aria-label={current>0?"Списать товар":"Списание недоступно"} disabled={!can(ctx.auth,"inventory",true)||current<=0||busy} onClick={()=>open("writeoff")}>−</button>
+          <button type="button" className="stock-step-button" aria-label={current>0?"Списать товар":"Списание недоступно"} disabled={!company||!can(ctx.auth,"inventory",true)||current<=0||busy} onClick={()=>open("writeoff")}>−</button>
           <strong>{current}<small> шт.</small></strong>
-          <button type="button" className="stock-step-button add" aria-label="Добавить приход" disabled={!can(ctx.auth,"inventory",true)||busy} onClick={()=>open("receipt")}>+</button>
+          <button type="button" className="stock-step-button add" aria-label="Добавить приход" disabled={!company||!can(ctx.auth,"inventory",true)||busy} onClick={()=>open("receipt")}>+</button>
         </div>
         <span className="stock-sold-count">Продано · {row.sold ?? 0} шт.</span>
       </div>
@@ -3278,6 +3281,7 @@ function EditModal({ kind, item, ctx, close }) {
     close();
   }, [dirty, close]);
   const creatingOfflineChannel = kind === "accounts" && !editing && values.channel === "Offline";
+  const marketplaceCompanyId = kind === "products" ? productCompanyId : values.company_id;
   useEffect(() => {
     if (!dirty) return undefined;
     const warn = (e) => { e.preventDefault(); e.returnValue = ""; };
@@ -3694,7 +3698,7 @@ function EditModal({ kind, item, ctx, close }) {
           <p className="muted">Добавляйте по одной строке на каждый ID. Можно выбрать несколько магазинов Kaspi/Wildberries и добавить 5–6 карточек для каждого магазина: все строки будут связаны с этим одним SKU. Kaspi: используйте seller SKU / артикул из кабинета. Wildberries: добавьте nmID как ID карточки и chrtID каждого размера. При переносе уже связанного ID история продаж останется у прежней записи.</p>
           {(item?.marketplace_mappings || []).map((mapping, index) => <div className="marketplace-allocation" key={`${mapping.account_id}:${mapping.external_key}:${index}`}><b>{(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.channel || mapping.channel} · {(ctx.refs.accounts || []).find(a=>a.id===mapping.account_id)?.name || `магазин ${mapping.account_id}`}</b><small>{mapping.external_key}</small><button type="button" className="secondary" disabled={busy} onClick={()=>removePersistedMarketplaceMapping(mapping)}>Убрать связь</button></div>)}
           {marketplaceIdRows.map((row,index)=><div className="marketplace-allocation" key={index}>
-            <label>Магазин<select value={row.account_id} onChange={e=>{const account=(ctx.refs.accounts || []).find(a=>String(a.id)===e.target.value);setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,account_id:e.target.value,id_type:x.external_id.trim()?x.id_type:account?.channel==="Wildberries"?"product":"sku"}:x))}}><option value="">Выберите магазин</option>{(ctx.refs.accounts || []).filter(a=>a.active!==false && ["Kaspi","Wildberries","Ozon"].includes(a.channel) && (!values.company_id || String(a.company_id)===String(values.company_id))).map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select></label>
+            <label>Магазин<select value={row.account_id} onChange={e=>{const account=(ctx.refs.accounts || []).find(a=>String(a.id)===e.target.value);setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,account_id:e.target.value,id_type:x.external_id.trim()?x.id_type:account?.channel==="Wildberries"?"product":"sku"}:x))}}><option value="">Выберите магазин</option>{(ctx.refs.accounts || []).filter(a=>a.active!==false && ["Kaspi","Wildberries","Ozon"].includes(a.channel) && (!marketplaceCompanyId || String(a.company_id)===String(marketplaceCompanyId))).map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select></label>
             <label>Тип ID<select value={row.id_type} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,id_type:e.target.value}:x))}><option value="product">ID карточки товара</option><option value="sku">Артикул / seller SKU</option><option value="barcode">Штрихкод</option><option value="size">ID размера WB (chrtId)</option></select></label>
             <label>{row.id_type === "size" ? "ID размера WB (chrtId)" : "ID на площадке"}<input type={row.id_type === "size" ? "number" : "text"} inputMode={row.id_type === "size" ? "numeric" : undefined} min={row.id_type === "size" ? "1" : undefined} value={row.external_id} onChange={e=>setMarketplaceIdRows(old=>old.map((x,i)=>i===index?{...x,external_id:e.target.value}:x))} placeholder={row.id_type === "size" ? "Например, 123456" : "Введите внешний ID"} autoComplete="off"/></label>
             {marketplaceIdRows.length>1&&<button type="button" className="secondary" onClick={()=>setMarketplaceIdRows(old=>old.filter((_,i)=>i!==index))}>Убрать</button>}

@@ -66,9 +66,9 @@ def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch)
     original_headline = main.f.report_headline
     periods = []
 
-    def counted_headline(db, user, start, end, company_id=None):
+    def counted_headline(db, user, start, end, company_id=None, pending_source_days=None, include_balances=True):
         periods.append((start, end, company_id))
-        return original_headline(db, user, start, end, company_id)
+        return original_headline(db, user, start, end, company_id, pending_source_days, include_balances)
 
     monkeypatch.setattr(main.f, "report_headline", counted_headline)
     response = client.get(
@@ -284,6 +284,11 @@ def test_late_return_hits_its_period(client):
 
 
 def test_no_cross_company_ownership_consumption(client):
+    from app.db import SessionLocal
+    from app.models import ProductCompany
+    with SessionLocal() as db:
+        db.add(ProductCompany(product_id=1, company_id=2))
+        db.commit()
     buy(client, company=2)
     r = client.post(
         "/api/post/sales",
