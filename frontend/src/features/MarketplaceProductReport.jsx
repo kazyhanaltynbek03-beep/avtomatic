@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Save } from "lucide-react";
+import { Download, Save, FileSpreadsheet, CalendarDays, Package, Warehouse, RotateCcw, Wallet, Percent, TrendingUp, ChevronDown } from "lucide-react";
 import { api, downloadApiFile } from "../services/api";
 import { money } from "../utils/formatters";
 import { can } from "../utils/permissions";
@@ -7,6 +7,20 @@ import { Empty, ErrorBox, Spinner } from "../components/Feedback";
 
 const moneyCell = (value) => value == null ? "—" : money(value);
 const keyOf = (row) => `${row.company_id}:${row.product_id}`;
+const marketplaceParts = (value) => String(value || "").split(/\s*[,;]\s*/).filter(Boolean).map((label) => {
+  const lower = label.toLowerCase();
+  const channel = /wildberries|\bwb\b|вайлдберриз/.test(lower) ? "Wildberries" : /ozon|озон/.test(lower) ? "Ozon" : /kaspi|каспи/.test(lower) ? "Kaspi" : "Маркетплейс";
+  const store = label.includes("·") ? label.split("·").slice(1).join("·").trim() : "";
+  return { channel, store, label };
+});
+
+function MarketplaceBadges({ names, count }) {
+  const parts = marketplaceParts(names);
+  if (!parts.length) return <span className="pmr-marketplace-empty">{count ? `${count} карточек · площадка не указана` : "Карточки не привязаны"}</span>;
+  return <div className="pmr-marketplace-badges">{parts.map((part, index) => <span className={`pmr-marketplace-badge pmr-marketplace-badge--${part.channel.toLowerCase()}`} key={`${part.label}-${index}`} title={part.label}>
+    <b aria-hidden="true">{part.channel === "Wildberries" ? "WB" : part.channel === "Kaspi" ? "K" : "O"}</b><span>{part.store || part.channel}</span>
+  </span>)}</div>;
+}
 
 export default function MarketplaceProductReport({ ctx }) {
   const [channel, setChannel] = useState(ctx.marketplaceReportChannel || "");
@@ -68,6 +82,7 @@ export default function MarketplaceProductReport({ ctx }) {
   }, [params, ctx.refresh]);
 
   const items = data?.items || [];
+  const incompleteItems = items.filter((row) => row.profit == null).length;
   const totals = items.reduce((sum, row) => ({
     sold: sum.sold + Number(row.sold_units || 0),
     stock: sum.stock + Number(row.available_stock || 0),
@@ -130,57 +145,13 @@ export default function MarketplaceProductReport({ ctx }) {
 
   return (
     <section className="panel product-market-report">
-      <style>{`
-        .product-market-report{padding:20px}
-        .pmr-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px}
-        .pmr-head h2{margin:0 0 4px}.pmr-head p,.pmr-note{color:#74847b;font-size:12px;margin:0}
-        .pmr-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
-        .pmr-controls select{min-height:38px;border:1px solid #dce6df;border-radius:8px;background:#fff;padding:0 12px;color:#29483b}
-        .pmr-scroll{overflow:auto;border:1px solid #d5dfec;border-radius:8px}
-        .pmr-table{width:100%;border-collapse:collapse;min-width:1420px;table-layout:fixed;font-size:11px}
-        .pmr-table th{background:#2863b4;color:#fff;text-align:left;font-weight:700;padding:9px 7px;white-space:normal;line-height:1.2;border:1px solid #1d559e}
-        .pmr-table th:nth-child(1){width:20%}.pmr-table th:nth-child(2){width:10%}.pmr-table th:nth-child(3){width:10%}.pmr-table th:nth-child(4){width:12%}.pmr-table th:nth-child(5){width:14%}.pmr-table th:nth-child(6){width:13%}.pmr-table th:nth-child(7){width:12%}.pmr-table th:nth-child(8){width:9%}
-        .pmr-table td{border:1px solid #dce4ee;padding:8px 7px;vertical-align:middle;overflow-wrap:anywhere}
-        .pmr-table tbody tr:nth-child(even){background:#f7f9fc}
-        .pmr-product-name{font-weight:650;color:#233f33;line-height:1.3}
-        .pmr-product-meta,.pmr-table small{display:block;color:#718093;font-size:10px;line-height:1.3;margin-top:3px}
-        .pmr-cell-stack{display:grid;gap:4px}
-        .pmr-edit-inline{display:flex;align-items:center;gap:4px}
-        .pmr-edit-inline input{width:72px;max-width:100%;border:1px solid #d4dfeb;border-radius:5px;padding:5px 6px;font-size:11px}
-        .pmr-row-save{width:100%;justify-content:center!important;padding:5px!important;font-size:10px!important;margin-top:2px}
-        .pmr-actions{display:flex;gap:6px;justify-content:flex-end}
-        .pmr-summary{display:grid;grid-template-columns:repeat(6,minmax(100px,1fr));gap:10px;margin:14px 0}
-        .pmr-stat{border:1px solid #e8eee9;border-radius:9px;padding:12px;background:#fbfcfb}
-        .pmr-stat small{display:block;color:#78877e;font-size:11px}.pmr-stat strong{display:block;margin-top:4px;font-size:15px}
-        .pmr-mobile{display:none}
-        @media(max-width:760px){
-          .product-market-report{padding:14px}
-          .pmr-head{align-items:flex-start;flex-direction:column}
-          .pmr-head button{width:100%}
-          .pmr-controls{display:grid;grid-template-columns:1fr}
-          .pmr-controls select{width:100%}
-          .pmr-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
-          .pmr-scroll{display:none}
-          .pmr-mobile{display:grid;gap:10px}
-          .pmr-card{border:1px solid #e5ebe7;border-radius:10px;padding:13px;background:#fff}
-          .pmr-card-title{display:flex;justify-content:space-between;gap:8px;margin-bottom:3px}
-          .pmr-card-title strong{font-size:14px}
-          .pmr-meta{font-size:11px;color:#75847b;margin-bottom:10px}
-          .pmr-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-          .pmr-card-grid span{display:block;font-size:10px;color:#7a8980}
-          .pmr-card-grid b{display:block;font-size:12px;font-weight:650;overflow-wrap:anywhere}
-          .pmr-edit{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:11px}
-          .pmr-edit label{font-size:10px;color:#75847b}
-          .pmr-edit input{display:block;width:100%;margin-top:3px;border:1px solid #dce6df;border-radius:6px;padding:8px}
-          .pmr-actions{margin-top:10px}
-        }
-      `}</style>
       <div className="pmr-head">
         <div>
-          <h2>Сводный финансовый отчёт по товарам</h2>
-          <p>Один внутренний SKU объединяет продажи всех привязанных карточек и магазинов.</p>
+          <span className="pmr-eyebrow"><FileSpreadsheet size={14}/> ОТЧЁТ ПО ОБЪЕДИНЁННЫМ ТОВАРАМ</span>
+          <h2>Продажи по внутренним SKU</h2>
+          <p>Один товар — общие продажи связанных карточек и магазинов.</p>
         </div>
-        <button className="secondary" type="button" disabled={downloading || !items.length} onClick={exportExcel}>
+        <button className="primary pmr-export" type="button" disabled={downloading || !items.length} onClick={exportExcel}>
           <Download size={16}/>{downloading ? "Готовим Excel…" : "Скачать сводный Excel"}
         </button>
       </div>
@@ -193,24 +164,25 @@ export default function MarketplaceProductReport({ ctx }) {
           <option value="">Все магазины</option>
           {accounts.map((account) => <option key={account.id} value={account.id}>{account.channel} · {account.name}</option>)}
         </select>
-        <span className="pmr-note">Период: {ctx.start} — {ctx.end}. Сводка объединяет связанные товары; ниже видны комиссии, логистика и реклама из проведённых продаж. Налог и себестоимость сохраняются для внутреннего SKU.</span>
+        <span className="pmr-note"><CalendarDays size={14}/> {ctx.start} — {ctx.end}<span>·</span> Комиссия, логистика и реклама показываются по сохранённым операциям.</span>
       </div>
+      {incompleteItems > 0 && <div className="pmr-data-hint" role="status"><span>!</span><div><strong>Для {incompleteItems} товаров не хватает данных для расчёта прибыли</strong><small>Заполните себестоимость и ставку налога в строке товара, затем сохраните.</small></div></div>}
       <ErrorBox error={error}/>
       <div className="pmr-summary">
-        <div className="pmr-stat"><small>Продано</small><strong>{totals.sold}</strong></div>
-        <div className="pmr-stat"><small>Общий остаток</small><strong>{totals.stock}</strong></div>
-        <div className="pmr-stat"><small>Возвращено</small><strong>{totals.returned}</strong></div>
-        <div className="pmr-stat"><small>Чистая выручка</small><strong>{moneyCell(totals.revenue)}</strong></div>
-        <div className="pmr-stat"><small>Налог</small><strong>{totals.incomplete ? "Заполните ставку" : moneyCell(totals.tax)}</strong></div>
-        <div className="pmr-stat"><small>Прибыль после расходов</small><strong>{totals.incomplete ? "Заполните налог и себестоимость" : moneyCell(totals.profit)}</strong></div>
+        <div className="pmr-stat"><span className="pmr-stat-icon is-sold"><Package size={16}/></span><div><small>Продано</small><strong>{totals.sold} шт.</strong></div></div>
+        <div className="pmr-stat"><span className="pmr-stat-icon is-stock"><Warehouse size={16}/></span><div><small>Общий остаток</small><strong>{totals.stock} шт.</strong></div></div>
+        <div className="pmr-stat"><span className="pmr-stat-icon is-return"><RotateCcw size={16}/></span><div><small>Возвращено</small><strong>{totals.returned} шт.</strong></div></div>
+        <div className="pmr-stat"><span className="pmr-stat-icon is-revenue"><Wallet size={16}/></span><div><small>Чистая выручка</small><strong>{moneyCell(totals.revenue)}</strong></div></div>
+        <div className="pmr-stat"><span className="pmr-stat-icon is-tax"><Percent size={16}/></span><div><small>Налог</small><strong>{totals.incomplete ? "Не полностью" : moneyCell(totals.tax)}</strong></div></div>
+        <div className="pmr-stat"><span className="pmr-stat-icon is-profit"><TrendingUp size={16}/></span><div><small>Прибыль после расходов</small><strong>{totals.incomplete ? "Нужны данные" : moneyCell(totals.profit)}</strong></div></div>
       </div>
       {loading ? <Spinner/> : items.length === 0 ? <Empty/> : <>
         <div className="pmr-scroll">
           <table className="pmr-table">
+            <colgroup><col/><col/><col/><col/><col/><col/><col/><col/></colgroup>
             <thead><tr>
-              <th>Внутренний товар / SKU</th><th>Площадки, магазины и карточки</th><th>Цена продажи</th><th>Общий остаток</th><th>Продано / возврат</th>
-              <th>Чистая выручка</th><th>Себестоимость</th><th>Налог</th>
-              <th>Комиссия / логистика / реклама</th><th>Прибыль</th>
+              <th>Товар / площадки</th><th>Цена / остаток</th><th>Продано / возврат</th><th>Чистая выручка</th>
+              <th>Себестоимость</th><th>Налог</th><th>Расходы площадки</th><th>Прибыль</th>
             </tr></thead>
             <tbody>{items.map((row) => {
               const key = keyOf(row), draft = drafts[key] || {};
@@ -218,27 +190,28 @@ export default function MarketplaceProductReport({ ctx }) {
                 <td>
                   <div className="pmr-product-name">{row.product_name}</div>
                   <div className="pmr-product-meta">{row.article || row.sku}{row.article && row.sku && row.article !== row.sku ? ` · ${row.sku}` : ""}</div>
+                  <MarketplaceBadges names={row.marketplace_names} count={row.marketplace_card_count}/>
                 </td>
-                <td>{row.marketplace_names || "Нет продаж за период"}<small>{row.marketplace_card_count} привязанных карточек</small></td>
-                <td>{moneyCell(row.selling_price_tenge)}</td>
-                <td><strong>{row.available_stock ?? 0}</strong><small>шт. на едином складе</small></td>
-                <td><strong>{row.sold_units} / {row.returned_units}</strong><small>шт. продано / возврат</small></td>
-                <td>{moneyCell(row.net_revenue)}</td>
+                <td><div className="pmr-cell-stack"><span><small>Цена продажи</small><b>{row.selling_price_tenge == null || Number(row.selling_price_tenge) === 0 ? "Не указана" : moneyCell(row.selling_price_tenge)}</b></span><span><small>На едином складе</small><b>{row.available_stock ?? 0} шт.</b></span></div></td>
+                <td><strong>{row.sold_units} шт.</strong><small>Возврат: {row.returned_units} шт.</small></td>
+                <td><strong className="pmr-money">{moneyCell(row.net_revenue)}</strong></td>
                 <td><div className="pmr-cell-stack">
-                  <label className="pmr-edit-inline"><span>За шт.</span><input aria-label={`Себестоимость ${row.product_name}`} type="number" min="0" step="0.01" value={draft.unitCost ?? ""} disabled={!writable} onChange={(e) => edit(row,"unitCost",e.target.value)}/></label>
-                  <small>Итого: {moneyCell(row.cogs)}</small>
+                  {writable && <label className="pmr-edit-inline"><span>За шт.</span><input aria-label={`Себестоимость ${row.product_name}`} type="number" min="0" step="0.01" value={draft.unitCost ?? ""} disabled={!writable} onChange={(e) => edit(row,"unitCost",e.target.value)}/></label>}
+                  {!writable && <span><small>За шт.</small><b>{draft.unitCost ? money(draft.unitCost) : "Не задана"}</b></span>}
+                  <small>Всего: {moneyCell(row.cogs)}</small>
                 </div></td>
                 <td><div className="pmr-cell-stack">
-                  <label className="pmr-edit-inline"><input aria-label={`Налог, процент ${row.product_name}`} type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} disabled={!writable} onChange={(e) => edit(row,"taxRate",e.target.value)}/><span>%</span></label>
-                  <small>Итого: {moneyCell(row.tax)}</small>
+                  {writable && <label className="pmr-edit-inline"><input aria-label={`Налог, процент ${row.product_name}`} type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} disabled={!writable} onChange={(e) => edit(row,"taxRate",e.target.value)}/><span>%</span></label>}
+                  {!writable && <span><small>Ставка</small><b>{draft.taxRate ? `${draft.taxRate}%` : "Не задана"}</b></span>}
+                  <small>Всего: {moneyCell(row.tax)}</small>
                   {writable && <button className="secondary pmr-row-save" type="button" disabled={saving[key]} onClick={() => save(row)}><Save size={12}/>{saving[key] ? "Сохраняем…" : "Сохранить"}</button>}
                 </div></td>
                 <td><div className="pmr-cell-stack">
-                  <span>Ком.: {moneyCell(row.commission)}</span>
-                  <span>Лог.: {moneyCell(row.logistics)}</span>
+                  <span>Комиссия: {moneyCell(row.commission)}</span>
+                  <span>Логистика: {moneyCell(row.logistics)}</span>
                   <span>Реклама: {moneyCell(row.advertising)}</span>
                 </div></td>
-                <td><strong>{moneyCell(row.profit)}</strong></td>
+                <td><strong className={row.profit == null ? "pmr-profit-missing" : "pmr-profit-value"}>{moneyCell(row.profit)}</strong></td>
               </tr>;
             })}</tbody>
           </table>
@@ -246,24 +219,30 @@ export default function MarketplaceProductReport({ ctx }) {
         <div className="pmr-mobile">{items.map((row) => {
           const key = keyOf(row), draft = drafts[key] || {};
           return <article className="pmr-card" key={`${key}:${row.account_id}`}>
-            <div className="pmr-card-title"><strong>{row.product_name}</strong><b>{row.sku}</b></div>
-            <div className="pmr-meta">Артикул: {row.article || "не указан"} · {row.marketplace_names || "продаж в периоде нет"} · {row.marketplace_card_count} карточек</div>
+            <div className="pmr-card-top"><div className="pmr-card-title"><strong>{row.product_name}</strong><small>SKU · {row.sku || row.article || "не указан"}</small></div><b className="pmr-card-profit">{moneyCell(row.profit)}</b></div>
+            <MarketplaceBadges names={row.marketplace_names} count={row.marketplace_card_count}/>
             <div className="pmr-card-grid">
-              <div><span>Цена продажи</span><b>{moneyCell(row.selling_price_tenge)}</b></div>
-              <div><span>Остаток на складе</span><b>{row.available_stock ?? 0} шт.</b></div>
-              <div><span>Продано / возврат</span><b>{row.sold_units} / {row.returned_units} шт.</b></div>
+              <div><span>Продано</span><b>{row.sold_units} шт.</b></div>
+              <div><span>Возврат</span><b>{row.returned_units} шт.</b></div>
+              <div><span>Остаток</span><b>{row.available_stock ?? 0} шт.</b></div>
               <div><span>Чистая выручка</span><b>{moneyCell(row.net_revenue)}</b></div>
-              <div><span>Себестоимость</span><b>{moneyCell(row.cogs)}</b></div>
-              <div><span>Налог</span><b>{row.tax_rate_percent == null ? "Не задан" : `${row.tax_rate_percent}% · ${moneyCell(row.tax)}`}</b></div>
-              <div><span>Комиссия</span><b>{moneyCell(row.commission)}</b></div>
-              <div><span>Логистика</span><b>{moneyCell(row.logistics)}</b></div>
-              <div><span>Прибыль</span><b>{moneyCell(row.profit)}</b></div>
             </div>
-            {writable && <div className="pmr-edit">
-              <label>Себестоимость за шт., ₸<input type="number" min="0" step="0.01" value={draft.unitCost ?? ""} onChange={(e) => edit(row,"unitCost",e.target.value)}/></label>
-              <label>Налог, %<input type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} onChange={(e) => edit(row,"taxRate",e.target.value)}/></label>
-            </div>}
-            {writable && <div className="pmr-actions"><button className="secondary" type="button" disabled={saving[key]} onClick={() => save(row)}><Save size={14}/>{saving[key] ? "Сохраняем…" : "Сохранить"}</button></div>}
+            <details className="pmr-card-details">
+              <summary>Цена, себестоимость и расходы <ChevronDown size={16}/></summary>
+              <div className="pmr-detail-grid">
+                <div><span>Цена продажи</span><b>{row.selling_price_tenge == null || Number(row.selling_price_tenge) === 0 ? "Не указана" : moneyCell(row.selling_price_tenge)}</b></div>
+                <div><span>Себестоимость всего</span><b>{moneyCell(row.cogs)}</b></div>
+                <div><span>Налог всего</span><b>{moneyCell(row.tax)}</b></div>
+                <div><span>Комиссия</span><b>{moneyCell(row.commission)}</b></div>
+                <div><span>Логистика</span><b>{moneyCell(row.logistics)}</b></div>
+                <div><span>Реклама</span><b>{moneyCell(row.advertising)}</b></div>
+              </div>
+              {writable && <div className="pmr-edit">
+                <label>Себестоимость за шт., ₸<input aria-label={`Себестоимость ${row.product_name}`} type="number" min="0" step="0.01" value={draft.unitCost ?? ""} onChange={(e) => edit(row,"unitCost",e.target.value)}/></label>
+                <label>Налог, %<input aria-label={`Налог, процент ${row.product_name}`} type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} onChange={(e) => edit(row,"taxRate",e.target.value)}/></label>
+                <button className="primary" type="button" disabled={saving[key]} onClick={() => save(row)}><Save size={14}/>{saving[key] ? "Сохраняем…" : "Сохранить изменения"}</button>
+              </div>}
+            </details>
           </article>;
         })}</div>
       </>}
