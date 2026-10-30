@@ -3140,6 +3140,8 @@ def master_values(p, entity, existing=None):
         description = values.pop("description", "")
         barcode = values.pop("barcode", "")
         purchase_cost = values.pop("purchase_cost", 0)
+        values.pop("initial_quantity", None)
+        values.pop("initial_receipt_date", None)
         custom_fields = values.pop("custom_fields", {})
         marketplace_stock_allocations = values.pop("marketplace_stock_allocations", None)
         specs = dict(values.get("specifications") or {})
@@ -3205,12 +3207,26 @@ def create_master(
         raise HTTPException(405, "Используйте проведение документа")
     p = schema.model_validate(payload)
     validate_master(db, u, entity, p)
+    if entity == "products" and p.initial_quantity > 0 and p.purchase_cost <= 0:
+        raise HTTPException(422, "Для начального остатка укажите себестоимость за единицу")
     obj = model(**master_values(p, entity))
     db.add(obj)
     db.flush()
     if entity == "products":
-        for company_id in (obj.specifications or {}).get("_qor_company_ids", []):
+        company_ids = (obj.specifications or {}).get("_qor_company_ids", [])
+        for company_id in company_ids:
             ensure_product_company(db, obj.id, int(company_id))
+        if p.initial_quantity > 0:
+            f.adjust(db, u, s.AdjustIn(
+                company_id=int(company_ids[0]),
+                product_id=obj.id,
+                date=p.initial_receipt_date or business_today(),
+                quantity=p.initial_quantity,
+                unit_cost=p.purchase_cost,
+                kind="receipt",
+                reason="Первоначальный приход при создании товара",
+                reference=f"product-initial-receipt:{obj.id}",
+            ))
     audit(db, u, "create", entity, obj.id, {"after": dump(obj)})
     db.commit()
     if entity == "products": _schedule_wb_sync_for_product(tasks, obj.id)
