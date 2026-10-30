@@ -714,7 +714,57 @@ def adjust(db, user, p):
     return {"reference": ref, "movement_ids": [m.id for m in movements]}
 
 
-def report_headline(db, user, start, end, company_id=None):
+def marketplace_source_event_days(db, user, company_id=None):
+    """Return source-event dates needed to assess report completeness.
+
+    The dashboard summary uses the same candidate rows for selected period,
+    today, and month. Read them once and reuse the dates across those windows.
+    """
+    account_query = scope_query(select(Account), Account, user).where(Account.active.is_(True))
+    account_ids = {account.id for account in db.scalars(account_query)}
+    if not account_ids:
+        return []
+    source_query = scope_query(
+        select(MarketplaceRecord.reason_code, MarketplaceRecord.payload),
+        MarketplaceRecord,
+        user,
+    ).where(
+        MarketplaceRecord.account_id.in_(account_ids),
+        MarketplaceRecord.status != "projected",
+        MarketplaceRecord.stage_status != "ignored_non_financial",
+    )
+    if company_id:
+        source_query = source_query.where(MarketplaceRecord.company_id == company_id)
+    from .marketplace_pipeline import _day, Pending
+    event_days = []
+    for reason_code, raw_payload in db.execute(source_query).yield_per(1000):
+        if reason_code == "DUPLICATE_EVENT":
+            continue
+        payload = raw_payload or {}
+        record_type = payload.get("record_type")
+        operation = str(payload.get("sellerOperName") or payload.get("supplier_oper_name") or payload.get("doc_type_name") or "").lower()
+        confirmed = (
+            record_type == "sale"
+            or (record_type == "realization" and operation in {"продажа", "sale", "возврат", "return"})
+            or (record_type == "posting" and payload.get("status") in {"delivered", "completed"})
+            or (record_type == "order_entry" and payload.get("order_status") == "COMPLETED")
+        )
+        if not confirmed:
+            continue
+        try:
+            day = _day(
+                payload.get("saleDt") or payload.get("sale_dt") or payload.get("date")
+                or payload.get("completed_date") or payload.get("delivered_at")
+                or payload.get("shipment_date") or payload.get("created_at"),
+                "Asia/Almaty" if record_type == "order_entry" else None,
+            )
+        except Pending:
+            day = None
+        event_days.append(day)
+    return event_days
+
+
+def report_headline(db, user, start, end, company_id=None, pending_source_days=None):
     """Calculate the small dashboard KPI set from only the selected date window.
 
     The full report includes inventory, receivables, historical cash and product
@@ -786,42 +836,12 @@ def report_headline(db, user, start, end, company_id=None):
         if expense.category not in {"Реклама", "Marketplace commission", "Marketplace commission VAT", "Marketplace logistics"}
     )
 
-    # Pending confirmed source events mean the period is not fully reconciled.
-    from .marketplace_pipeline import _day, Pending
-    source_query = scope_query(select(MarketplaceRecord), MarketplaceRecord, user).where(
-        MarketplaceRecord.account_id.in_(account_ids),
-        MarketplaceRecord.status != "projected",
-        MarketplaceRecord.stage_status != "ignored_non_financial",
+    if pending_source_days is None:
+        pending_source_days = marketplace_source_event_days(db, user, company_id)
+    pending_source = any(
+        day is None or start <= day <= end
+        for day in pending_source_days
     )
-    if company_id:
-        source_query = source_query.where(MarketplaceRecord.company_id == company_id)
-    pending_source = False
-    for raw in db.scalars(source_query):
-        if raw.reason_code == "DUPLICATE_EVENT":
-            continue
-        payload = raw.payload or {}
-        record_type = payload.get("record_type")
-        operation = str(payload.get("sellerOperName") or payload.get("supplier_oper_name") or payload.get("doc_type_name") or "").lower()
-        confirmed = (
-            record_type == "sale"
-            or (record_type == "realization" and operation in {"продажа", "sale", "возврат", "return"})
-            or (record_type == "posting" and payload.get("status") in {"delivered", "completed"})
-            or (record_type == "order_entry" and payload.get("order_status") == "COMPLETED")
-        )
-        if not confirmed:
-            continue
-        try:
-            day = _day(
-                payload.get("saleDt") or payload.get("sale_dt") or payload.get("date")
-                or payload.get("completed_date") or payload.get("delivered_at")
-                or payload.get("shipment_date") or payload.get("created_at"),
-                "Asia/Almaty" if record_type == "order_entry" else None,
-            )
-        except Pending:
-            day = None
-        if day is None or start <= day <= end:
-            pending_source = True
-            break
 
     profit_complete = not pending_cost_ids and not pending_source
     net_profit_complete = profit_complete and not any(
