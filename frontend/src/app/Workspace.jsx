@@ -979,7 +979,7 @@ function ReportPage({ page, ctx }) {
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
   // Load the lightweight summary first on the dashboard, then fetch full detail.
-  const dashboardReportPath = page === "dashboard" && !dash ? null : reportPath;
+  const dashboardReportPath = page === "dashboard" ? null : reportPath;
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
     page === "forecast" ? null : dashboardReportPath,
     ctx.refresh,
@@ -1087,9 +1087,12 @@ function ReportPage({ page, ctx }) {
           {kpis.map(([title, value, note], i) => <div className={"kpi " + (i === 2 ? "featured" : "")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}
         </div>
         <div className="panel report-loading-inline">
-          <strong>Основные показатели готовы.</strong>
-          <p>{reportError ? "Не удалось загрузить детализацию отчёта." : "Загружаются графики, склад и расшифровка операций."}</p>
-          {reportError && <><ErrorBox error={reportError} /><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></>}
+          <strong>Краткий обзор готов.</strong>
+          <p>Подробные графики и операции открываются в разделе «Аналитика». Сводный отчёт по внутренним SKU доступен отдельно и объединяет связанные карточки Kaspi и Wildberries.</p>
+          <div className="row-actions">
+            <button className="secondary" type="button" onClick={() => ctx.navigate("analytics")}>Подробная аналитика</button>
+            <button className="primary" type="button" onClick={() => { ctx.setMarketplaceReportChannel(""); ctx.navigate("marketplace-product-report"); }}>Сводный отчёт по SKU</button>
+          </div>
         </div>
       </>
     );
