@@ -1671,8 +1671,14 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
                             return_dt=p.get('returned_date') or p.get('return_date')
                             if not return_dt:
                                 api_undated_return_units += qty
-                            else:
-                                return_day=marketplace_pipeline._day(return_dt, 'Asia/Almaty')
+                            # Preserve the earlier period view: when Kaspi omits
+                            # the actual return date, group the returned status by
+                            # its return request date. Keep the missing-date count
+                            # visible so this fallback is not mistaken for a
+                            # confirmed financial return date.
+                            return_period_dt = return_dt or p.get('request_date') or p.get('requestDate')
+                            if return_period_dt:
+                                return_day=marketplace_pipeline._day(return_period_dt, 'Asia/Almaty')
                                 if start<=return_day<=end:
                                     api_returns += sale_amount
                                     api_return_units += qty
