@@ -958,22 +958,21 @@ function ReportPage({ page, ctx }) {
   };
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") : null;
-  const { data: dash, error: dashError, loading: dashLoading } = useLoad(
-    usesDashboard ? summaryPath : null,
-    ctx.refresh,
-    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
-  );
-  // Load dashboard work in sequence: the headline first, then the detailed report,
-  // then marketplace breakdowns. Parallel full-history scans can exhaust Render memory.
-  const reportEnabled = page !== "forecast" && (!usesDashboard || Boolean(dash?.report || dashError));
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
-    reportEnabled ? reportPath : null,
+    page === "forecast" ? null : reportPath,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  const marketplaceDetailsEnabled = usesDashboard && Boolean(loadedReport || reportError);
-  const dashboardKaspiSummary = useLoad(marketplaceDetailsEnabled ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:marketplaceDetailsEnabled ? 900 : 0});
-  const dashboardWbSummary = useLoad(marketplaceDetailsEnabled ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:marketplaceDetailsEnabled ? 900 : 0});
+  // Keep the normal dashboard path: load the detailed report immediately and
+  // fetch the extra headline only after it, so it cannot delay the selected period.
+  const summaryEnabled = usesDashboard && (page !== "dashboard" || Boolean(loadedReport));
+  const { data: dash, error: dashError, loading: dashLoading } = useLoad(
+    summaryEnabled ? summaryPath : null,
+    ctx.refresh,
+    { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
+  );
+  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
+  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
@@ -994,21 +993,31 @@ function ReportPage({ page, ctx }) {
   ];
   useEffect(() => {
     setDashboardStalled(false);
-    if (!usesDashboard || !dashLoading || dash?.report) return;
+    const waitingForPrimary = page === "dashboard" && reportLoading && !loadedReport;
+    const waitingForHeadline = page !== "dashboard" && dashLoading && !dash?.report;
+    if (!usesDashboard || (!waitingForPrimary && !waitingForHeadline)) return;
     const timer = window.setTimeout(() => setDashboardStalled(true), 30000);
     return () => window.clearTimeout(timer);
-  }, [usesDashboard, dashLoading, dash?.report, page, ctx.start, ctx.end, ctx.company, ctx.refresh]);
-  if (usesDashboard && !loadedReport && !dash?.report && dashLoading) {
+  }, [usesDashboard, page, reportLoading, loadedReport, dashLoading, dash?.report, ctx.start, ctx.end, ctx.company, ctx.refresh]);
+  if (page === "dashboard" && reportLoading && !loadedReport) {
     if (!dashboardStalled) return <Spinner />;
     return <section className="panel dashboard-load-warning" role="status">
-      <strong>Краткая сводка загружается дольше обычного</strong>
-      <p>Сервер пока не вернул сводку. Можно повторить загрузку; подробный отчёт и расчёты не изменялись.</p>
+      <strong>Обзор загружается дольше обычного</strong>
+      <p>Сервер пока не вернул данные. Попробуйте обновить обзор; расчёты отчётов не менялись.</p>
       <button className="secondary" type="button" onClick={() => { setDashboardStalled(false); ctx.reload(); }}>Повторить загрузку</button>
     </section>;
   }
-  if (usesDashboard && !loadedReport && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
-  if (usesDashboard && !loadedReport && !dash?.report && reportError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
-  if (usesDashboard && !loadedReport) {
+  if (page === "dashboard" && reportError && !loadedReport) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
+  if (usesDashboard && page !== "dashboard" && !loadedReport && !dash?.report && dashLoading) {
+    if (!dashboardStalled) return <Spinner />;
+    return <section className="panel dashboard-load-warning" role="status">
+      <strong>Краткая сводка загружается дольше обычного</strong>
+      <p>Сервер пока не вернул сводку. Можно повторить загрузку; расчёты отчётов не изменялись.</p>
+      <button className="secondary" type="button" onClick={() => { setDashboardStalled(false); ctx.reload(); }}>Повторить загрузку</button>
+    </section>;
+  }
+  if (usesDashboard && page !== "dashboard" && !loadedReport && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
+  if (usesDashboard && page !== "dashboard" && !loadedReport) {
     const fast = dash?.report || {};
     const headline = [
       ["Оборот сегодня", dash?.today?.revenue, "На " + (dash?.as_of || "")],
