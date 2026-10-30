@@ -1016,6 +1016,9 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
     accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     sales = [s for s in rows(Sale) if s.account_id in account_ids]
+    # The detailed report still needs historical sales for debt and refund balances;
+    # keep the set scoped to the stores selected for this report.
+    allsales = {s.id: s for s in rows(Sale, False) if s.account_id in account_ids}
     returns_query = scope_query(
         select(Return).join(Sale, Return.sale_id == Sale.id), Return, user
     ).where(
