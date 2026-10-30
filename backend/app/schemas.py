@@ -21,6 +21,8 @@ class ProductIn(Strict):
     description: str = Field(default="", max_length=10000)
     barcode: str = Field(default="", max_length=100)
     purchase_cost: int = Field(default=0, ge=0, le=10**14)
+    initial_quantity: int = Field(default=0, ge=0, le=10**9)
+    initial_receipt_date: date | None = None
     custom_fields: dict = Field(default_factory=dict)
     marketplace_stock_allocations: dict | None = None
     sku: str = Field(min_length=1, max_length=100)
