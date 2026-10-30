@@ -6,7 +6,7 @@ os.environ["UPLOAD_DIR"] = tempfile.mkdtemp(prefix="qor-uploads-")
 import pytest
 from fastapi.testclient import TestClient
 from app.db import Base, engine, SessionLocal
-from app.models import User, Company, Product, Account, Customer, Setting
+from app.models import User, Company, Product, ProductCompany, Account, Customer, Setting
 from app.security import passwords
 from app.main import app
 
@@ -62,6 +62,7 @@ def client():
                 Setting(id=1),
             ]
         )
+        db.add_all([ProductCompany(product_id=1, company_id=1), ProductCompany(product_id=2, company_id=1)])
         db.commit()
     with TestClient(app) as c:
         auth = c.post(
