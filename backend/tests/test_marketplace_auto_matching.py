@@ -47,8 +47,10 @@ def test_auto_matching_leaves_ambiguous_and_name_only_matches_unlinked(client):
     with SessionLocal() as db:
         second = Product(id=3, sku="CHAIR-ALT", article="CHAIR-02", name="Игровой стул",
                          specifications={"_qor_company_ids": [1]})
-        db.add(second)
-        db.add(ProductCompany(product_id=3, company_id=1))
+        duplicate = Product(id=4, sku="CHAIR-ALT-2", article="CHAIR-02", name="Другой стул",
+                            specifications={"_qor_company_ids": [1]})
+        db.add_all([second, duplicate])
+        db.add_all([ProductCompany(product_id=3, company_id=1), ProductCompany(product_id=4, company_id=1)])
         wb = Account(id=5, company_id=1, name="WB 1", channel="Wildberries", active=True)
         db.add(wb)
         _catalog_row(db, wb, "wildberries", "product:700:701", {

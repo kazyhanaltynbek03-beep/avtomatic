@@ -3254,6 +3254,7 @@ def delete_master(entity: str, id: int, u=Depends(current_user), db=Depends(get_
         raise HTTPException(404, "Не найдено")
     if entity == "products":
         scope_product(db, u, obj.id)
+        db.query(ProductCompany).filter(ProductCompany.product_id == obj.id).delete(synchronize_session=False)
     if hasattr(obj, "company_id"):
         scope(u, obj.company_id)
     if entity == "accounts":

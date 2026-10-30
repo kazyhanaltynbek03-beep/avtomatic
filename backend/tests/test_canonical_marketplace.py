@@ -476,7 +476,7 @@ def test_wb_unlinked_realization_waits_for_internal_product_mapping(client):
             sa_name='WB-NEW-SKU',subject_name='Реальный товар WB',nm_id=987654,quantity=2,
             retail_price_withdisc_rub='10000',currency='KZT',sale_dt='2026-10-02',rr_dt='2026-10-02',srid='REAL-SRID')
         result=mp.project_account(db,u,acc)
-        assert result['pending_erp']==0,result
+        assert result['pending_erp']==1,result
         sale=db.scalar(select(Sale))
         assert sale is None
         assert row.status=='pending'
