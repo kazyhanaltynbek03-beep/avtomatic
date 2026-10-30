@@ -479,7 +479,7 @@ def test_wb_unlinked_realization_waits_for_internal_product_mapping(client):
         assert result['pending_erp']==1,result
         sale=db.scalar(select(Sale))
         assert sale is None
-        assert row.status=='pending'
+        assert row.status=='pending_mapping'
         assert row.stage_status=='pending_mapping'
         rep=f.report(db,u,date(2026,10,1),date(2026,10,31),1)
         assert rep['revenue']==0 and rep['units']==0

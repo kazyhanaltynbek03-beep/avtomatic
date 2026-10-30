@@ -188,7 +188,7 @@ def match_staged_catalog(db, accounts, products):
             if duplicate_qor_code:
                 per_account[account.id]["review"] += 1
                 review.append({"product_id": product.id, "sku": product.sku, "account_id": account.id,
-                               "account_name": account.name, "reason": "Артикул связан с несколькими товарами QOR",
+                               "account_name": account.name, "reason": "Неоднозначное сопоставление: артикул связан с несколькими товарами QOR",
                                "marketplace_keys": sorted({key for keys in matched_groups.values() for key in keys})})
                 continue
             if not matched_groups:
