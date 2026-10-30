@@ -8,6 +8,7 @@ from sqlalchemy import select
 from .models import Account, MarketplaceRecord, MarketplaceProductMapping, Product, Sale, Expense, CanonicalEvent
 from . import schemas as s, canonical, exchange_rates, finance as f
 from . import wb_operation
+from .security import ensure_product_company
 
 CONFIRMED_KASPI = {'COMPLETED'}
 RETURNED_KASPI = {'RETURNED'}
@@ -194,6 +195,7 @@ def ensure_marketplace_product(db, acc, payload):
         specifications={
             "source": acc.channel,
             "account_id": acc.id,
+            "_qor_company_ids": [acc.company_id],
             "external_keys": keys,
             "auto_created": True,
         },
@@ -201,6 +203,7 @@ def ensure_marketplace_product(db, acc, payload):
     _update_product_metadata(product, payload, acc)
     db.add(product)
     db.flush()
+    ensure_product_company(db, product.id, acc.company_id)
     return product
 
 def resolve_product(db, acc, payload):
@@ -211,13 +214,19 @@ def resolve_product(db, acc, payload):
     mapped={m.product_id for m in mappings}
     skus=[str(payload[k]).strip() for k in ('supplierArticle','vendorCode','sa_name','offer_id','merchant_code','external_sku') if payload.get(k)]
     if not skus and payload.get('sku') and not str(payload['sku']).isdigit(): skus=[str(payload['sku'])]
-    candidates=db.scalars(select(Product).where((Product.sku.in_(skus))|(Product.article.in_(skus)))).all() if skus else []
+    company_products = select(ProductCompany.product_id).where(
+        ProductCompany.company_id == acc.company_id
+    )
+    candidates=db.scalars(select(Product).where(
+        Product.id.in_(company_products),
+        (Product.sku.in_(skus)) | (Product.article.in_(skus))
+    )).all() if skus else []
     matched=mapped or {p.id for p in candidates}
     if len(matched)>1: raise Pending('MAPPING_AMBIGUOUS:'+','.join(keys))
     if not matched:
         barcodes={k.split(':',1)[1] for k in keys if k.startswith('barcode:')}
         if barcodes:
-            for product in db.scalars(select(Product)):
+            for product in db.scalars(select(Product).where(Product.id.in_(company_products))):
                 specs=product.specifications or {}
                 known=set(map(str,specs.get('barcodes') or [])) | {str(specs.get('barcode') or '')}
                 if known & barcodes: matched.add(product.id)
