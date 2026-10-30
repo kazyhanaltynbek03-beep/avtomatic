@@ -467,3 +467,21 @@ main[data-page="accounts"] .data-table,main[data-page="users"] .data-table,main[
   main[data-page="sales"] .qor-sale-card .row-actions { gap:6px; }
   main[data-page="sales"] .qor-sale-card .row-actions .secondary { min-height:32px; padding:6px 10px; }
 }
+
+/* Unified stock: spreadsheet-style desktop rows with mobile cards. */
+.qor-stock-desktop { display:block; margin:14px 0 20px; }
+.qor-stock-mobile { display:none; }
+.qor-stock-table { width:100%; min-width:1000px; border-collapse:collapse; font-size:12px; }
+.qor-stock-table th { background:#2863b4; color:#fff; text-align:left; padding:10px 9px; border:1px solid #1d559e; white-space:nowrap; }
+.qor-stock-table td { padding:9px; border:1px solid #dce4ee; vertical-align:middle; }
+.qor-stock-table tbody tr:nth-child(even) { background:#f7f9fc; }
+.qor-stock-product-cell { display:flex; align-items:center; gap:10px; min-width:240px; }
+.qor-stock-product-cell .qor-item-image { width:48px; height:48px; min-height:48px; flex:0 0 48px; border-radius:8px; overflow:hidden; }
+.qor-stock-product-cell b { display:block; line-height:1.35; }
+.qor-stock-product-cell small,.qor-stock-link { display:block; color:#64756c; margin-top:4px; overflow-wrap:anywhere; }
+.qor-stock-row-actions { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.qor-stock-row-actions .secondary { min-height:32px; padding:6px 8px; font-size:11px; }
+@media(max-width:760px) {
+  .qor-stock-desktop { display:none; }
+  .qor-stock-mobile { display:grid; }
+}

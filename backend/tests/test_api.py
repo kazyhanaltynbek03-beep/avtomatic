@@ -2,10 +2,10 @@ import io, json
 from openpyxl import Workbook, load_workbook
 from .conftest import buy, sell, report
 from app.db import SessionLocal
-from app.models import User, Job, Account
+from app.models import User, Job, Account, Batch, Movement
 from app.worker import run_one
 from app import ai
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 
 def switch(client, email):
@@ -47,6 +47,51 @@ def test_rbac_company_scope(client):
     assert {r["company_id"] for r in rows} == {1}
     assert client.get("/api/stock?company_id=2").status_code == 403
     assert client.post("/api/data/users", json={}).status_code == 403
+
+
+
+def test_product_initial_receipt_is_atomic_and_validates_cost_and_date(client):
+    payload = {
+        "sku": "INITIAL-RECEIPT-TEST",
+        "name": "Initial stock test",
+        "purchase_cost": 125000,
+        "initial_quantity": 4,
+        "initial_receipt_date": "2026-10-12",
+        "specifications": {"_qor_company_ids": [1]},
+    }
+    response = client.post("/api/data/products", json=payload)
+    assert response.status_code == 200, response.text
+    product = response.json()
+    rows = client.get("/api/stock?company_id=1").json()
+    stock = next(row for row in rows if row["product_id"] == product["id"])
+    assert stock["quantity"] == 4
+    assert stock["value"] == 500000
+    with SessionLocal() as db:
+        batch = db.scalar(select(Batch).where(Batch.product_id == product["id"]))
+        assert batch is not None
+        assert str(batch.date) == "2026-10-12"
+        assert batch.quantity == 4
+        movement_count = db.scalar(select(func.count()).select_from(Movement).where(
+            Movement.product_id == product["id"]
+        ))
+        assert movement_count == 1
+
+    invalid = {**payload, "sku": "INITIAL-RECEIPT-NO-COST", "purchase_cost": 0}
+    rejected = client.post("/api/data/products", json=invalid)
+    assert rejected.status_code == 422
+    assert client.get("/api/data/products?search=INITIAL-RECEIPT-NO-COST").json()["total"] == 0
+
+    rollback_payload = {
+        **payload,
+        "sku": "INITIAL-RECEIPT-ROLLBACK",
+        "initial_receipt_date": "2026-10-11",
+    }
+    rollback = client.post("/api/data/products", json=rollback_payload)
+    assert rollback.status_code == 422
+    assert client.get("/api/data/products?search=INITIAL-RECEIPT-ROLLBACK").json()["total"] == 0
+    with SessionLocal() as db:
+        batch_count = db.scalar(select(func.count()).select_from(Batch).where(Batch.company_id == 1))
+        assert batch_count == 1
 
 
 def test_master_crud_and_audit(client):
