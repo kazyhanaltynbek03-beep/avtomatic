@@ -842,7 +842,7 @@ def marketplace_product_cost_save(payload: dict, u=Depends(current_user), db=Dep
     product = db.get(Product, product_id)
     if not account or account.channel not in {"Kaspi", "Wildberries", "Ozon"} or not product:
         raise HTTPException(404, "Товар или кабинет маркетплейса не найден")
-    scope(u, account.company_id)
+    scope_product(db, u, product.id, account.company_id)
     mappings = db.scalars(select(MarketplaceProductMapping).where(
         MarketplaceProductMapping.account_id == account.id,
         MarketplaceProductMapping.company_id == account.company_id,
@@ -2708,7 +2708,7 @@ def delete_product_marketplace_mapping(product_id: int, p: ProductMarketplaceMap
     account = db.get(Account, mapping.account_id)
     if not account:
         raise HTTPException(404, "Магазин маркетплейса не найден")
-    scope(u, account.company_id)
+    scope_product(db, u, product.id, account.company_id)
     db.delete(mapping)
     audit(db, u, "mapping_remove", "products", product_id, {
         "account_id": account.id, "channel": account.channel,
@@ -2729,6 +2729,7 @@ def marketplace_mapping(id: int, p: MarketplaceMappingIn, u=Depends(current_user
     if acc.sync_status == 'running': raise HTTPException(409, 'Синхронизация ещё выполняется')
     product = db.get(Product, p.product_id)
     if not product or not product.active: raise HTTPException(422, "Товар не найден")
+    scope_product(db, u, product.id, row.company_id)
     payload = row.payload or {}
     permitted = set(marketplace_pipeline.identifiers(payload))
     for item in payload.get('products') or []:
@@ -3670,8 +3671,10 @@ def alerts(
     products_query = scope_query(select(Product).where(Product.active.is_(True)), Product, u)
     for product in db.scalars(products_query):
         specs = product.specifications or {}
-        company_ids = {int(value) for value in (specs.get("_qor_company_ids") or []) if str(value).isdigit()}
-        if company_id is not None and company_ids and company_id not in company_ids:
+        company_ids = product_company_ids(db, product.id)
+        if not company_ids:
+            company_ids = {int(value) for value in (specs.get("_qor_company_ids") or []) if str(value).isdigit()}
+        if company_id is not None and company_id not in company_ids:
             continue
         if u.role != "Owner" and company_ids and not company_ids.intersection(u.company_ids):
             continue
@@ -4222,7 +4225,7 @@ def wb_product_sync(id: int, product_id: int, p: dict, u=Depends(current_user), 
     account = db.get(Account, id)
     product = db.get(Product, product_id)
     if not account or account.channel != "Wildberries" or not product: raise HTTPException(404, "Магазин или товар не найден")
-    scope(u, account.company_id)
+    scope_product(db, u, product.id, account.company_id)
     if p.get("confirm") is not True: raise HTTPException(428, "Подтвердите отправку текущей цены и распределённых остатков в Wildberries")
     return sync_wb_product(db, account, product)
 
@@ -5053,7 +5056,7 @@ def product_card_create(p: dict, u=Depends(current_user), db=Depends(get_db)):
     if not product: raise HTTPException(404,"Товар не найден")
     cid=int(p.get("company_id") or 0)
     if not cid: raise HTTPException(422,"company_id обязателен для карточки")
-    scope(u,cid)
+    scope_product(db,u,product.id,cid)
     mp=str(p.get("marketplace","kaspi")).lower()
     prev=db.scalar(select(func.max(ProductCardVersion.version)).where(ProductCardVersion.product_id==product.id,ProductCardVersion.marketplace==mp)) or 0
     obj=ProductCardVersion(company_id=cid,product_id=product.id,marketplace=mp,version=prev+1,title=str(p.get("title") or product.name)[:240],description=str(p.get("description") or ""),characteristics=p.get("characteristics") or {},image_document_ids=[int(x) for x in p.get("image_document_ids",[])],parent_version_id=p.get("parent_version_id"))
