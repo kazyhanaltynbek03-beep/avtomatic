@@ -87,6 +87,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             continue
         setting = settings.get((company, product_id))
         grouped[(company, product_id, account_id_value)] = {
+            "company_id": company,
             "product_id": product.id,
             "sku": product.sku or "",
             "article": product.article or "",
