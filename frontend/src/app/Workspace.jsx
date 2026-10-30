@@ -965,16 +965,15 @@ function ReportPage({ page, ctx }) {
   };
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") : null;
-  const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
-    page === "forecast" ? null : reportPath,
+  const { data: dash, error: dashError, loading: dashLoading } = useLoad(
+    usesDashboard ? summaryPath : null,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  // Keep the normal dashboard path: load the detailed report immediately and
-  // fetch the extra headline only after it, so it cannot delay the selected period.
-  const summaryEnabled = usesDashboard && (page !== "dashboard" || Boolean(loadedReport));
-  const { data: dash, error: dashError, loading: dashLoading } = useLoad(
-    summaryEnabled ? summaryPath : null,
+  // Load the lightweight summary first on the dashboard, then fetch full detail.
+  const dashboardReportPath = page === "dashboard" && !dash ? null : reportPath;
+  const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
+    page === "forecast" ? null : dashboardReportPath,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
@@ -1042,22 +1041,12 @@ function ReportPage({ page, ctx }) {
   ];
   useEffect(() => {
     setDashboardStalled(false);
-    const waitingForPrimary = page === "dashboard" && reportLoading && !loadedReport;
-    const waitingForHeadline = page !== "dashboard" && dashLoading && !dash?.report;
-    if (!usesDashboard || (!waitingForPrimary && !waitingForHeadline)) return;
+    const waitingForHeadline = usesDashboard && dashLoading && !dash?.report;
+    if (!waitingForHeadline) return;
     const timer = window.setTimeout(() => setDashboardStalled(true), 30000);
     return () => window.clearTimeout(timer);
-  }, [usesDashboard, page, reportLoading, loadedReport, dashLoading, dash?.report, ctx.start, ctx.end, ctx.company, ctx.refresh]);
-  if (page === "dashboard" && reportLoading && !loadedReport) {
-    if (!dashboardStalled) return <Spinner />;
-    return <section className="panel dashboard-load-warning" role="status">
-      <strong>Обзор загружается дольше обычного</strong>
-      <p>Сервер пока не вернул данные. Попробуйте обновить обзор; расчёты отчётов не менялись.</p>
-      <button className="secondary" type="button" onClick={() => { setDashboardStalled(false); ctx.reload(); }}>Повторить загрузку</button>
-    </section>;
-  }
-  if (page === "dashboard" && reportError && !loadedReport) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
-  if (usesDashboard && page !== "dashboard" && !loadedReport && !dash?.report && dashLoading) {
+  }, [usesDashboard, dashLoading, dash?.report, ctx.start, ctx.end, ctx.company, ctx.refresh]);
+  if (usesDashboard && !loadedReport && !dash?.report && dashLoading) {
     if (!dashboardStalled) return <Spinner />;
     return <section className="panel dashboard-load-warning" role="status">
       <strong>Краткая сводка загружается дольше обычного</strong>
@@ -1065,8 +1054,8 @@ function ReportPage({ page, ctx }) {
       <button className="secondary" type="button" onClick={() => { setDashboardStalled(false); ctx.reload(); }}>Повторить загрузку</button>
     </section>;
   }
-  if (usesDashboard && page !== "dashboard" && !loadedReport && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
-  if (usesDashboard && page !== "dashboard" && !loadedReport) {
+  if (usesDashboard && !loadedReport && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
+  if (usesDashboard && !loadedReport) {
     const fast = dash?.report || {};
     const headline = [
       ["Оборот сегодня", dash?.today?.revenue, "На " + (dash?.as_of || "")],
