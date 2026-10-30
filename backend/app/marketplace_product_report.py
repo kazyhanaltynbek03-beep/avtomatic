@@ -102,6 +102,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             "restocked_returned_units": 0,
             "commission": 0,
             "logistics": 0,
+            "advertising": 0,
             "unit_cost_cents": setting.unit_cost_cents if setting else None,
             "tax_rate_bps": setting.tax_rate_bps if setting else None,
         }
@@ -114,6 +115,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         row["sold_revenue"] += int(sale.revenue or 0)
         row["commission"] += int(sale.commission or 0)
         row["logistics"] += int(sale.logistics or 0)
+        row["advertising"] += int(sale.advertising or 0)
     for ret in returns:
         sale = return_sales.get(ret.id)
         if sale is None:
@@ -142,7 +144,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         )
         row["profit"] = (
             row["net_revenue"] - row["cogs"] - row["tax"]
-            - row["commission"] - row["logistics"]
+            - row["commission"] - row["logistics"] - row["advertising"]
             if row["cogs"] is not None and row["tax"] is not None else None
         )
         row["unit_cost_tenge"] = (
@@ -211,7 +213,7 @@ def create_xlsx(report):
         "Выручка, ₸", "Возвраты, ₸", "Чистый доход, ₸",
         "Себестоимость за шт., ₸", "Себестоимость, ₸",
         "Налог, %", "Налог, ₸", "Комиссия, ₸", "Логистика, ₸",
-        "Прибыль после расходов, ₸",
+        "Прибыль после налога, комиссий, логистики и рекламы, ₸",
     ]
     sheet.append(headers)
     for cell in sheet[4]:
@@ -226,11 +228,11 @@ def create_xlsx(report):
             row["net_units"], amount("sold_revenue"), amount("returned_revenue"),
             amount("net_revenue"), row["unit_cost_tenge"], amount("cogs"),
             row["tax_rate_percent"], amount("tax"), amount("commission"),
-            amount("logistics"), amount("profit"),
+            amount("logistics"), amount("advertising"), amount("profit"),
         ])
     sheet.freeze_panes = "A5"
     sheet.auto_filter.ref = sheet.dimensions
-    widths = [18, 18, 36, 18, 24, 14, 16, 14, 18, 18, 18, 22, 18, 12, 16, 16, 16, 22]
+    widths = [18, 18, 36, 18, 24, 14, 16, 14, 18, 18, 18, 22, 18, 12, 16, 16, 16, 16, 24]
     for index, width in enumerate(widths, 1):
         sheet.column_dimensions[chr(64 + index)].width = width
     sheet.row_dimensions[4].height = 42
