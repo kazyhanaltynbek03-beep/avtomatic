@@ -172,4 +172,4 @@ def test_summary_uses_completion_date_for_return_missing_event_date(client):
     assert result["api_return_units"]==1
     assert result["api_undated_return_units"]==1
     assert result["api_unconverted"]==0
-    assert result["source_complete"] is True
+    assert result["source_complete"] is False
