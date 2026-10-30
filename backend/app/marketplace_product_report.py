@@ -7,9 +7,8 @@ from sqlalchemy import select
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from .models import Account, MarketplaceProductReportSetting, Product, Return, Sale
+from .models import Account, MarketplaceProductReportSetting, Product, ProductCompany, Return, Sale
 from .security import require, scope
-from . import marketplace_costs
 
 
 CHANNELS = {"Kaspi", "Wildberries", "Ozon"}
@@ -47,19 +46,17 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             Sale.date <= end,
         )
     ))
-    sale_ids = {sale.id for sale in sales}
-    returns = list(db.scalars(
-        select(Return).join(Sale, Return.sale_id == Sale.id).where(
+    return_pairs = list(db.execute(
+        select(Return, Sale).join(Sale, Return.sale_id == Sale.id).where(
             Sale.account_id.in_(account_ids),
             Return.date >= start,
             Return.date <= end,
         )
     ))
+    returns = [pair[0] for pair in return_pairs]
+    return_sales = {ret.id: sale for ret, sale in return_pairs}
     product_ids = {sale.product_id for sale in sales}
-    product_ids.update(
-        db.scalar(select(Sale.product_id).where(Sale.id == ret.sale_id))
-        for ret in returns
-    )
+    product_ids.update(sale.product_id for sale in return_sales.values())
     product_ids.discard(None)
     products = {
         product.id: product
@@ -78,9 +75,9 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
     sales_by_id = {sale.id: sale for sale in sales}
     keys = {(sale.company_id, sale.product_id, sale.account_id) for sale in sales}
     keys.update(
-        (sales_by_id[ret.sale_id].company_id, sales_by_id[ret.sale_id].product_id,
-         sales_by_id[ret.sale_id].account_id)
-        for ret in returns if ret.sale_id in sales_by_id
+        (return_sales[ret.id].company_id, return_sales[ret.id].product_id,
+         return_sales[ret.id].account_id)
+        for ret in returns if ret.id in return_sales
     )
     grouped = {}
     for company, product_id, account_id_value in keys:
@@ -101,6 +98,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             "sold_revenue": 0,
             "returned_units": 0,
             "returned_revenue": 0,
+            "restocked_returned_units": 0,
             "commission": 0,
             "logistics": 0,
             "unit_cost_cents": setting.unit_cost_cents if setting else None,
@@ -116,7 +114,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         row["commission"] += int(sale.commission or 0)
         row["logistics"] += int(sale.logistics or 0)
     for ret in returns:
-        sale = sales_by_id.get(ret.sale_id)
+        sale = return_sales.get(ret.id)
         if sale is None:
             continue
         row = grouped.get((sale.company_id, sale.product_id, sale.account_id))
@@ -124,6 +122,8 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             continue
         row["returned_units"] += int(ret.quantity or 0)
         row["returned_revenue"] += int(ret.revenue or 0)
+        if ret.inventory_status == "restocked":
+            row["restocked_returned_units"] += int(ret.quantity or 0)
 
     items = []
     for row in grouped.values():
@@ -132,7 +132,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         unit_cost = row["unit_cost_cents"]
         tax_rate = row["tax_rate_bps"]
         row["cogs"] = (
-            max(0, row["sold_units"] - row["returned_units"]) * unit_cost
+            (row["sold_units"] - row["restocked_returned_units"]) * unit_cost
             if unit_cost is not None else None
         )
         row["tax"] = (
