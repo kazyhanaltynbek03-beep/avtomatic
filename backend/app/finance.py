@@ -766,7 +766,7 @@ def marketplace_source_event_days(db, user, company_id=None):
     return event_days
 
 
-def report_headline(db, user, start, end, company_id=None, pending_source_days=None):
+def report_headline(db, user, start, end, company_id=None, pending_source_days=None, include_balances=True):
     """Calculate the small dashboard KPI set from only the selected date window.
 
     The full report includes inventory, receivables, historical cash and product
@@ -876,70 +876,76 @@ def report_headline(db, user, start, end, company_id=None, pending_source_days=N
             account_totals[name]["quantity"] -= ret.quantity
             account_totals[name]["returns"] += ret.revenue
 
-    # Keep the all-time cards in SQL. Materializing every historical sale,
-    # return and cash row for each dashboard period made this endpoint slow.
-    all_sales_query = scope_query(select(Sale.id, Sale.account_id, Sale.revenue), Sale, user).where(
-        Sale.account_id.in_(account_ids), Sale.date <= end
-    )
-    if company_id:
-        all_sales_query = all_sales_query.where(Sale.company_id == company_id)
-    all_sales = all_sales_query.subquery()
-
-    all_returns_query = scope_query(
-        select(Return.sale_id, func.sum(Return.revenue).label("revenue"))
-        .join(Sale, Return.sale_id == Sale.id), Return, user
-    ).where(
-        Sale.account_id.in_(account_ids), Sale.date <= end, Return.date <= end
-    )
-    if company_id:
-        all_returns_query = all_returns_query.where(
-            Return.company_id == company_id, Sale.company_id == company_id
+    if include_balances:
+        # Keep the all-time cards in SQL. Materializing every historical sale,
+        # return and cash row for each dashboard period made this endpoint slow.
+        all_sales_query = scope_query(select(Sale.id, Sale.account_id, Sale.revenue), Sale, user).where(
+            Sale.account_id.in_(account_ids), Sale.date <= end
         )
-    all_returns = all_returns_query.group_by(Return.sale_id).subquery()
-
-    cash_totals_query = scope_query(
-        select(
-            func.coalesce(func.sum(CashEntry.amount), 0),
-            func.coalesce(func.sum(case((CashEntry.date < start, CashEntry.amount), else_=0)), 0),
-            func.coalesce(func.sum(case((CashEntry.date >= start, case((CashEntry.amount > 0, CashEntry.amount), else_=0)), else_=0)), 0),
-            func.coalesce(func.sum(case((CashEntry.date >= start, case((CashEntry.amount < 0, -CashEntry.amount), else_=0)), else_=0)), 0),
-            func.coalesce(func.sum(case((CashEntry.date >= start, CashEntry.amount), else_=0)), 0),
-        ), CashEntry, user
-    ).where(CashEntry.date <= end)
-    if company_id:
-        cash_totals_query = cash_totals_query.where(CashEntry.company_id == company_id)
-    cash_totals = db.execute(cash_totals_query).one()
-    cash, cash_opening, cash_inflow, cash_outflow, cash_flow = map(int, cash_totals)
-
-    paid_query = scope_query(
-        select(CashEntry.sale_id, func.sum(CashEntry.amount).label("paid")), CashEntry, user
-    ).where(CashEntry.date <= end, CashEntry.sale_id.is_not(None))
-    if company_id:
-        paid_query = paid_query.where(CashEntry.company_id == company_id)
-    paid_by_sale = paid_query.group_by(CashEntry.sale_id).subquery()
-
-    net = all_sales.c.revenue - func.coalesce(all_returns.c.revenue, 0)
-    paid = func.coalesce(paid_by_sale.c.paid, 0)
-    receivable_query = (
-        select(
-            func.coalesce(func.sum(case(
-                (Account.channel == "B2B", case((net > paid, net - paid), else_=0)), else_=0
-            )), 0),
-            func.coalesce(func.sum(case((paid > net, paid - net), else_=0)), 0),
+        if company_id:
+            all_sales_query = all_sales_query.where(Sale.company_id == company_id)
+        all_sales = all_sales_query.subquery()
+    
+        all_returns_query = scope_query(
+            select(Return.sale_id, func.sum(Return.revenue).label("revenue"))
+            .join(Sale, Return.sale_id == Sale.id), Return, user
+        ).where(
+            Sale.account_id.in_(account_ids), Sale.date <= end, Return.date <= end
         )
-        .select_from(all_sales)
-        .join(Account, Account.id == all_sales.c.account_id)
-        .outerjoin(all_returns, all_returns.c.sale_id == all_sales.c.id)
-        .outerjoin(paid_by_sale, paid_by_sale.c.sale_id == all_sales.c.id)
-    )
-    if company_id:
-        receivable_query = receivable_query.where(Account.company_id == company_id)
-    b2b_debt, refunds_payable = map(int, db.execute(receivable_query).one())
-
-    movement_query = scope_query(select(func.coalesce(func.sum(Movement.cost), 0)), Movement, user).where(Movement.date <= end)
-    if company_id:
-        movement_query = movement_query.where(Movement.company_id == company_id)
-    stock_value = int(db.scalar(movement_query) or 0)
+        if company_id:
+            all_returns_query = all_returns_query.where(
+                Return.company_id == company_id, Sale.company_id == company_id
+            )
+        all_returns = all_returns_query.group_by(Return.sale_id).subquery()
+    
+        cash_totals_query = scope_query(
+            select(
+                func.coalesce(func.sum(CashEntry.amount), 0),
+                func.coalesce(func.sum(case((CashEntry.date < start, CashEntry.amount), else_=0)), 0),
+                func.coalesce(func.sum(case((CashEntry.date >= start, case((CashEntry.amount > 0, CashEntry.amount), else_=0)), else_=0)), 0),
+                func.coalesce(func.sum(case((CashEntry.date >= start, case((CashEntry.amount < 0, -CashEntry.amount), else_=0)), else_=0)), 0),
+                func.coalesce(func.sum(case((CashEntry.date >= start, CashEntry.amount), else_=0)), 0),
+            ), CashEntry, user
+        ).where(CashEntry.date <= end)
+        if company_id:
+            cash_totals_query = cash_totals_query.where(CashEntry.company_id == company_id)
+        cash_totals = db.execute(cash_totals_query).one()
+        cash, cash_opening, cash_inflow, cash_outflow, cash_flow = map(int, cash_totals)
+    
+        paid_query = scope_query(
+            select(CashEntry.sale_id, func.sum(CashEntry.amount).label("paid")), CashEntry, user
+        ).where(CashEntry.date <= end, CashEntry.sale_id.is_not(None))
+        if company_id:
+            paid_query = paid_query.where(CashEntry.company_id == company_id)
+        paid_by_sale = paid_query.group_by(CashEntry.sale_id).subquery()
+    
+        net = all_sales.c.revenue - func.coalesce(all_returns.c.revenue, 0)
+        paid = func.coalesce(paid_by_sale.c.paid, 0)
+        receivable_query = (
+            select(
+                func.coalesce(func.sum(case(
+                    (Account.channel == "B2B", case((net > paid, net - paid), else_=0)), else_=0
+                )), 0),
+                func.coalesce(func.sum(case((paid > net, paid - net), else_=0)), 0),
+            )
+            .select_from(all_sales)
+            .join(Account, Account.id == all_sales.c.account_id)
+            .outerjoin(all_returns, all_returns.c.sale_id == all_sales.c.id)
+            .outerjoin(paid_by_sale, paid_by_sale.c.sale_id == all_sales.c.id)
+        )
+        if company_id:
+            receivable_query = receivable_query.where(Account.company_id == company_id)
+        b2b_debt, refunds_payable = map(int, db.execute(receivable_query).one())
+    
+        movement_query = scope_query(select(func.coalesce(func.sum(Movement.cost), 0)), Movement, user).where(Movement.date <= end)
+        if company_id:
+            movement_query = movement_query.where(Movement.company_id == company_id)
+        stock_value = int(db.scalar(movement_query) or 0)
+    
+    
+    else:
+        cash = cash_flow = cash_opening = cash_inflow = cash_outflow = 0
+        b2b_debt = refunds_payable = stock_value = 0
 
     return {
         "revenue": revenue,
