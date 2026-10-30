@@ -12,12 +12,12 @@ depends_on = None
 def upgrade():
     op.create_table(
         "marketplace_product_report_settings",
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("company_id", sa.Integer(), sa.ForeignKey("companies.id"), nullable=False),
         sa.Column("product_id", sa.Integer(), sa.ForeignKey("products.id"), nullable=False),
         sa.Column("unit_cost_cents", sa.BigInteger(), nullable=True),
         sa.Column("tax_rate_bps", sa.Integer(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("company_id", "product_id", name="uq_marketplace_product_report_setting"),
         sa.CheckConstraint("unit_cost_cents IS NULL OR unit_cost_cents >= 0"),
         sa.CheckConstraint("tax_rate_bps IS NULL OR (tax_rate_bps >= 0 AND tax_rate_bps <= 10000)"),
