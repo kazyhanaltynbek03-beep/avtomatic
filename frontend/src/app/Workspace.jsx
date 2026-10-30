@@ -164,6 +164,7 @@ export default function App() {
     [modal, setModal] = useState(null),
     [settings, setSettings] = useState({});
   const [marketplaceStoreByChannel, setMarketplaceStoreByChannel] = useState({Kaspi:"", Wildberries:""});
+  const [marketplaceReportChannel, setMarketplaceReportChannel] = useState("");
   const noticeTimer = useRef(null);
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -289,6 +290,8 @@ export default function App() {
     end,
     refresh,
     marketplaceAccountId,
+    marketplaceReportChannel,
+    setMarketplaceReportChannel,
     onNotificationCount: setNotificationCount,
     notify,
     navigate,
@@ -442,8 +445,8 @@ export default function App() {
               (!["companies", "users"].includes(page) ||
                 auth.user.role === "Owner") && (
                 <>
-                  {page === "dashboard" && <button className="secondary" onClick={() => navigate("marketplace-product-report")}>
-                    <FileText size={17} /> Отчёт по товарам
+                  {page === "dashboard" && <button className="secondary" onClick={() => { setMarketplaceReportChannel(""); navigate("marketplace-product-report"); }}>
+                    <FileText size={17} /> Сводный отчёт по SKU
                   </button>}
                   <button className="primary" onClick={() => setModal({ kind: page === "dashboard" ? "sales" : page })}>
                     <Plus size={18} />
@@ -975,57 +978,15 @@ function ReportPage({ page, ctx }) {
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  // Load the lightweight summary first on the dashboard, then fetch full detail.
-  const dashboardReportPath = page === "dashboard" && !dash ? null : reportPath;
+  // Keep the overview lightweight; detailed calculations load only on Analytics.
+  const dashboardReportPath = page === "dashboard" ? null : reportPath;
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
     page === "forecast" ? null : dashboardReportPath,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
-  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
-  const dashboardKaspiSyncRef = useRef(new Set());
-  const dashboardAccounts = ctx.refs.accounts;
-  const dashboardCompany = ctx.company;
-  const dashboardStart = ctx.start;
-  const dashboardEnd = ctx.end;
-  const dashboardReload = ctx.reload;
-  const dashboardCanSyncKaspi = can(ctx.auth, "accounts", true);
-  useEffect(() => {
-    if (page !== "dashboard" || !loadedReport || dashboardKaspiSummary.loading ||
-        !dashboardKaspiSummary.data || !dashboardCanSyncKaspi) return;
-    const accounts = (dashboardAccounts || []).filter(a =>
-      a.active !== false && a.channel === "Kaspi" &&
-      (!dashboardCompany || String(a.company_id) === String(dashboardCompany))
-    );
-    if (!accounts.length) return;
-    const accountIds = accounts.map(a => String(a.id)).sort();
-    const key = accountIds.join(",") + ":" + dashboardStart + ":" + dashboardEnd;
-    if (dashboardKaspiSyncRef.current.has(key)) return;
-    dashboardKaspiSyncRef.current.add(key);
-    let cancelled = false;
-    (async () => {
-      try {
-        await Promise.all(accounts.map(a => api(
-          `/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(dashboardStart)}&end=${encodeURIComponent(dashboardEnd)}&report_mode=issued`,
-          {method:"POST", timeoutMs:10000}
-        )));
-        for (let attempt = 0; attempt < 24 && !cancelled; attempt++) {
-          await new Promise(resolve => window.setTimeout(resolve, 5000));
-          const statuses = await Promise.all(accounts.map(a => api(`/accounts/${a.id}/sync-status`)));
-          if (statuses.every(s => s.status !== "running")) {
-            if (!cancelled) dashboardReload();
-            return;
-          }
-        }
-        if (!cancelled) dashboardReload();
-      } catch {
-        dashboardKaspiSyncRef.current.delete(key);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [page, loadedReport, dashboardKaspiSummary.loading, dashboardKaspiSummary.data,
-      dashboardCanSyncKaspi, dashboardAccounts, dashboardCompany, dashboardStart, dashboardEnd, dashboardReload]);
+  const dashboardKaspiSummary = useLoad(page === "analytics" ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:900});
+  const dashboardWbSummary = useLoad(page === "analytics" ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:900});
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
@@ -1084,9 +1045,12 @@ function ReportPage({ page, ctx }) {
           {kpis.map(([title, value, note], i) => <div className={"kpi " + (i === 2 ? "featured" : "")} key={title}><div><span>{title}</span></div><strong>{typeof value === "number" ? money(value) : value}</strong><small>{note}</small></div>)}
         </div>
         <div className="panel report-loading-inline">
-          <strong>Основные показатели готовы.</strong>
-          <p>{reportError ? "Не удалось загрузить детализацию отчёта." : "Загружаются графики, склад и расшифровка операций."}</p>
-          {reportError && <><ErrorBox error={reportError} /><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></>}
+          <strong>Краткий обзор готов.</strong>
+          <p>Подробные графики и операции открываются в разделе «Аналитика». Сводный отчёт по внутренним SKU доступен отдельно и объединяет связанные карточки Kaspi и Wildberries.</p>
+          <div className="row-actions">
+            <button className="secondary" type="button" onClick={() => ctx.navigate("analytics")}>Подробная аналитика</button>
+            <button className="primary" type="button" onClick={() => { ctx.setMarketplaceReportChannel(""); ctx.navigate("marketplace-product-report"); }}>Сводный отчёт по SKU</button>
+          </div>
         </div>
       </>
     );
@@ -2517,7 +2481,7 @@ function MarketplaceInbox({ channel, ctx }) {
     ["Чистая прибыль", incomplete ? "—" : m.net_profit, incomplete ? (fxPending ? "Прибыль ожидает курс/проведение и FIFO — ложное значение не показываем" : "Не показываем ложную прибыль: есть продажи без FIFO") : (m.margin == null ? "Маржа —" : `Маржа ${decimal(m.margin)}%`), {source:"ledger",metric:"net_profit",title:"Чистая прибыль по проведённым операциям"}],
   ];
   return <div className="panel marketplace-inbox">
-    <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><div className="row-actions"><button type="button" className={showClientReport?"primary":""} aria-expanded={showClientReport} onClick={()=>setShowClientReport(v=>!v)}>{showClientReport?"Скрыть отдельный отчёт":"Отчёт за период · Excel"}</button>{state.loading ? <span className="pill" role="status" aria-live="polite">Загружаем API…</span> : state.error ? <span className="pill marketplace-read-error" role="alert" title={state.error}>Ошибка чтения API</span> : <span className="pill">{state.data?.total ?? 0} API-записей</span>}</div></div>
+    <div className="section-heading"><div><h3>{channel} · результат бизнеса</h3><p className="muted">{ctx.start} — {ctx.end}. Цифры берутся из того же финансового ядра, что Dashboard, отчёты и AI.</p></div><div className="row-actions"><button type="button" className="secondary" onClick={()=>{ctx.setMarketplaceReportChannel(channel);ctx.navigate("marketplace-product-report");}}>Сводный отчёт по SKU</button><button type="button" className={showClientReport?"primary":""} aria-expanded={showClientReport} onClick={()=>setShowClientReport(v=>!v)}>{showClientReport?"Скрыть отдельный отчёт":"Отчёт за период · Excel"}</button>{state.loading ? <span className="pill" role="status" aria-live="polite">Загружаем API…</span> : state.error ? <span className="pill marketplace-read-error" role="alert" title={state.error}>Ошибка чтения API</span> : <span className="pill">{state.data?.total ?? 0} API-записей</span>}</div></div>
     {showClientReport&&<ClientMarketplaceReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount}/>}
     {(channel === "Kaspi" || channel === "Wildberries") && <div className="row-actions" role="group" aria-label="Отчёты маркетплейса"><button type="button" className={!ordersMode?"primary":""} aria-pressed={!ordersMode} onClick={()=>setOrdersMode(false)}>Продажи и финансы</button><button type="button" className={ordersMode?"primary":""} aria-pressed={ordersMode} onClick={()=>setOrdersMode(true)}>Заказы и доставка</button></div>}
     {ordersMode ? <MarketplaceOrdersReport channel={channel} ctx={ctx} accounts={scopedAccounts} selectedAccount={selectedAccount} canRefresh={can(ctx.auth,"accounts",true)}/> : <>
