@@ -2239,6 +2239,7 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const active=Boolean(range);
   const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
+  const retryPending=summary.data?.source_quality?.progress?.some(p=>p.status==="retry");
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
   const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
   const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh);
@@ -2310,6 +2311,8 @@ function MarketplaceInbox({ channel, ctx }) {
   const [kaspiReportMode,setKaspiReportMode] = useState("issued");
   const [summaryReload,setSummaryReload] = useState(0);
   const [kpiDetail,setKpiDetail] = useState(null);
+  const kaspiAutoSyncRef = useRef(new Set());
+  const kaspiLastRefreshRef = useRef(ctx.refresh);
 
   const [showTechnical,setShowTechnical] = useState(false);
   const selectedAccountId = ctx.marketplaceAccountId || "";
@@ -2335,14 +2338,40 @@ function MarketplaceInbox({ channel, ctx }) {
     if (summary.data) summaryCacheRef.current = {path:summaryPath, data:summary.data};
   },[summary.data,summaryPath]);
   const displayedSummary = summary.data || (summary.loading && summaryCacheRef.current.path === summaryPath ? summaryCacheRef.current.data : null);
+  const canSyncKaspi = can(ctx.auth,"accounts",true);
+  const accountKey = scopedAccounts.map(a=>a.id).join(",");
   const ordersCreatedParams = new URLSearchParams({start:ctx.start,end:ctx.end,limit:"100"});
   if (ctx.company) ordersCreatedParams.set("company_id",ctx.company);
   if (selectedAccount) ordersCreatedParams.set("account_id", String(selectedAccount.id));
   const ordersCreated = useLoad(channel === "Kaspi" && kaspiReportMode === "created" ? "/kaspi/orders-created?" + ordersCreatedParams : null, `${ctx.refresh}:${summaryReload}`);
-  // Opening or changing a report is read-only: it must not start a historical API scan.
+  useEffect(()=>{
+    if (channel !== "Kaspi" || !accountKey || !canSyncKaspi || summary.loading || !summary.data) return;
+    const forceSync = ctx.refresh !== kaspiLastRefreshRef.current;
+    kaspiLastRefreshRef.current = ctx.refresh;
+    const key = `${accountKey}:${ctx.start}:${ctx.end}:${kaspiReportMode}:${ctx.refresh}`;
+    if (kaspiAutoSyncRef.current.has(key)) return;
+    kaspiAutoSyncRef.current.add(key);
+    // Read the saved report first; start one background pull afterwards. Do not
+    // refetch the full report or retry the sync from the display loop.
+    accountKey.split(",").filter(Boolean).forEach(id =>
+      api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=${kaspiReportMode}&force=${forceSync}`,{method:"POST",timeoutMs:10000}).catch(()=>{})
+    );
+  },[channel,accountKey,canSyncKaspi,ctx.start,ctx.end,ctx.refresh,kaspiReportMode,summary.loading,summary.data]);
   const m = displayedSummary || {};
   const created = ordersCreated.data || {};
   const activeSyncErrors = kaspiReportMode === "created" ? created.sync_errors : m.sync_errors;
+  useEffect(()=>{
+    const localToday=today();
+    const yesterday=new Date(`${localToday}T00:00:00Z`); yesterday.setUTCDate(yesterday.getUTCDate()-1);
+    const yesterdayKey=yesterday.toISOString().slice(0,10);
+    if(channel!=="Kaspi" || kaspiReportMode!=="issued" || !canSyncKaspi || ctx.start!==ctx.end || ![localToday,yesterdayKey].includes(ctx.end)) return;
+    const interval=ctx.end===localToday?5*60*1000:10*60*1000;
+    const timer=window.setInterval(()=>{
+      Promise.allSettled(accountKey.split(",").filter(Boolean).map(id=>api(`/accounts/${id}/sync-kaspi-period?start=${encodeURIComponent(ctx.start)}&end=${encodeURIComponent(ctx.end)}&report_mode=issued`,{method:"POST",timeoutMs:10000})))
+        .then(()=>setSummaryReload(v=>v+1));
+    },interval);
+    return ()=>window.clearInterval(timer);
+  },[channel,kaspiReportMode,canSyncKaspi,accountKey,ctx.start,ctx.end]);
   const productParams = new URLSearchParams({channel, limit:"60", start:ctx.start, end:ctx.end});
   if (ctx.company) productParams.set("company_id", ctx.company);
   if (selectedAccount) productParams.set("account_id", String(selectedAccount.id));
