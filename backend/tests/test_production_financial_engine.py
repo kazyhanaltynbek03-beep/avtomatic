@@ -81,7 +81,8 @@ def test_historical_sale_after_newer_stock_and_return_before_cost(client):
         rid=ret.id
         sale=db.get(Sale,sid);assert not sale.cogs_pending and sale.cogs==26000000
         # Cost is linked to the original batch, but unavailable until inspection.
-        assert db.scalar(select(func.sum(Batch.remaining)).where(Batch.product_id==pid))==0
+        # One later-dated receipt remains unavailable to the Oct 2 sale.
+        assert db.scalar(select(func.sum(Batch.remaining)).where(Batch.product_id==pid))==1
         assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=='return'))==0
     for status in ("approved","in_transit","received","inspection","restocked"):
         response=client.post(f'/api/returns/{rid}/status',json={"status":status})
@@ -90,7 +91,8 @@ def test_historical_sale_after_newer_stock_and_return_before_cost(client):
     response=client.post(f'/api/returns/{rid}/status',json={"status":"restocked"})
     assert response.status_code==200,response.text
     with SessionLocal() as db:
-        assert db.scalar(select(func.sum(Batch.remaining)).where(Batch.product_id==pid))==1
+        # The eligible return adds one unit to the later-dated receipt.
+        assert db.scalar(select(func.sum(Batch.remaining)).where(Batch.product_id==pid))==2
         assert db.scalar(select(func.count()).select_from(Movement).where(Movement.kind=='return'))==1
 
 
