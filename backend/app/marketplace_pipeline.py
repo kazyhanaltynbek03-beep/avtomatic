@@ -170,42 +170,6 @@ def _new_qor_sku(db):
     raise RuntimeError("Не удалось создать уникальный внутренний SKU QOR")
 
 
-def ensure_marketplace_product(db, acc, payload):
-    """Create a canonical QOR product from a marketplace item when no mapping exists.
-
-    Marketplace identifiers remain in MarketplaceProductMapping; the visible
-    QOR SKU is generated independently. Inventory and purchase cost stay empty
-    until an authorized user enters them.
-    """
-    seller_sku = _seller_sku(payload)
-    keys = identifiers(payload)
-    stable = next((key for key in keys if key.startswith("product:")), None)
-    if not seller_sku and not stable:
-        return None
-
-    name = _product_name(payload, seller_sku or "Новый товар")
-    product = Product(
-        sku=_new_qor_sku(db),
-        name=name,
-        article=seller_sku,
-        category=payload.get("subject_name") or "Marketplace",
-        price=0,
-        active=True,
-        min_stock=0,
-        specifications={
-            "source": acc.channel,
-            "account_id": acc.id,
-            "_qor_company_ids": [acc.company_id],
-            "external_keys": keys,
-            "auto_created": True,
-        },
-    )
-    _update_product_metadata(product, payload, acc)
-    db.add(product)
-    db.flush()
-    ensure_product_company(db, product.id, acc.company_id)
-    return product
-
 def resolve_product(db, acc, payload):
     keys=identifiers(payload)
     mappings=db.scalars(select(MarketplaceProductMapping).where(
@@ -231,7 +195,10 @@ def resolve_product(db, acc, payload):
                 known=set(map(str,specs.get('barcodes') or [])) | {str(specs.get('barcode') or '')}
                 if known & barcodes: matched.add(product.id)
         if len(matched)>1: raise Pending('MAPPING_AMBIGUOUS:'+','.join(keys))
-    product=db.get(Product,next(iter(matched))) if matched else ensure_marketplace_product(db,acc,payload)
+    product=db.get(Product,next(iter(matched))) if matched else None
+    # Unmatched marketplace cards stay in the staging queue. QOR inventory,
+    # cost and sales must resolve to a client-created internal SKU, never to an
+    # automatically created duplicate product.
     if not product: raise Pending('SKU_NOT_MAPPED:'+','.join(keys))
     if not product.active: raise Pending('MAPPED_PRODUCT_INACTIVE')
     _update_product_metadata(product,payload,acc)
