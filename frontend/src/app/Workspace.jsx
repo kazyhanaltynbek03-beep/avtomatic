@@ -329,19 +329,26 @@ export default function App() {
             return (
               filtered.length > 0 && (
                 <section key={title}>
-                  <h4>{title}</h4>
-                  {filtered.map(([id, name, I]) => (
-                    <button
-                      key={id}
-                      className={page === id ? "nav-item active" : "nav-item"}
-                      aria-current={page === id ? "page" : undefined}
-                      onClick={() => navigate(id)}
-                    >
-                      <I size={18} />
-                      <span>{name}</span>
-                      {id === "assistant" && <i>AI</i>}
-                    </button>
-                  ))}
+                  <details
+                    className="nav-group"
+                    open={items.some((item) => item[0] === page)}
+                  >
+                    <summary>
+                      <h4>{title}</h4>
+                    </summary>
+                    {filtered.map(([id, name, I]) => (
+                      <button
+                        key={id}
+                        className={page === id ? "nav-item active" : "nav-item"}
+                        aria-current={page === id ? "page" : undefined}
+                        onClick={() => navigate(id)}
+                      >
+                        <I size={18} />
+                        <span>{name}</span>
+                        {id === "assistant" && <i>AI</i>}
+                      </button>
+                    ))}
+                  </details>
                 </section>
               )
             );
