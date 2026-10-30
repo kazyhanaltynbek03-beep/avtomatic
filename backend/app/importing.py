@@ -389,6 +389,8 @@ def apply(db, user, kind, p):
         specs.update({"description": p.description, "barcode": p.barcode,
                       "purchase_cost": p.purchase_cost, "custom_fields": p.custom_fields})
         company_ids = specs.get("_qor_company_ids") or []
+        if not isinstance(company_ids, list):
+            company_ids = [company_ids]
         if not company_ids and len(user.company_ids or []) == 1:
             company_ids = [user.company_ids[0]]
         if not company_ids:
@@ -466,6 +468,8 @@ def prepare_rows(db, user, kind, rows, mapping, defaults=None):
                     raise HTTPException(422, "specifications: укажите корректный JSON")
             specs = dict(raw_specs or {})
             ids = specs.get("_qor_company_ids") or []
+            if not isinstance(ids, list):
+                ids = [ids]
             specs["_qor_company_ids"] = list(dict.fromkeys([*ids, company_id]))
             row["__qor_product_specifications"] = json.dumps(specs, ensure_ascii=False)
         mapping["specifications"] = "__qor_product_specifications"
