@@ -1328,7 +1328,6 @@ def marketplace_report_xlsx(channel: str, start: date, end: date,
         # These are copies of current API/ERP fields; this export has no new
         # commissions, tax, return or profit formulas.
         summary = marketplace_summary(channel, start, end, company_id, account_id, u, db)
-        _require_complete_kaspi_report(summary)
         sales = marketplace_record_details(channel, "sales", start, end, company_id, account_id, u, db)
         returns = marketplace_record_details(channel, "returns", start, end, company_id, account_id, u, db)
         from openpyxl import Workbook
@@ -1341,6 +1340,11 @@ def marketplace_report_xlsx(channel: str, start: date, end: date,
         overview.append(["Статус синхронизации", summary.get("sync_status")])
         overview.append(["Последняя синхронизация", str(summary.get("last_sync") or "—")])
         overview.append(["Данные API подтверждены", "Да" if api_available else "Нет"])
+        report_complete = summary.get("sync_status") == "done" and summary.get("source_complete") is True
+        overview.append(["Полнота источника", "Подтверждена" if report_complete else "Не подтверждена"])
+        overview.append(["Статус файла", "Полный отчёт" if report_complete else "ПРЕДВАРИТЕЛЬНЫЙ — только сохранённые строки; цифры могут измениться после синхронизации"])
+        if not report_complete:
+            overview.append(["Предупреждение", "Синхронизация не завершена или полнота источника не подтверждена. Файл содержит только данные, сохранённые к моменту скачивания."])
         overview.append(["Показатель", "Значение", "Источник / смысл"])
         for label, key, note in [
             ("Продажи API, до возвратов", "api_gross_revenue", "Подтверждённые строки Kaspi API"),
