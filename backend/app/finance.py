@@ -1226,11 +1226,9 @@ def report(db, user, start, end, company_id=None, account_id=None, active_only=F
             channel_totals["Kaspi"]["costs"] += amount
             channel_totals["Kaspi"]["commission"] += amount
             daily[str(day)]["profit"] -= amount
-    for raw in pending_sources:
-        account=accounts.get(raw.account_id)
-        if account:
-            channels[account.name]['pending_cogs']+=1
-            channel_totals[account.channel]['pending_cogs']+=1
+    # pending_sources contains event dates (not MarketplaceRecord rows).
+    # Their effect is already represented by profit_complete and pending_source_events;
+    # account/channel attribution is unavailable at this stage.
     def ranked_product_rows(totals, limit=50):
         return [
             {"id": pid, "sku": catalog[pid].sku, "name": catalog[pid].name, **values}
