@@ -978,57 +978,15 @@ function ReportPage({ page, ctx }) {
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  // Load the lightweight summary first on the dashboard, then fetch full detail.
+  // Keep the overview lightweight; detailed calculations load only on Analytics.
   const dashboardReportPath = page === "dashboard" ? null : reportPath;
   const { data: loadedReport, error: reportError, loading: reportLoading } = useLoad(
     page === "forecast" ? null : dashboardReportPath,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
-  const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
-  const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
-  const dashboardKaspiSyncRef = useRef(new Set());
-  const dashboardAccounts = ctx.refs.accounts;
-  const dashboardCompany = ctx.company;
-  const dashboardStart = ctx.start;
-  const dashboardEnd = ctx.end;
-  const dashboardReload = ctx.reload;
-  const dashboardCanSyncKaspi = can(ctx.auth, "accounts", true);
-  useEffect(() => {
-    if (page !== "dashboard" || !loadedReport || dashboardKaspiSummary.loading ||
-        !dashboardKaspiSummary.data || !dashboardCanSyncKaspi) return;
-    const accounts = (dashboardAccounts || []).filter(a =>
-      a.active !== false && a.channel === "Kaspi" &&
-      (!dashboardCompany || String(a.company_id) === String(dashboardCompany))
-    );
-    if (!accounts.length) return;
-    const accountIds = accounts.map(a => String(a.id)).sort();
-    const key = accountIds.join(",") + ":" + dashboardStart + ":" + dashboardEnd;
-    if (dashboardKaspiSyncRef.current.has(key)) return;
-    dashboardKaspiSyncRef.current.add(key);
-    let cancelled = false;
-    (async () => {
-      try {
-        await Promise.all(accounts.map(a => api(
-          `/accounts/${a.id}/sync-kaspi-period?start=${encodeURIComponent(dashboardStart)}&end=${encodeURIComponent(dashboardEnd)}&report_mode=issued`,
-          {method:"POST", timeoutMs:10000}
-        )));
-        for (let attempt = 0; attempt < 24 && !cancelled; attempt++) {
-          await new Promise(resolve => window.setTimeout(resolve, 5000));
-          const statuses = await Promise.all(accounts.map(a => api(`/accounts/${a.id}/sync-status`)));
-          if (statuses.every(s => s.status !== "running")) {
-            if (!cancelled) dashboardReload();
-            return;
-          }
-        }
-        if (!cancelled) dashboardReload();
-      } catch {
-        dashboardKaspiSyncRef.current.delete(key);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [page, loadedReport, dashboardKaspiSummary.loading, dashboardKaspiSummary.data,
-      dashboardCanSyncKaspi, dashboardAccounts, dashboardCompany, dashboardStart, dashboardEnd, dashboardReload]);
+  const dashboardKaspiSummary = useLoad(page === "analytics" ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:900});
+  const dashboardWbSummary = useLoad(page === "analytics" ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:900});
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
