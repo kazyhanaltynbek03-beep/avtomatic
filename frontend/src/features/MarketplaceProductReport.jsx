@@ -133,12 +133,18 @@ export default function MarketplaceProductReport({ ctx }) {
         .pmr-head h2{margin:0 0 4px}.pmr-head p,.pmr-note{color:#74847b;font-size:12px;margin:0}
         .pmr-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
         .pmr-controls select{min-height:38px;border:1px solid #dce6df;border-radius:8px;background:#fff;padding:0 12px;color:#29483b}
-        .pmr-scroll{overflow:auto;border:1px solid #e5ebe7;border-radius:10px}
-        .pmr-table{width:100%;border-collapse:collapse;min-width:1250px;font-size:12px}
-        .pmr-table th{background:#eff5f0;color:#5f7166;text-align:left;font-weight:650;padding:11px 9px;white-space:nowrap}
-        .pmr-table td{border-top:1px solid #edf1ee;padding:9px;vertical-align:middle}
-        .pmr-table td:first-child{font-weight:650;color:#233f33}
-        .pmr-table input{width:96px;border:1px solid #dce6df;border-radius:6px;padding:7px 8px}
+        .pmr-scroll{overflow:auto;border:1px solid #d5dfec;border-radius:8px}
+        .pmr-table{width:100%;border-collapse:collapse;min-width:900px;table-layout:fixed;font-size:11px}
+        .pmr-table th{background:#2863b4;color:#fff;text-align:left;font-weight:700;padding:9px 7px;white-space:normal;line-height:1.2;border:1px solid #1d559e}
+        .pmr-table th:nth-child(1){width:20%}.pmr-table th:nth-child(2){width:10%}.pmr-table th:nth-child(3){width:10%}.pmr-table th:nth-child(4){width:12%}.pmr-table th:nth-child(5){width:14%}.pmr-table th:nth-child(6){width:13%}.pmr-table th:nth-child(7){width:12%}.pmr-table th:nth-child(8){width:9%}
+        .pmr-table td{border:1px solid #dce4ee;padding:8px 7px;vertical-align:middle;overflow-wrap:anywhere}
+        .pmr-table tbody tr:nth-child(even){background:#f7f9fc}
+        .pmr-product-name{font-weight:650;color:#233f33;line-height:1.3}
+        .pmr-product-meta,.pmr-table small{display:block;color:#718093;font-size:10px;line-height:1.3;margin-top:3px}
+        .pmr-cell-stack{display:grid;gap:4px}
+        .pmr-edit-inline{display:flex;align-items:center;gap:4px}
+        .pmr-edit-inline input{width:72px;max-width:100%;border:1px solid #d4dfeb;border-radius:5px;padding:5px 6px;font-size:11px}
+        .pmr-row-save{width:100%;justify-content:center!important;padding:5px!important;font-size:10px!important;margin-top:2px}
         .pmr-actions{display:flex;gap:6px;justify-content:flex-end}
         .pmr-summary{display:grid;grid-template-columns:repeat(5,minmax(100px,1fr));gap:10px;margin:14px 0}
         .pmr-stat{border:1px solid #e8eee9;border-radius:9px;padding:12px;background:#fbfcfb}
@@ -198,24 +204,35 @@ export default function MarketplaceProductReport({ ctx }) {
         <div className="pmr-scroll">
           <table className="pmr-table">
             <thead><tr>
-              <th>Артикул / SKU</th><th>Товар</th><th>Площадка / магазин</th>
-              <th>Продано, шт.</th><th>Возврат, шт.</th><th>Чистая выручка</th>
-              <th>Себестоимость за шт.</th><th>Себестоимость</th>
-              <th>Налог, %</th><th>Налог</th><th>Комиссия</th><th>Логистика</th><th>Прибыль</th><th></th>
+              <th>Артикул / SKU и товар</th><th>Площадка / магазин</th><th>Продано / возврат</th>
+              <th>Чистая выручка</th><th>Себестоимость</th><th>Налог</th>
+              <th>Комиссия / логистика / реклама</th><th>Прибыль</th>
             </tr></thead>
             <tbody>{items.map((row) => {
               const key = keyOf(row), draft = drafts[key] || {};
               return <tr key={`${key}:${row.account_id}`}>
-                <td>{row.article || "—"}<br/><small>{row.sku}</small></td>
-                <td>{row.product_name}</td><td>{row.channel}<br/><small>{row.account_name}</small></td>
-                <td>{row.sold_units}</td><td>{row.returned_units}</td>
+                <td>
+                  <div className="pmr-product-name">{row.product_name}</div>
+                  <div className="pmr-product-meta">{row.article || row.sku}{row.article && row.sku && row.article !== row.sku ? ` · ${row.sku}` : ""}</div>
+                </td>
+                <td>{row.channel}<small>{row.account_name}</small></td>
+                <td><strong>{row.sold_units} / {row.returned_units}</strong><small>шт. продано / возврат</small></td>
                 <td>{moneyCell(row.net_revenue)}</td>
-                <td><input aria-label={`Себестоимость ${row.product_name}`} type="number" min="0" step="0.01" value={draft.unitCost ?? ""} disabled={!writable} onChange={(e) => edit(row,"unitCost",e.target.value)}/></td>
-                <td>{moneyCell(row.cogs)}</td>
-                <td><input aria-label={`Налог, процент ${row.product_name}`} type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} disabled={!writable} onChange={(e) => edit(row,"taxRate",e.target.value)}/></td>
-                <td>{moneyCell(row.tax)}</td><td>{moneyCell(row.commission)}</td><td>{moneyCell(row.logistics)}</td>
-                <td>{moneyCell(row.profit)}</td>
-                <td>{writable && <button className="secondary" type="button" disabled={saving[key]} onClick={() => save(row)}><Save size={14}/>{saving[key] ? "Сохраняем…" : "Сохранить"}</button>}</td>
+                <td><div className="pmr-cell-stack">
+                  <label className="pmr-edit-inline"><span>За шт.</span><input aria-label={`Себестоимость ${row.product_name}`} type="number" min="0" step="0.01" value={draft.unitCost ?? ""} disabled={!writable} onChange={(e) => edit(row,"unitCost",e.target.value)}/></label>
+                  <small>Итого: {moneyCell(row.cogs)}</small>
+                </div></td>
+                <td><div className="pmr-cell-stack">
+                  <label className="pmr-edit-inline"><input aria-label={`Налог, процент ${row.product_name}`} type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} disabled={!writable} onChange={(e) => edit(row,"taxRate",e.target.value)}/><span>%</span></label>
+                  <small>Итого: {moneyCell(row.tax)}</small>
+                  {writable && <button className="secondary pmr-row-save" type="button" disabled={saving[key]} onClick={() => save(row)}><Save size={12}/>{saving[key] ? "Сохраняем…" : "Сохранить"}</button>}
+                </div></td>
+                <td><div className="pmr-cell-stack">
+                  <span>Ком.: {moneyCell(row.commission)}</span>
+                  <span>Лог.: {moneyCell(row.logistics)}</span>
+                  <span>Реклама: {moneyCell(row.advertising)}</span>
+                </div></td>
+                <td><strong>{moneyCell(row.profit)}</strong></td>
               </tr>;
             })}</tbody>
           </table>
