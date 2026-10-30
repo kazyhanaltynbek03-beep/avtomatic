@@ -906,12 +906,18 @@ def _kaspi_commission_estimate(sales, expenses, api_bases, configured_rate=None)
 def _return_statement_mapping(headers):
     aliases = {
         "external_return_id": ("return_id", "id возврата", "номер возврата", "rrd_id", "rrdid", "идентификатор операции", "operation id"),
-        "external_order_id": ("order_id", "order", "заказ", "номер заказа", "номер исходного заказа", "srid"),
-        "financial_return_date": ("return date", "дата возврата", "дата операции", "rrd_date", "rrddate", "дата выплаты"),
-        "amount": ("refund", "refund amount", "сумма возврата", "сумма операции", "amount", "forpay"),
-        "sku": ("sku", "артикул продавца", "vendorcode", "vendor code", "артикул"),
+        "external_order_id": ("order_id", "order", "заказ", "номер заказа", "номер исходного заказа", "srid", "тапсырыс №"),
+
+        "financial_return_date": ("return date", "дата возврата", "дата возврата (алматы)", "дата операции", "rrd_date", "rrddate", "дата выплаты"),
+
+        "amount": ("refund", "refund amount", "сумма возврата", "сумма операции", "сатып алушыға қайтарылған сома, ₸", "amount", "forpay"),
+        "return_delivery_cost": ("kaspi ұстаған доставка = шығын, ₸", "расход доставки возврата", "return delivery cost"),
+
+        "sku": ("sku", "артикул продавца", "vendorcode", "vendor code", "артикул", "тауар коду"),
+
         "product_name": ("товар", "название товара", "наименование", "product name"),
-        "quantity": ("количество", "quantity", "шт."),
+        "quantity": ("количество", "quantity", "шт.", "дана"),
+
         "reason": ("причина", "причина возврата", "reason"),
         "currency": ("валюта", "currency"),
     }
@@ -931,6 +937,49 @@ def _return_statement_mapping(headers):
     return result
 
 
+
+
+def _parse_kaspi_cabinet_returns(raw, filename, channel):
+    """Read only the Kaspi cabinet's dedicated returns worksheet; omit buyer/city columns."""
+    if channel != "Kaspi" or not (filename or "").lower().endswith(".xlsx"):
+        return None
+    try:
+        from openpyxl import load_workbook
+        workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        target = next((name for name in workbook.sheetnames
+                       if re.sub(r"[^a-zа-яәіңғүұқөһ]", "", name.casefold()) in {"возвраттар", "возвраты", "returns"}), None)
+        if not target:
+            return None
+        sheet = workbook[target]
+        iterator = sheet.iter_rows(values_only=True)
+        first = next(iterator, None)
+        if not first:
+            raise ValueError("Лист возвратов пуст")
+        headers = [str(value).strip() if value is not None else "" for value in first]
+        mapping = _return_statement_mapping(headers)
+        required = ("external_order_id", "financial_return_date", "amount", "sku", "quantity")
+        if any(key not in mapping for key in required):
+            raise ValueError("На листе возвратов не найдены заказ, дата, сумма, SKU или количество")
+        selected_fields = (*required, "product_name", "return_delivery_cost")
+        selected_headers = [mapping[key] for key in selected_fields if mapping.get(key)]
+        rows = []
+        for source_row_number, values in enumerate(iterator, start=2):
+            raw_row = {headers[index]: values[index] for index in range(min(len(headers), len(values))) if headers[index]}
+            order_value = raw_row.get(mapping["external_order_id"])
+            if order_value is None or not str(order_value).strip() or not str(order_value).strip().isdigit():
+                # Exclude the workbook's БАРЛЫҒЫ row and explanatory notes.
+                continue
+            row = {header: raw_row.get(header) for header in selected_headers}
+            row["_source_row_number"] = source_row_number
+            rows.append(row)
+        workbook.close()
+        return selected_headers, rows, target
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Не удалось безопасно прочитать лист возвратов XLSX") from exc
+
+
 @app.post("/api/marketplace-returns/financial-statement/preview")
 async def preview_return_financial_statement(account_id: int = Form(...), file: UploadFile = File(...),
                                               u=Depends(current_user), db=Depends(get_db)):
@@ -944,6 +993,17 @@ async def preview_return_financial_statement(account_id: int = Form(...), file: 
     if account.settlement_currency != "KZT":
         raise HTTPException(422, "Импорт суммы пока поддерживает только выписку в KZT")
     raw = await file.read()
+    try:
+        cabinet = _parse_kaspi_cabinet_returns(raw, file.filename or "statement.xlsx", account.channel)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if cabinet:
+        headers, rows, sheet_name = cabinet
+        return {"headers": headers, "sample": rows[:8], "row_count": len(rows),
+                "suggested_mapping": _return_statement_mapping(headers),
+                "kaspi_cabinet_returns": True, "sheet_name": sheet_name,
+                "generated_return_id": True,
+                "note": "Найдена детализация возвратов из кабинета Kaspi. Будут импортированы фактические даты, суммы и расходы обратной доставки; город и другие лишние данные не читаются."}
     headers, rows = importing.parse_file(raw, file.filename or "statement.xlsx")
     return {"headers": headers, "sample": rows[:8], "row_count": len(rows),
             "suggested_mapping": _return_statement_mapping(headers),
@@ -967,12 +1027,22 @@ async def import_return_financial_statement(account_id: int = Form(...), mapping
         column_map = json.loads(mapping)
     except (ValueError, TypeError):
         raise HTTPException(422, "Настройте сопоставление колонок")
-    required_fields = {"external_return_id", "external_order_id", "financial_return_date", "amount"}
-    if not isinstance(column_map, dict) or not required_fields.issubset(column_map) or any(not column_map.get(k) for k in required_fields):
-        raise HTTPException(422, "Обязательны колонки: ID возврата, номер заказа, дата финансовой операции и сумма")
     raw = await file.read()
-    headers, source_rows = importing.parse_file(raw, file.filename or "statement.xlsx")
-    if any(value not in headers for value in column_map.values()):
+    try:
+        cabinet = _parse_kaspi_cabinet_returns(raw, file.filename or "statement.xlsx", account.channel)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    is_cabinet_returns = bool(cabinet)
+    required_fields = {"external_order_id", "financial_return_date", "amount"}
+    if not is_cabinet_returns:
+        required_fields.add("external_return_id")
+    if not isinstance(column_map, dict) or not required_fields.issubset(column_map) or any(not column_map.get(k) for k in required_fields):
+        raise HTTPException(422, "Укажите исходный заказ, дату фактического возврата и сумму; для обычной выписки также нужен ID операции")
+    if is_cabinet_returns:
+        headers, source_rows, sheet_name = cabinet
+    else:
+        headers, source_rows = importing.parse_file(raw, file.filename or "statement.xlsx")
+    if any(value not in headers for value in column_map.values() if value):
         raise HTTPException(422, "Сопоставление содержит колонку, которой нет в файле")
     from decimal import Decimal, InvalidOperation
     imported = updated = skipped = 0
@@ -981,6 +1051,12 @@ async def import_return_financial_statement(account_id: int = Form(...), mapping
         mapped = {field: source_row.get(column) for field, column in column_map.items()}
         operation_id = str(mapped.get("external_return_id") or "").strip()
         order_id = str(mapped.get("external_order_id") or "").strip()
+        if is_cabinet_returns and not operation_id:
+            row_key = "|".join(str(mapped.get(key) or "") for key in (
+                "external_order_id", "financial_return_date", "sku", "quantity", "amount"))
+            operation_id = "cabinet:" + hashlib.sha256(
+                f"{account.id}|{row_key}|{source_row.get('_source_row_number', row_number)}".encode("utf-8")
+            ).hexdigest()[:48]
         day = importing._date(mapped.get("financial_return_date"))
         try:
             operation_day = date.fromisoformat(str(day))
@@ -990,8 +1066,8 @@ async def import_return_financial_statement(account_id: int = Form(...), mapping
         except (ValueError, TypeError, InvalidOperation, OverflowError):
             errors.append({"row": row_number, "message": "Не удалось прочитать дату, сумму или количество"})
             continue
-        if not operation_id or not order_id or amount <= 0 or quantity <= 0:
-            errors.append({"row": row_number, "message": "Нужны ID возврата, номер заказа, положительная сумма и количество"})
+        if (not is_cabinet_returns and not operation_id) or not order_id or amount <= 0 or quantity <= 0:
+            errors.append({"row": row_number, "message": "Нужны исходный заказ, положительная сумма и количество; ID операции требуется только для обычной выписки"})
             continue
         row_currency = str(mapped.get("currency") or "KZT").strip().upper()
         if row_currency not in {"KZT", "₸", "ТЕНГЕ", "ТГ"}:
@@ -999,7 +1075,7 @@ async def import_return_financial_statement(account_id: int = Form(...), mapping
             continue
         sku = str(mapped.get("sku") or "").strip()
         product_name = str(mapped.get("product_name") or "").strip()
-        source = "financial_statement_import"
+        source = "kaspi_cabinet_returns" if is_cabinet_returns else "financial_statement_import"
         # Prefer linking to a single existing status observation by exact order
         # and SKU. Ambiguous or absent matches remain independent, auditable rows.
         existing = db.scalar(select(MarketplaceReturn).where(
@@ -1053,8 +1129,18 @@ async def import_return_financial_statement(account_id: int = Form(...), mapping
         existing.currency = "KZT"
         existing.financial_status = "confirmed"
         existing.last_synced_at = datetime.now(timezone.utc)
-        existing.raw_data = {**(existing.raw_data or {}), "financial_statement": True,
-                             "financial_statement_return_id": operation_id, "file_name": (file.filename or "")[:160]}
+        raw_extra = {"financial_statement": True, "financial_statement_return_id": operation_id,
+                     "file_name": (file.filename or "")[:160]}
+        if is_cabinet_returns:
+            try:
+                delivery_decimal = Decimal(str(mapped.get("return_delivery_cost") or "0").replace("\u00a0", "").replace("\u202f", "").replace(" ", "").replace(",", "."))
+                delivery_tiyn = int((abs(delivery_decimal) * 100).quantize(Decimal("1")))
+            except (InvalidOperation, ValueError, TypeError, OverflowError):
+                errors.append({"row": row_number, "message": "Некорректный расход обратной доставки"})
+                continue
+            raw_extra.update({"source_kind": "kaspi_cabinet_returns", "generated_return_id": True,
+                              "return_delivery_cost_tiyn": delivery_tiyn, "source_sheet": sheet_name})
+        existing.raw_data = {**(existing.raw_data or {}), **raw_extra}
     if errors and imported == 0 and updated == 0:
         raise HTTPException(422, {"message":"Ни одна строка не импортирована", "errors":errors[:20]})
     audit(db, u, "import_marketplace_returns", "marketplace_returns", details={
