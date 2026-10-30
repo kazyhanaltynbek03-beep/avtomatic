@@ -44,12 +44,9 @@ export const groups = [
       ["sales", "Все продажи", Receipt, "sales"],
       ["marketplace-returns", "Возвраты маркетплейсов", RotateCcw, "sales"],
       ["Kaspi", "Kaspi", Store, "sales"],
-      ["kaspi-preorder", "Kaspi: цены и предзаказ", Store, "catalog"],
       ["Wildberries", "Wildberries", Store, "sales"],
       ["Ozon", "Ozon", Store, "sales"],
       ["Offline", "Offline", Store, "sales"],
-      ["B2B", "B2B", BriefcaseBusiness, "sales"],
-      ["customers", "Клиенты B2B", Users, "sales"],
     ],
   ],
   [
