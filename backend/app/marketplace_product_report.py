@@ -256,6 +256,8 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         )
         row["marketplace_card_count"] = len(row["marketplace_cards"])
         row["marketplace_names"] = ", ".join(
+            sorted({f'{link["channel"]} · {link["store"]}' for link in row["marketplace_cards"]})
+        ) or ", ".join(
             f'{detail["channel"]} · {detail["account_name"]}'
             for detail in row["marketplace_breakdown"]
         )
