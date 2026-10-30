@@ -52,6 +52,7 @@ const flat = groups.flatMap((g) => g[1]);
 const channels = ["Kaspi", "Wildberries", "Ozon", "Offline", "B2B"];
 const KaspiPreorder = lazy(() => import("../features/KaspiPreorder"));
 const MarketplaceReturns = lazy(() => import("../features/MarketplaceReturns"));
+const MarketplaceProductReport = lazy(() => import("../features/MarketplaceProductReport"));
 const AI_JOB_TIMEOUT_MS = 15 * 60 * 1000;
 async function waitForAIJob(id, onUpdate = () => {}) {
   const deadline = Date.now() + AI_JOB_TIMEOUT_MS;
@@ -440,15 +441,15 @@ export default function App() {
               can(auth, page === "dashboard" ? "sales" : current[3], true) &&
               (!["companies", "users"].includes(page) ||
                 auth.user.role === "Owner") && (
-                <button
-                  className="primary"
-                  onClick={() =>
-                    setModal({ kind: page === "dashboard" ? "sales" : page })
-                  }
-                >
-                  <Plus size={18} />
-                  {page === "dashboard" ? "Новая продажа" : "Добавить"}
-                </button>
+                <>
+                  {page === "dashboard" && <button className="secondary" onClick={() => navigate("marketplace-product-report")}>
+                    <FileText size={17} /> Отчёт по товарам
+                  </button>}
+                  <button className="primary" onClick={() => setModal({ kind: page === "dashboard" ? "sales" : page })}>
+                    <Plus size={18} />
+                    {page === "dashboard" ? "Новая продажа" : "Добавить"}
+                  </button>
+                </>
               )}
           </div>
           <div className="toolbar">
@@ -469,6 +470,7 @@ export default function App() {
               "expenses",
               "cash",
               ...channels.slice(0, 3),
+              "marketplace-product-report",
             ].includes(page) && (
               <div className="periods">
                 {[
@@ -520,6 +522,7 @@ export default function App() {
               "expenses",
               "cash",
               ...channels.slice(0, 3),
+              "marketplace-product-report",
             ].includes(page) && (
               <div className="dates">
                 <label>
@@ -549,6 +552,8 @@ export default function App() {
             "accounting",
           ].includes(page) ? (
             <ReportPage page={page} ctx={ctx} />
+          ) : page === "marketplace-product-report" ? (
+            <Suspense fallback={<Spinner />}><MarketplaceProductReport ctx={ctx} /></Suspense>
           ) : page === "marketplace-returns" ? (
             <Suspense fallback={<Spinner />}><MarketplaceReturns ctx={ctx} /></Suspense>
           ) : page === "stock" ? (
