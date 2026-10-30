@@ -90,7 +90,8 @@ def test_product_initial_receipt_is_atomic_and_validates_cost_and_date(client):
     assert rollback.status_code == 422
     assert client.get("/api/data/products?search=INITIAL-RECEIPT-ROLLBACK").json()["total"] == 0
     with SessionLocal() as db:
-        assert db.scalar(select(Batch.id).where(Batch.product_id == product["id"] + 1)) is None
+        batch_count = db.scalar(select(func.count()).select_from(Batch).where(Batch.company_id == 1))
+        assert batch_count == 1
 
 
 def test_master_crud_and_audit(client):
