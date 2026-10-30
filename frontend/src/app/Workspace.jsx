@@ -964,7 +964,7 @@ function ReportPage({ page, ctx }) {
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
   const { data: dash, error: dashError } = useLoad(
-    usesDashboard && page !== "dashboard" ? summaryPath : null,
+    usesDashboard ? summaryPath : null,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
   );
