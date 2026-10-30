@@ -1359,13 +1359,17 @@ def marketplace_record_details(
                     quantity = None
                 elif metric == "settlement":
                     include = False
-            elif kind in {"delivery_charge", "return_delivery_charge"} and metric == "logistics":
+            elif kind == "delivery_charge" and metric == "logistics" and str(p.get("order_status") or "").upper() == "COMPLETED":
                 include = True
-                if kind == "return_delivery_charge":
-                    event_date = p.get("returned_date") or p.get("return_date")
-                else:
-                    event_date = p.get("completed_date") or p.get("completion_date")
-                operation = "Обратная доставка" if kind == "return_delivery_charge" else "Доставка"
+                event_date = p.get("completed_date") or p.get("completion_date")
+                operation = "Доставка выданного заказа"
+                amount = p.get("amount")
+                status = str(p.get("order_status") or status).upper()
+                quantity = None
+            elif kind == "return_delivery_charge" and metric == "logistics" and str(p.get("order_status") or "").upper() == "RETURNED":
+                include = True
+                event_date = p.get("returned_date") or p.get("return_date")
+                operation = "Обратная доставка"
                 amount = p.get("amount")
                 status = str(p.get("order_status") or status).upper()
                 quantity = None
