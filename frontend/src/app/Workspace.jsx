@@ -2242,7 +2242,7 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   const retryPending=summary.data?.source_quality?.progress?.some(p=>p.status==="retry");
   useEffect(()=>{
     if(channel!=="Kaspi"||!active||(summary.data?.sync_status!=="running"&&!retryPending)) return;
-    const timer=window.setInterval(()=>setRefresh(value=>value+1),5000);
+    const timer=window.setInterval(()=>setRefresh(value=>value+1),30000);
     return ()=>window.clearInterval(timer);
   },[channel,active,summary.data?.sync_status,retryPending]);
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
