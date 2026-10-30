@@ -52,14 +52,20 @@ KASPI_API_HISTORY_DAYS = max(1, int(os.getenv("KASPI_API_HISTORY_DAYS", "370")))
 CLAUDE_SKILL_INSTALL_LOCK = threading.Lock()
 
 
-def _kaspi_sync_paused_for(account_id):
+def _kaspi_sync_paused_for(account_id, start=None, end=None):
     raw = os.getenv("KASPI_PAUSE_ACCOUNT_IDS", "")
     try:
         paused_ids = {int(value.strip()) for value in raw.split(",") if value.strip()}
     except ValueError:
         logger.error("Invalid KASPI_PAUSE_ACCOUNT_IDS; pausing no accounts")
         return False
-    return int(account_id) in paused_ids
+    if int(account_id) not in paused_ids:
+        return False
+    # Keep the historical archive paused while allowing the small daily refresh.
+    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
+    if start == today and end == today:
+        return False
+    return True
 
 
 def _pause_kaspi_job(db, account):
@@ -4458,7 +4464,7 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                 "known_order_ids":known_order_ids}, separators=(",", ":"))
             pages = records = inserted_total = updated_total = 0
             while cursor:
-                if _kaspi_sync_paused_for(account_id):
+                if _kaspi_sync_paused_for(account_id, start, end):
                     db.refresh(acc)
                     _pause_kaspi_job(db, acc)
                     db.commit()
@@ -4614,12 +4620,6 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     scope(u, acc.company_id)
     if acc.channel != "Kaspi" or acc.mode != "api" or not acc.active:
         raise HTTPException(409, "Активная API-интеграция Kaspi не найдена")
-    if _kaspi_sync_paused_for(acc.id):
-        _pause_kaspi_job(db, acc)
-        db.commit()
-        return {"ok":True,"status":"paused","account_id":acc.id,
-                "saved_cursor":True,"start":str(start),"end":str(end),
-                "message":"Фоновая загрузка остановлена; уже сохранённые данные и курсор сохранены."}
     if end < start or (end - start).days > 366:
         raise HTTPException(422, "Укажите корректный период не длиннее 367 дней")
     sync_is_running = sync_status_for_display(acc)[0] == "running"
@@ -4636,6 +4636,12 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     if start > local_today:
         raise HTTPException(422, "Начало периода не может быть в будущем")
     bounded_end = min(end, local_today)
+    if _kaspi_sync_paused_for(acc.id, start, bounded_end):
+        _pause_kaspi_job(db, acc)
+        db.commit()
+        return {"ok":True,"status":"paused","account_id":acc.id,
+                "saved_cursor":True,"start":str(start),"end":str(bounded_end),
+                "message":"Архивная загрузка остановлена; уже сохранённые данные и курсор сохранены."}
     if report_mode == "issued" and bounded_end < _kaspi_issued_scan_start(local_today):
         raise HTTPException(422, "Этот период старше настроенного окна загрузки; увеличьте глубину истории")
     period_key = _kaspi_period_sync_key(report_mode, start, bounded_end)
