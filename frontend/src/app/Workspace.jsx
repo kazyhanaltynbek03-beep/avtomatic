@@ -981,7 +981,7 @@ function ReportPage({ page, ctx }) {
   const dashboardKaspiSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
   const dashboardWbSummary = useLoad(usesDashboard ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:usesDashboard ? 900 : 0});
   const dashboardKaspiSyncRef = useRef(new Set());
-  const dashboardAccounts = ctx.refs.accounts || [];
+  const dashboardAccounts = ctx.refs.accounts;
   const dashboardCompany = ctx.company;
   const dashboardStart = ctx.start;
   const dashboardEnd = ctx.end;
@@ -990,7 +990,7 @@ function ReportPage({ page, ctx }) {
   useEffect(() => {
     if (page !== "dashboard" || !loadedReport || dashboardKaspiSummary.loading ||
         !dashboardKaspiSummary.data || !dashboardCanSyncKaspi) return;
-    const accounts = dashboardAccounts.filter(a =>
+    const accounts = (dashboardAccounts || []).filter(a =>
       a.active !== false && a.channel === "Kaspi" &&
       (!dashboardCompany || String(a.company_id) === String(dashboardCompany))
     );
