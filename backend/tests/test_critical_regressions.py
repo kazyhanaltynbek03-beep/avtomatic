@@ -27,7 +27,8 @@ def test_stock_days_and_fx_purchase_cost_are_deterministic(client):
 
 
 def test_audit_keeps_before_and_after_values(client):
-    item = client.post("/api/data/products", json={"sku": "AUDIT", "name": "Before"}).json()
+    item = client.post("/api/data/products", json={"sku": "AUDIT", "name": "Before",
+        "specifications": {"_qor_company_ids": [1]}}).json()
     changed = client.put("/api/data/products/" + str(item["id"]), json={"version": item["version"], "sku": "AUDIT", "name": "After"})
     assert changed.status_code == 200, changed.text
     rows = client.get("/api/data/audit").json()["items"]

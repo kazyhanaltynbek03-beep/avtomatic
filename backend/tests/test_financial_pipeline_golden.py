@@ -15,7 +15,7 @@ from app import finance as f, importing, main
 from app import schemas as s
 from app.ai import _agent_tool_data
 from app.db import Base, SessionLocal, engine
-from app.models import Account, Company, Customer, Product, Return, Sale, User
+from app.models import Account, Company, Customer, Product, ProductCompany, Return, Sale, User
 
 
 START, END = date(2026, 10, 1), date(2026, 10, 31)
@@ -56,6 +56,7 @@ def ledger():
         Account(id=5, company_id=1, name="B2B", channel="B2B"),
         Customer(id=1, company_id=1, name="Golden Buyer"),
     ])
+    db.add(ProductCompany(product_id=1, company_id=1))
     db.commit()
     user = db.get(User, 1)
     # Source-neutral opening stock: marketplace APIs never invent supplier cost.

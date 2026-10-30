@@ -28,6 +28,11 @@ def test_auth_csrf_logout(client):
 
 
 def test_rbac_company_scope(client):
+    from app.db import SessionLocal
+    from app.models import ProductCompany
+    with SessionLocal() as db:
+        db.add(ProductCompany(product_id=1, company_id=2))
+        db.commit()
     buy(client, company=1)
     buy(client, ref="other", company=2)
     switch(client, "warehouse@test.kz")
@@ -46,7 +51,8 @@ def test_rbac_company_scope(client):
 
 def test_master_crud_and_audit(client):
     row = client.post(
-        "/api/data/products", json={"sku": "NEW", "name": "New product", "price": 100}
+        "/api/data/products", json={"sku": "NEW", "name": "New product", "price": 100,
+                                     "specifications": {"_qor_company_ids": [1]}}
     ).json()
     assert (
         client.put(
@@ -74,6 +80,7 @@ def test_import_preview_no_writes_commit_and_duplicates(client):
         "kind": "products",
         "rows": [{"code": "IMP", "title": "Imported", "price": "12.34"}],
         "mapping": {"sku": "code", "name": "title", "price": "price"},
+        "defaults": {"company_id": 1},
     }
     p = client.post("/api/import/preview", json=payload)
     assert p.status_code == 200, p.text
@@ -459,7 +466,8 @@ def test_marketplace_sync_not_available_via_legacy_jobs(client):
 
 
 def test_formula_injection_export(client):
-    client.post("/api/data/products", json={"sku": "=1+1", "name": '=HYPERLINK("bad")'})
+    client.post("/api/data/products", json={"sku": "=1+1", "name": '=HYPERLINK("bad")',
+                                             "specifications": {"_qor_company_ids": [1]}})
     res = client.get("/api/export/products?format=csv")
     assert "'=1+1" in res.text
 

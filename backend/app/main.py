@@ -84,7 +84,7 @@ def _pause_kaspi_job(db, account):
 
 def sync_status_for_display(account, at=None):
     """Hide abandoned running states after the last persisted sync heartbeat."""
-    if account.channel == "Kaspi" and _kaspi_sync_paused_for(account.id):
+    if getattr(account, "channel", None) == "Kaspi" and _kaspi_sync_paused_for(getattr(account, "id", None)):
         return "paused", "Фоновый обход остановлен; сохранённый курсор оставлен."
     status = account.sync_status or "never"
     error = account.sync_error or ""
