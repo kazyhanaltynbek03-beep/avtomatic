@@ -1103,7 +1103,7 @@ function ReportPage({ page, ctx }) {
       </div>
     );
   }
-  if ((page === "analytics" || (!usesDashboard && page !== "forecast")) && reportLoading) return <Spinner />;
+  if ((page === "analytics" && !loadedReport && !reportError) || ((page === "analytics" || (!usesDashboard && page !== "forecast")) && reportLoading)) return <Spinner />;
   if ((page === "analytics" || (!usesDashboard && page !== "forecast")) && reportError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
   if (page === "alerts") {
     if (systemAlertsLoading && !systemAlerts) return <div className="panel" role="status"><Spinner/><p>Загружаем проверки рабочего пространства…</p></div>;
