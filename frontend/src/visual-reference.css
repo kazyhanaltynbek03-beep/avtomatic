@@ -477,3 +477,36 @@ html,body{background:#f5f6f6!important;color:#25292b!important}
 .login-story{background:#26292b!important}
 .login-story .eyebrow{color:#e9878e!important}
 @media(max-width:960px){.mobile-dock{grid-template-columns:repeat(4,minmax(0,1fr))!important}}
+
+/* Accessible, single-line accordion headers for the sidebar on Safari/iOS and desktop. */
+.app>aside nav .nav-group>summary{
+  display:flex!important;align-items:center!important;justify-content:space-between!important;
+  min-height:44px!important;margin:4px 2px!important;padding:9px 12px!important;
+  border:1px solid transparent!important;border-radius:10px!important;
+  list-style:none!important;cursor:pointer!important;user-select:none!important;
+  color:#4b5559!important
+}
+.app>aside nav .nav-group>summary::-webkit-details-marker{display:none!important}
+.app>aside nav .nav-group>summary::marker{content:""!important;display:none!important}
+.app>aside nav .nav-group>summary h4{
+  display:block!important;flex:1!important;min-width:0!important;margin:0!important;padding:0!important;
+  color:inherit!important;font-size:12px!important;font-weight:700!important;letter-spacing:.02em!important;
+  line-height:1.35!important;text-transform:none!important
+}
+.app>aside nav .nav-group>summary::after{
+  content:""!important;display:block!important;flex:0 0 7px!important;width:7px!important;height:7px!important;
+  margin-left:12px!important;border:solid #91999c!important;border-width:0 2px 2px 0!important;
+  transform:rotate(-45deg)!important;transition:transform .16s ease,border-color .16s ease!important
+}
+.app>aside nav .nav-group[open]>summary{background:#f9e9eb!important;border-color:#f5d9dc!important;color:#b92935!important}
+.app>aside nav .nav-group[open]>summary::after{border-color:#c52d39!important;transform:rotate(45deg)!important}
+.app>aside nav .nav-group>summary:hover{background:#f5f6f6!important;border-color:#eceeef!important}
+.app>aside nav .nav-group[open]>summary:hover{background:#faedef!important}
+.app>aside .workspace{min-height:62px!important;padding:10px!important;border:1px solid #e5e7e8!important;border-radius:14px!important;background:#f5f6f6!important}
+.app>aside .workspace-avatar{background:#fce8e9!important;color:#c52d39!important}
+.app>aside .workspace strong,.app>aside .profile strong{color:#303639!important;font-weight:700!important}
+.app>aside .workspace small,.app>aside .profile small{color:#727b7e!important}
+@media(max-width:960px){
+ .app>aside nav .nav-group>summary{min-height:46px!important;margin:4px 0!important;padding:10px 12px!important}
+ .app>aside .workspace{margin:10px 0!important}
+}
