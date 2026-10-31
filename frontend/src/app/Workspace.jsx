@@ -1671,6 +1671,11 @@ function ReportPage({ page, ctx }) {
 function ReportDetails({ ctx, detail, onClose, activeOnly = false }) {
   const path = "/report/details?start=" + ctx.start + "&end=" + ctx.end + "&metric=" + detail.metric + (ctx.company ? "&company_id=" + ctx.company : "") + (detail.account_id ? "&account_id=" + detail.account_id : "") + (activeOnly ? "&active_only=true" : "");
   const { data, error, loading } = useLoad(path, ctx.refresh);
+  const sourceLabel = (reference) => {
+    const value = String(reference || "");
+    const channel = /^(Kaspi|Wildberries|Ozon):/i.exec(value)?.[1];
+    return channel ? `Операция ${channel}` : value || "—";
+  };
   return (
     <div className="modal-backdrop report-detail-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <section className="modal report-detail-modal" role="dialog" aria-modal="true" aria-label={detail.title}>
@@ -1685,7 +1690,19 @@ function ReportDetails({ ctx, detail, onClose, activeOnly = false }) {
             <div className={data.difference === 0 ? "reconcile-ok" : "reconcile-bad"}><span>Расхождение</span><strong>{money(data.difference)}</strong></div>
           </div>
           {data.difference !== 0 && <div className="error-box">Сверка не сошлась. Такой отчёт нельзя считать подтверждённым.</div>}
-          <div className="report-detail-table"><Table rows={data.rows} cols={["date","type","reference","description","amount"]} refs={ctx.refs}/></div>
+          <div className="report-detail-table report-drill-table-wrap">
+            {data.rows?.length ? <table className="data-table report-drill-table">
+              <thead><tr><th>Дата</th><th>Операция</th><th>Название товара</th><th>Артикул</th><th>Магазин / комментарий</th><th>Документ</th><th>Сумма</th></tr></thead>
+              <tbody>{data.rows.map((row, index) => <tr key={row.source_id || `${row.reference}-${index}`}>
+                <td data-label="Дата">{row.date || "—"}</td><td data-label="Операция">{row.type || "—"}</td>
+                <td data-label="Название товара"><span className="report-item-name">{row.product_name || (row.type === "Формула" ? "Итог расчёта" : "Общий расход / товар не указан")}</span>{row.sku && <small className="report-item-sku">SKU · {row.sku}</small>}</td>
+                <td data-label="Артикул">{row.article || "—"}</td>
+                <td data-label="Магазин / комментарий"><span>{row.account_name || "—"}</span>{row.description && row.description !== row.account_name && <small className="report-item-sku">{row.description}</small>}</td>
+                <td data-label="Документ"><span>{sourceLabel(row.reference)}</span>{row.reference && /^(Kaspi|Wildberries|Ozon):/i.test(row.reference) && <details className="report-source-id"><summary>Показать ID</summary><code>{row.reference}</code></details>}</td>
+                <td data-label="Сумма" className="report-drill-amount">{money(row.amount)}</td>
+              </tr>)}</tbody>
+            </table> : <Empty text="За выбранный период операций нет."/>}
+          </div>
           <p className="panel-note">Источник — проведённые записи ERP. AI в расчёте этой суммы не участвует.</p>
         </>}
       </section>

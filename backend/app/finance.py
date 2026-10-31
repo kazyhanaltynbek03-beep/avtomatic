@@ -1416,23 +1416,33 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
     returns = [ret for ret in scoped(Return) if ret.sale_id in all_sales]
     expenses = [expense for expense in scoped(Expense) if expense.account_id is None or expense.account_id in account_ids]
 
-    def item(d, typ, ref, desc, amount, source_id=None):
-        return {"date": str(d) if d else None, "type": typ, "reference": ref or "—", "description": desc or "", "amount": amount, "source_id": source_id}
+    product_cache = {}
+
+    def item(d, typ, ref, desc, amount, source_id=None, product_id=None, account_id=None):
+        product = None
+        if product_id is not None:
+            if product_id not in product_cache:
+                product_cache[product_id] = db.get(Product, product_id)
+            product = product_cache[product_id]
+        account = accounts.get(account_id) if account_id is not None else None
+        return {"date": str(d) if d else None, "type": typ, "reference": ref or "—", "description": desc or "", "amount": amount, "source_id": source_id,
+                "product_id": product_id, "product_name": product.name if product else "", "article": product.article if product else "",
+                "sku": product.sku if product else "", "account_name": account.name if account else ""}
 
     rows = []
     if metric == "revenue":
-        rows += [item(s.date, "Продажа", s.reference, accounts.get(s.account_id).name if accounts.get(s.account_id) else "", s.revenue, s.id) for s in sales]
-        rows += [item(r.date, "Возврат", r.reference, "Уменьшение выручки", -r.revenue, r.id) for r in returns]
+        rows += [item(s.date, "Продажа", s.reference, accounts.get(s.account_id).name if accounts.get(s.account_id) else "", s.revenue, s.id, s.product_id, s.account_id) for s in sales]
+        rows += [item(r.date, "Возврат", r.reference, "Уменьшение выручки", -r.revenue, r.id, all_sales[r.sale_id].product_id, all_sales[r.sale_id].account_id) for r in returns]
     elif metric == "cogs":
-        rows += [item(s.date, "Продажа", s.reference, "Себестоимость проданного", -s.cogs, s.id) for s in sales]
-        rows += [item(r.date, "Возврат", r.reference, "Восстановление себестоимости", r.cogs, r.id) for r in returns if r.inventory_status == "restocked"]
+        rows += [item(s.date, "Продажа", s.reference, "Себестоимость проданного", -s.cogs, s.id, s.product_id, s.account_id) for s in sales]
+        rows += [item(r.date, "Возврат", r.reference, "Восстановление себестоимости", r.cogs, r.id, all_sales[r.sale_id].product_id, all_sales[r.sale_id].account_id) for r in returns if r.inventory_status == "restocked"]
     elif metric in {"commission", "logistics"}:
         attr = metric
         title = "Комиссия" if metric == "commission" else "Логистика"
-        rows = [item(s.date, title, s.reference, accounts.get(s.account_id).name if accounts.get(s.account_id) else "", -getattr(s, attr), s.id) for s in sales if getattr(s, attr)]
+        rows = [item(s.date, title, s.reference, accounts.get(s.account_id).name if accounts.get(s.account_id) else "", -getattr(s, attr), s.id, s.product_id, s.account_id) for s in sales if getattr(s, attr)]
         categories = {"Marketplace commission", "Marketplace commission VAT"} if metric == "commission" else {"Marketplace logistics"}
         rows += [item(e.date, "Корректировка расхода" if e.amount < 0 else "Расход", e.reference,
-                      e.description or e.category, -e.amount, e.id) for e in expenses if e.category in categories]
+                      e.description or e.category, -e.amount, e.id, account_id=e.account_id) for e in expenses if e.category in categories]
         if metric == "commission":
             estimates, rate, _suppressed = kaspi_commission_estimates(
                 db, user, start, end, company_id, account_id, sales, expenses, accounts
@@ -1444,7 +1454,7 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
                 for (aid, day), amount in estimates.items()
             ]
     elif metric == "advertising":
-        rows += [item(s.date, "Реклама продажи", s.reference, accounts.get(s.account_id).name if accounts.get(s.account_id) else "", -s.advertising, s.id) for s in sales if s.advertising]
+        rows += [item(s.date, "Реклама продажи", s.reference, accounts.get(s.account_id).name if accounts.get(s.account_id) else "", -s.advertising, s.id, s.product_id, s.account_id) for s in sales if s.advertising]
         rows += [item(e.date, "Расход", e.reference, e.description or e.category, -e.amount, e.id) for e in expenses if e.category == "Реклама"]
     elif metric == "expenses":
         rows = [item(e.date, "Корректировка расхода" if e.amount < 0 else "Расход", e.reference, e.description or e.category, -e.amount, e.id) for e in expenses if e.category not in {"Реклама","Marketplace commission","Marketplace commission VAT","Marketplace logistics"}]
@@ -1455,18 +1465,18 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
         rows = [item(None, "Формула", "—", name, amount) for name, amount in bridge]
     elif metric in {"cash", "cash_flow"}:
         cash_rows = scoped(CashEntry, metric == "cash_flow")
-        rows = [item(c.date, c.category or "Деньги", c.reference, c.description, c.amount, c.id) for c in cash_rows]
+        rows = [item(c.date, c.category or "Деньги", c.reference, c.description, c.amount, c.id, all_sales[c.sale_id].product_id if c.sale_id in all_sales else None, all_sales[c.sale_id].account_id if c.sale_id in all_sales else None) for c in cash_rows]
     elif metric == "stock_value":
         movements = scoped(Movement, False)
         catalog = {p.id: p for p in db.scalars(select(Product))}
         by_product = defaultdict(int)
         for m in movements:
             by_product[m.product_id] += m.cost
-        rows = [item(end, "Остаток", catalog[pid].sku if pid in catalog else str(pid), catalog[pid].name if pid in catalog else "", value, pid) for pid, value in by_product.items() if value]
+        rows = [item(end, "Остаток", catalog[pid].sku if pid in catalog else str(pid), catalog[pid].name if pid in catalog else "", value, pid, pid) for pid, value in by_product.items() if value]
     elif metric in {"b2b_debt", "refunds_payable"}:
         # report() already applies returns and payments as of the report date.
         if metric == "b2b_debt":
-            rows = [item(x.get("due_date"), "Дебиторка", x["reference"], x["channel"], x["due"], x["sale_id"]) for x in summary["receivables"] if x["channel"] == "B2B"]
+            rows = [item(x.get("due_date"), "Дебиторка", x["reference"], x["channel"], x["due"], x["sale_id"], all_sales[x["sale_id"]].product_id if x["sale_id"] in all_sales else None, all_sales[x["sale_id"]].account_id if x["sale_id"] in all_sales else None) for x in summary["receivables"] if x["channel"] == "B2B"]
         else:
             returns_all = scoped(Return, False)
             cash_all = scoped(CashEntry, False)
@@ -1477,7 +1487,7 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
             for s in all_sales.values():
                 if account_id and s.account_id != account_id: continue
                 amount = max(0, paid[s.id] - (s.revenue - returned[s.id]))
-                if amount: rows.append(item(end, "К возврату", s.reference, "Получено больше чистой суммы продажи", amount, s.id))
+                if amount: rows.append(item(end, "К возврату", s.reference, "Получено больше чистой суммы продажи", amount, s.id, s.product_id, s.account_id))
 
     expected = summary[metric]
     if metric in {"cogs", "commission", "logistics", "advertising", "expenses"}:
