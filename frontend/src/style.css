@@ -2856,3 +2856,13 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
   .marketplace-client-report>form.row-actions>label{width:100%;min-width:0}
   .marketplace-client-report>form.row-actions>button{grid-column:1/-1;width:100%;min-height:46px;justify-content:center}
 }
+
+/* Keep AI prompt presets out of the main conversation until requested. */
+.ai-workflow-details{margin:16px 0;border:1px solid var(--qor-line,#dce7e1);border-radius:12px;background:#fff}
+.ai-workflow-details>summary{padding:12px 15px;color:#526b5e;font-size:13px;font-weight:700;cursor:pointer;list-style-position:inside}
+.ai-workflow-details[open]>summary{border-bottom:1px solid var(--qor-line,#dce7e1)}
+.ai-workflow-details .ai-workflows{padding:12px}
+@media(max-width:700px){.ai-workflow-details .ai-workflows{grid-template-columns:1fr}}
+.inbound-shipment-fields{margin-top:12px;padding:12px;border:1px solid #e0e9e3;border-radius:12px;background:#f9fbf9}
+.catalog-inbound-status{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:10px 0;padding:9px 11px;border:1px solid #f0dfbb;border-radius:10px;background:#fff9ed;color:#725629;font-size:12px}
+.catalog-inbound-status small{width:100%;color:#8a7958}
