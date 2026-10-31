@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
 
 from fastapi import HTTPException
@@ -265,7 +265,26 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         row["account_name"] = ", ".join(sorted({detail["account_name"] for detail in row["marketplace_breakdown"]}))
     consolidated = list(combined.values())
     consolidated.sort(key=lambda row: row["product_name"].casefold())
-    return {"start": str(start), "end": str(end), "items": consolidated, "total": len(consolidated)}
+    weekly = defaultdict(lambda: {"sold_units": 0, "sold_revenue": 0, "returned_units": 0, "returned_revenue": 0, "commission": 0, "logistics": 0, "advertising": 0})
+    for sale in sales:
+        week_start = sale.date - timedelta(days=sale.date.weekday())
+        bucket = weekly[week_start]
+        bucket["sold_units"] += int(sale.quantity or 0)
+        bucket["sold_revenue"] += int(sale.revenue or 0)
+        bucket["commission"] += int(sale.commission or 0)
+        bucket["logistics"] += int(sale.logistics or 0)
+        bucket["advertising"] += int(sale.advertising or 0)
+    for ret in returns:
+        week_start = ret.date - timedelta(days=ret.date.weekday())
+        bucket = weekly[week_start]
+        bucket["returned_units"] += int(ret.quantity or 0)
+        bucket["returned_revenue"] += int(ret.revenue or 0)
+    weekly_summary = [
+        {"start": str(max(start, week_start)), "end": str(min(end, week_start + timedelta(days=6))),
+         **values, "net_revenue": values["sold_revenue"] - values["returned_revenue"]}
+        for week_start, values in sorted(weekly.items())
+    ]
+    return {"start": str(start), "end": str(end), "items": consolidated, "total": len(consolidated), "weekly_summary": weekly_summary}
 
 
 def save_setting(db, user, company_id, product_id, unit_cost_tenge, tax_rate_percent):
@@ -369,6 +388,28 @@ def create_xlsx(report):
     detail.auto_filter.ref = detail.dimensions
     for column, width in enumerate([18, 36, 18, 24, 14, 16, 18, 16, 16, 16], 1):
         detail.column_dimensions[chr(64 + column)].width = width
+    settings = book.create_sheet("Баптаулар")
+    settings.append(["Настройки SKU", "Себестоимость за шт., ₸", "Налог, %"])
+    for cell in settings[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="176A52")
+    for row in report["items"]:
+        settings.append([row["sku"] or row["article"], row.get("unit_cost_tenge"), row.get("tax_rate_percent")])
+    settings.freeze_panes = "A2"
+    settings.auto_filter.ref = settings.dimensions
+    for col, width in enumerate([28, 24, 16], 1):
+        settings.column_dimensions[chr(64 + col)].width = width
+    weeks = book.create_sheet("По неделям")
+    weeks.append(["Период", "Продано, шт.", "Возвраты, шт.", "Выручка, ₸", "Возвраты, ₸", "Чистая выручка, ₸", "Комиссия, ₸", "Логистика, ₸", "Реклама, ₸"])
+    for cell in weeks[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="176A52")
+    for row in report.get("weekly_summary", []):
+        weeks.append([f'{row["start"]} — {row["end"]}', row["sold_units"], row["returned_units"], round(row["sold_revenue"]/100, 2), round(row["returned_revenue"]/100, 2), round(row["net_revenue"]/100, 2), round(row["commission"]/100, 2), round(row["logistics"]/100, 2), round(row["advertising"]/100, 2)])
+    weeks.freeze_panes = "A2"
+    weeks.auto_filter.ref = weeks.dimensions
+    for col, width in enumerate([25, 16, 16, 18, 18, 22, 18, 18, 16], 1):
+        weeks.column_dimensions[chr(64 + col)].width = width
     output = BytesIO()
     book.save(output)
     return output.getvalue()
