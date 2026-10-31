@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .db import get_db, SessionLocal
 from .models import *
 from .security import *
-from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns, marketplace_matching, marketplace_product_report
+from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns, marketplace_matching, marketplace_product_report, daily_reports
 from .connectors import AccessRequired, connector, load_saved_credentials
 from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
@@ -238,6 +238,16 @@ def start_wb_weekly_scheduler():
     # concurrent checks safe across Render workers and repeated deployments.
     thread = threading.Thread(target=_wb_weekly_loop, name="wb-weekly-reports", daemon=True)
     thread.start()
+
+
+@app.post("/api/internal/daily-report/run")
+def run_scheduled_daily_report(request: Request):
+    """Private endpoint for the Render Cron service; never expose a token in the URL."""
+    expected = os.getenv("QOR_DAILY_REPORT_TRIGGER_TOKEN", "").strip()
+    supplied = request.headers.get("authorization", "")
+    if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
+        raise HTTPException(404, "Not found")
+    return daily_reports.run_due_daily_reports()
 
 
 @app.middleware("http")
@@ -3975,6 +3985,63 @@ def settings(u=Depends(current_user), db=Depends(get_db)):
         "claude_skills": ai.claude_skills_status(),
         "demo": os.getenv("DEMO_MODE", "false").strip().lower() == "true",
     }
+
+
+@app.get("/api/automation/daily-report")
+def daily_report_settings_get(u=Depends(current_user), db=Depends(get_db)):
+    require(u, "settings")
+    obj = db.get(Setting, 1)
+    recent = db.scalars(select(DailyReportDelivery).order_by(DailyReportDelivery.created_at.desc()).limit(10)).all()
+    return {
+        "enabled": bool(obj and obj.daily_report_enabled),
+        "time": getattr(obj, "daily_report_time", "09:00"),
+        "recipient": getattr(obj, "daily_report_recipient", ""),
+        "consent": bool(getattr(obj, "daily_report_consent", False)),
+        "ai_summary": bool(getattr(obj, "daily_report_ai_summary", False)),
+        "provider": daily_reports.provider_status(),
+        "scheduler": "in_app",
+        "recent": [{"date": str(x.report_date), "status": x.status, "error": x.error,
+                    "sent_at": x.sent_at.isoformat() if x.sent_at else None}
+                   for x in recent],
+    }
+
+
+@app.put("/api/automation/daily-report")
+def daily_report_settings_save(p: dict, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "settings", True)
+    allowed = {"enabled", "time", "recipient", "consent", "ai_summary"}
+    if set(p) - allowed:
+        raise HTTPException(422, "Недопустимые поля настройки отчётов")
+    obj = db.get(Setting, 1)
+    if obj is None:
+        raise HTTPException(503, "Настройки рабочего пространства не инициализированы")
+    enabled = bool(p.get("enabled", obj.daily_report_enabled))
+    consent = bool(p.get("consent", obj.daily_report_consent))
+    recipient = str(p.get("recipient", obj.daily_report_recipient) or "").strip()
+    schedule = str(p.get("time", obj.daily_report_time or "09:00")).strip()
+    try:
+        datetime.strptime(schedule, "%H:%M")
+    except ValueError:
+        raise HTTPException(422, "Укажите время в формате ЧЧ:ММ")
+    if recipient and not daily_reports.PHONE_RE.fullmatch(recipient):
+        raise HTTPException(422, "Введите номер получателя в международном формате, например +77001234567")
+    if enabled and (not consent or not recipient):
+        raise HTTPException(422, "Для включения укажите номер и подтвердите согласие получателя")
+    if enabled and not daily_reports.provider_status()["configured"]:
+        raise HTTPException(409, "Перед включением добавьте настройки WhatsApp Business API в Render")
+    obj.daily_report_enabled = enabled
+    obj.daily_report_time = schedule
+    obj.daily_report_recipient = recipient
+    obj.daily_report_consent = consent
+    obj.daily_report_ai_summary = bool(p.get("ai_summary", obj.daily_report_ai_summary))
+    audit(db, u, "update", "daily_report_settings", 1,
+          {"enabled": enabled, "time": schedule, "recipient_configured": bool(recipient),
+           "consent": consent, "ai_summary": obj.daily_report_ai_summary})
+    db.commit()
+    return {"ok": True, "enabled": enabled, "time": schedule,
+            "recipient": recipient, "consent": consent,
+            "ai_summary": obj.daily_report_ai_summary,
+            "provider": daily_reports.provider_status()}
 
 
 @app.post("/api/ai/skills/install")
