@@ -3,11 +3,11 @@ from datetime import date, timedelta
 from io import BytesIO
 
 from fastapi import HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from .models import Account, Batch, MarketplaceProductMapping, MarketplaceProductReportSetting, Product, ProductCompany, Return, Sale
+from .models import Account, Batch, MarketplaceProductMapping, MarketplaceProductReportSetting, Product, ProductCompany, Return, Sale, Expense
 from .security import require, scope
 
 
@@ -265,6 +265,45 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         row["account_name"] = ", ".join(sorted({detail["account_name"] for detail in row["marketplace_breakdown"]}))
     consolidated = list(combined.values())
     consolidated.sort(key=lambda row: row["product_name"].casefold())
+    expense_rows = list(db.scalars(
+        select(Expense).where(
+            Expense.company_id.in_(company_ids or {-1}),
+            Expense.date >= start,
+            Expense.date <= end,
+            or_(Expense.account_id.is_(None), Expense.account_id.in_(account_ids or {-1})),
+        ).order_by(Expense.date, Expense.id)
+    ))
+    operations = []
+    for sale in sales:
+        product = products.get(sale.product_id)
+        account = account_map.get(sale.account_id)
+        operations.append({
+            "date": str(sale.date), "type": "Продажа", "reference": sale.reference or "",
+            "sku": product.sku if product else "", "article": product.article if product else "",
+            "product_name": product.name if product else "", "channel": account.channel if account else "",
+            "account_name": account.name if account else "", "quantity": int(sale.quantity or 0),
+            "revenue": int(sale.revenue or 0), "commission": int(sale.commission or 0),
+            "logistics": int(sale.logistics or 0), "advertising": int(sale.advertising or 0),
+        })
+    for ret in returns:
+        sale = return_sales.get(ret.id)
+        if not sale:
+            continue
+        product = products.get(sale.product_id)
+        account = account_map.get(sale.account_id)
+        operations.append({
+            "date": str(ret.date), "type": "Возврат", "reference": ret.reference or sale.reference or "",
+            "sku": product.sku if product else "", "article": product.article if product else "",
+            "product_name": product.name if product else "", "channel": account.channel if account else "",
+            "account_name": account.name if account else "", "quantity": int(ret.quantity or 0),
+            "revenue": -int(ret.revenue or 0), "commission": 0, "logistics": 0, "advertising": 0,
+        })
+    operations.sort(key=lambda row: (row["date"], row["reference"], row["type"]))
+    expenses = [{
+        "date": str(row.date), "reference": row.reference or "", "category": row.category or "",
+        "description": row.description or "", "amount": int(row.amount or 0),
+        "account_name": account_map[row.account_id].name if row.account_id in account_map else "",
+    } for row in expense_rows]
     weekly = defaultdict(lambda: {"sold_units": 0, "sold_revenue": 0, "returned_units": 0, "returned_revenue": 0, "commission": 0, "logistics": 0, "advertising": 0})
     for sale in sales:
         week_start = sale.date - timedelta(days=sale.date.weekday())
@@ -284,7 +323,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
          **values, "net_revenue": values["sold_revenue"] - values["returned_revenue"]}
         for week_start, values in sorted(weekly.items())
     ]
-    return {"start": str(start), "end": str(end), "items": consolidated, "total": len(consolidated), "weekly_summary": weekly_summary}
+    return {"start": str(start), "end": str(end), "items": consolidated, "total": len(consolidated), "weekly_summary": weekly_summary, "operations": operations, "expenses": expenses}
 
 
 def save_setting(db, user, company_id, product_id, unit_cost_tenge, tax_rate_percent):
@@ -410,6 +449,28 @@ def create_xlsx(report):
     weeks.auto_filter.ref = weeks.dimensions
     for col, width in enumerate([25, 16, 16, 18, 18, 22, 18, 18, 16], 1):
         weeks.column_dimensions[chr(64 + col)].width = width
+    orders = book.create_sheet("Тапсырыстар")
+    orders.append(["Дата", "Операция", "Заказ", "Артикул", "Внутренний SKU", "Товар", "Маркетплейс", "Магазин", "Количество", "Сумма, ₸", "Комиссия, ₸", "Логистика, ₸", "Реклама, ₸"])
+    for cell in orders[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="176A52")
+    for row in report.get("operations", []):
+        orders.append([row["date"], row["type"], row["reference"], row["article"], row["sku"], row["product_name"], row["channel"], row["account_name"], row["quantity"], round(row["revenue"]/100,2), round(row["commission"]/100,2), round(row["logistics"]/100,2), round(row["advertising"]/100,2)])
+    orders.freeze_panes = "A2"
+    orders.auto_filter.ref = orders.dimensions
+    for col, width in enumerate([14, 14, 22, 20, 20, 32, 18, 22, 14, 18, 18, 18, 16], 1):
+        orders.column_dimensions[chr(64 + col)].width = width
+    expenses = book.create_sheet("Жалпы шығындар")
+    expenses.append(["Дата", "Ссылка", "Категория", "Описание", "Магазин", "Сумма, ₸"])
+    for cell in expenses[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="176A52")
+    for row in report.get("expenses", []):
+        expenses.append([row["date"], row["reference"], row["category"], row["description"], row["account_name"], round(row["amount"]/100,2)])
+    expenses.freeze_panes = "A2"
+    expenses.auto_filter.ref = expenses.dimensions
+    for col, width in enumerate([14, 24, 24, 40, 22, 18], 1):
+        expenses.column_dimensions[chr(64 + col)].width = width
     output = BytesIO()
     book.save(output)
     return output.getvalue()
