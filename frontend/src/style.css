@@ -2866,3 +2866,65 @@ button.returns-metric.selected{border-color:#23815e;box-shadow:0 0 0 2px rgba(35
 .inbound-shipment-fields{margin-top:12px;padding:12px;border:1px solid #e0e9e3;border-radius:12px;background:#f9fbf9}
 .catalog-inbound-status{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:10px 0;padding:9px 11px;border:1px solid #f0dfbb;border-radius:10px;background:#fff9ed;color:#725629;font-size:12px}
 .catalog-inbound-status small{width:100%;color:#8a7958}
+
+/* RRTD Group visual refresh: layout and palette only; chart and report logic is untouched. */
+:root{--qor-ink:#25292b;--qor-line:#e1e4e5;--qor-muted:#737b7e;--qor-danger:#c52d39}
+::selection{background:#f7dfe2;color:#25292b}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid rgba(217,54,67,.22);outline-offset:2px}
+.app{background:#f5f6f6;color:#303638}
+.app>aside{background:#fff!important;color:#394144;border-right:1px solid #e2e5e6!important;box-shadow:4px 0 18px rgba(24,31,34,.035)!important;padding:18px 12px 0}
+.app>aside .brand{display:flex;flex-direction:column;align-items:flex-start;gap:0;padding:4px 10px 13px;color:#25292b;border-bottom:1px solid #eceeef}
+.client-brand-logo{display:block;width:146px;height:62px;object-fit:contain;object-position:left center}
+.app>aside .workspace-tag{margin:1px 0 0;font-size:10px;letter-spacing:1.1px;color:#839088;font-weight:700}
+.app>aside .workspace{margin:12px 2px 8px;padding:10px 8px;border:1px solid #eceeef;border-radius:10px;background:#f5f6f6;gap:9px}
+.app>aside .workspace-avatar{width:30px;height:30px;border-radius:8px;background:#fce8e9;color:#c9323b;font-weight:800}
+.app>aside nav{padding:2px 0 18px;scrollbar-color:#d6dfd9 transparent}
+.app>aside nav section{margin:0 0 7px}
+.app>aside nav h4{display:flex;align-items:center;justify-content:space-between;margin:8px 0 4px;padding:0 10px;color:#899195;font-size:9px;letter-spacing:1.15px;font-weight:750}
+.app>aside .nav-item{min-height:39px;margin:1px 0;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:transparent;color:#525b5f;font-size:12px;font-weight:550;gap:10px;box-shadow:none;transform:none}
+.app>aside .nav-item svg{width:16px;height:16px;color:#6e777b;opacity:.9}
+.app>aside .nav-item:hover{transform:none;background:#f5f6f6;color:#25292b;border-color:#eceeef}
+.app>aside .nav-item.active{background:#f9e9eb;color:#282b2d;border-color:#f5d9dc;box-shadow:none;font-weight:750}
+.app>aside .nav-item.active:before{display:none}
+.app>aside .nav-item.active svg{color:#c52d39}
+.app>aside .profile{margin:0 -12px;padding:12px 20px;border-top:1px solid #eceeef;background:#fff}
+.main-shell>header{background:rgba(255,255,255,.96);border-bottom:1px solid #e2e5e6}
+.main-shell main,.app{background:#f5f6f6}
+.page-heading h1,.panel-heading h2,.kpi>strong{color:#24282a}
+.page-heading .eyebrow{color:#b8343e}
+.panel,.kpi{border-color:#e2e5e6;box-shadow:0 5px 18px rgba(25,31,34,.035)}
+.panel-heading{border-color:#eceeef}
+.periods{background:#f0f1f1;border-color:#e0e3e4}
+.periods button.selected{background:#d93643;color:#fff;box-shadow:inset 0 0 0 1px #c52d39}
+.primary,.send-btn{background:linear-gradient(135deg,#e2434e,#c52d39);box-shadow:0 5px 15px rgba(197,45,57,.16)}
+.primary:hover{background:linear-gradient(135deg,#d73743,#b92632);box-shadow:0 8px 20px rgba(197,45,57,.2)}
+.secondary{border-color:#dfe2e3;background:#fff;color:#454e52}
+.secondary:hover{border-color:#e6b5bb;background:#fff8f8}
+.icon-button{border-color:#e1e4e5;color:#596266}
+.icon-button:hover{background:#fff7f8;border-color:#edc7cb}
+thead th{background:#f3f4f4!important;color:#515a5e!important}
+tbody tr:hover{background:#fbf7f7}
+.product-link-filters>button.active,.catalog-view-switch button.active{background:#d93643;border-color:#d93643;color:#fff}
+.chat-row.user .chat-bubble{background:#fff1f2;border-color:#f2d9dc}
+.login-story{background:#26292b}
+.login-story .brand{display:flex;align-items:center;gap:13px}
+.client-login-logo{display:block;width:142px;height:58px;object-fit:contain}
+.login-product-name{color:#fff;font-size:12px;letter-spacing:.14em;font-weight:750}
+.login-story .eyebrow{color:#e9878e}
+.login-lines{border-color:#484c4e;color:#d1d5d6}
+.mobile-brand img{display:block;width:106px;height:42px;object-fit:contain}
+.mobile-dock{grid-template-columns:repeat(4,minmax(0,1fr));border-color:#e0e3e4}
+.mobile-dock button.active{background:#fae9eb;color:#b92935}
+.mobile-dock button:nth-child(3){background:transparent;color:#687175;box-shadow:none}
+.mobile-dock button:nth-child(3).active{background:#fae9eb;color:#b92935}
+@media(max-width:960px){
+ .app>aside{border-radius:0 20px 20px 0;box-shadow:18px 0 48px rgba(20,25,28,.16)!important}
+ .mobile-dock{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+@media(max-width:700px){
+ .app{background:#f5f6f6}
+ .mobile-brand img{width:94px;height:38px}
+ .mobile-dock{left:8px;right:8px;bottom:max(8px,env(safe-area-inset-bottom));border-radius:18px}
+ .login-story .brand{position:static;margin-bottom:36px}
+ .client-login-logo{width:118px;height:49px}
+}
