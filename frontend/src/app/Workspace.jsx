@@ -972,7 +972,7 @@ function ReportPage({ page, ctx }) {
   };
   const alertsPath = page === "alerts" ? "/alerts?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") : null;
-  const { data: dash, error: dashError, loading: dashLoading } = useLoad(
+  const { data: dash } = useLoad(
     usesDashboard ? summaryPath : null,
     ctx.refresh,
     { cacheScope: ctx.auth.user.id, debounceMs: usesDashboard ? 900 : 0 },
