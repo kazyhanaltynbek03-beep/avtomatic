@@ -2928,3 +2928,36 @@ tbody tr:hover{background:#fbf7f7}
  .login-story .brand{position:static;margin-bottom:36px}
  .client-login-logo{width:118px;height:49px}
 }
+/* Override legacy green theme tokens so every shared control follows RRTD colors. */
+:root{
+  --green:#c52d39;
+  --ink:#25292b;
+  --muted:#737b7e;
+  --border:#e1e4e5;
+  --surface:#ffffff;
+  --surface-soft:#f5f6f6;
+  --surface-strong:#eceeef;
+  --qor-ink:#25292b;
+  --qor-green:#c52d39;
+  --qor-green-2:#e2434e;
+  --qor-soft:#fae9eb;
+  --qor-line:#e1e4e5;
+  --qor-muted:#737b7e;
+  color:#25292b;
+  background:#f5f6f6;
+}
+.app{
+  --green:#c52d39;
+  --ink:#25292b;
+  --muted:#737b7e;
+  --border:#e1e4e5;
+  --surface:#ffffff;
+  --surface-soft:#f5f6f6;
+  --surface-strong:#eceeef;
+  --qor-ink:#25292b;
+  --qor-green:#c52d39;
+  --qor-green-2:#e2434e;
+  --qor-soft:#fae9eb;
+  --qor-line:#e1e4e5;
+  --qor-muted:#737b7e;
+}
