@@ -40,7 +40,6 @@ import {
   Image as ImageIcon,
   Receipt,
   Store,
-  Leaf,
 } from "lucide-react";
 import { api, setCsrf, downloadApiFile } from "../services/api";
 import { money, decimal, today } from "../utils/formatters";
@@ -97,8 +96,8 @@ function Login({ onAuth }) {
     <div className="login">
       <div className="login-story">
         <div className="brand">
-          <span className="brand-mark">q</span>qor
-          <span className="brand-dot">.</span>
+          <img className="client-login-logo" src="/rrtd-group-logo.svg" alt="RRTD Group" />
+          <span className="login-product-name">BUSINESS ERP</span>
         </div>
         <span className="eyebrow">BUSINESS WORKSPACE</span>
         <h1>
@@ -323,9 +322,8 @@ export default function App() {
           className="brand"
           onClick={() => navigate("dashboard")}
         >
-          <span className="brand-mark"><Leaf size={18} strokeWidth={2.4}/></span>
-          <span className="brand-word">QOR AI</span>
-          <span className="workspace-tag">BUSINESS ERP</span>
+          <img className="client-brand-logo" src="/rrtd-group-logo.svg" alt="RRTD Group" />
+          <span className="workspace-tag">БИЗНЕС · ERP</span>
         </a>
         <div className="workspace">
           <div className="workspace-avatar">GK</div>
@@ -385,9 +383,8 @@ export default function App() {
           >
             <Menu />
           </button>
-          <a className="mobile-brand" href="#dashboard" onClick={() => navigate("dashboard")} aria-label="QOR AI — главная">
-            <span className="mobile-brand-mark"><Leaf size={20} strokeWidth={2.4}/></span>
-            <span><b>QOR AI</b><small>BUSINESS ERP</small></span>
+          <a className="mobile-brand" href="#dashboard" onClick={() => navigate("dashboard")} aria-label="RRTD Group — главная">
+            <img src="/rrtd-group-logo.svg" alt="RRTD Group" />
           </a>
           <div className="breadcrumb">
             Рабочее пространство <span>/</span> <strong>{current[1]}</strong>
@@ -607,9 +604,8 @@ export default function App() {
       <nav className="mobile-dock" aria-label="Основная мобильная навигация">
         {[
           ["dashboard", "Обзор", TrendingUp],
-          ["sales", "Продажи", Receipt],
-          ["assistant", "QOR AI", Sparkles],
-          ["stock", "Склад", Package],
+          ["sales", "Заказы", Receipt],
+          ["products", "Товары", Package],
         ].filter(([id]) => {
           const item = flat.find((x) => x[0] === id);
           return item && can(auth, item[3]);
