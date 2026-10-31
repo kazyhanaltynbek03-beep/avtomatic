@@ -30,7 +30,6 @@ import {
   Send,
   Package,
   Wallet,
-  CalendarDays,
   TrendingUp,
   Layers,
   ShieldCheck,
@@ -960,7 +959,6 @@ function ExpensesPage({ ctx }) {
 
 function ReportPage({ page, ctx }) {
   const [detailMetric, setDetailMetric] = useState(null), [alertRetry, setAlertRetry] = useState(0);
-  const [dashboardStalled, setDashboardStalled] = useState(false);
   const usesDashboard = page === "dashboard" || page === "analytics";
   const reportPath = page === "alerts" || page === "forecast" ? null : "/report?start=" + ctx.start + "&end=" + ctx.end +
     (ctx.company ? "&company_id=" + ctx.company : "") +
@@ -1006,13 +1004,6 @@ function ReportPage({ page, ctx }) {
     {channel:"Kaspi", state:dashboardKaspiSummary},
     {channel:"Wildberries", state:dashboardWbSummary},
   ];
-  useEffect(() => {
-    setDashboardStalled(false);
-    const waitingForHeadline = usesDashboard && dashLoading && !dash?.report;
-    if (!waitingForHeadline) return;
-    const timer = window.setTimeout(() => setDashboardStalled(true), 30000);
-    return () => window.clearTimeout(timer);
-  }, [usesDashboard, dashLoading, dash?.report, ctx.start, ctx.end, ctx.company, ctx.refresh]);
   if (page === "dashboard" && reportLoading && !loadedReport) return <Spinner />;
   if (page === "dashboard" && reportError && !loadedReport) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={reportError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
   if ((page === "analytics" && !loadedReport && !reportError) || ((page === "analytics" || (!usesDashboard && page !== "forecast")) && reportLoading)) return <Spinner />;
