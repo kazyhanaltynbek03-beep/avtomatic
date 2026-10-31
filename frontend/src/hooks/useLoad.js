@@ -32,7 +32,7 @@ function writeStoredReport(key, data) {
 
 function announceCachedReport(key, status) {
   if (key && typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("qor-report-cache-state", { detail: { key, status } }));
+    window.dispatchEvent(new window.CustomEvent("qor-report-cache-state", { detail: { key, status } }));
   }
 }
 
