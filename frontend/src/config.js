@@ -25,50 +25,55 @@ import {
 } from "lucide-react";
 export const groups = [
   [
-    "Обзор",
+    "Главная",
     [
       ["dashboard", "Обзор бизнеса", LayoutDashboard, "analytics"],
-      ["marketplace-product-report", "Финансовый отчёт по SKU", FileText, "analytics"],
-      ["profit", "Прибыль", TrendingUp, "analytics"],
+      ["alerts", "Уведомления", Bell, "analytics"],
     ],
   ],
   [
-    "Операции",
+    "Заказы и продажи",
+    [
+      ["sales", "Все продажи", Receipt, "sales"],
+      ["Kaspi", "Kaspi", Store, "sales"],
+      ["Wildberries", "Wildberries", Store, "sales"],
+      ["Ozon", "Ozon", Store, "sales"],
+      ["Offline", "Offline", Store, "sales"],
+      ["marketplace-returns", "Возвраты", RotateCcw, "sales"],
+    ],
+  ],
+  [
+    "Товары и склад",
     [
       ["products", "Товары / SKU", Package, "catalog"],
       ["marketplace-products", "Карточки маркетплейсов", Store, "catalog"],
       ["stock", "Единый склад", Warehouse, "inventory"],
       ["movements", "Движения склада", ArrowLeftRight, "inventory"],
-      ["sales", "Все продажи", Receipt, "sales"],
-      ["marketplace-returns", "Возвраты маркетплейсов", RotateCcw, "sales"],
-      ["Kaspi", "Kaspi", Store, "sales"],
-      ["Wildberries", "Wildberries", Store, "sales"],
-      ["Ozon", "Ozon", Store, "sales"],
-      ["Offline", "Offline", Store, "sales"],
     ],
   ],
   [
-    "Финансы",
+    "Финансы и аналитика",
     [
+      ["marketplace-product-report", "Финансовый отчёт по SKU", FileText, "analytics"],
+      ["profit", "Прибыль", TrendingUp, "analytics"],
       ["expenses", "Расходы", Receipt, "finance"],
       ["cash", "Деньги и выплаты", Wallet, "finance"],
       ["accounting", "Бухгалтерия", FileText, "finance"],
+      ["forecast", "Прогноз", TrendingUp, "analytics"],
+      ["niches", "Аналитика рынка", Compass, "marketing"],
     ],
   ],
   [
-    "AI инструменты",
+    "AI и инструменты",
     [
       ["assistant", "AI-ассистент", Sparkles, "ai"],
-      ["niches", "Аналитика рынка", Compass, "marketing"],
       ["calculator", "Калькулятор товара", Calculator, "marketing"],
       ["content", "Карточки товаров", FileImage, "marketing"],
       ["designer", "Дизайн карточек", Palette, "marketing"],
-      ["forecast", "Прогноз", TrendingUp, "analytics"],
-      ["alerts", "Уведомления", Bell, "analytics"],
     ],
   ],
   [
-    "Управление",
+    "Настройки и доступ",
     [
       ["companies", "Компании", Building2, "companies"],
       ["accounts", "Интеграции", Plug, "accounts"],
