@@ -8,7 +8,6 @@ import {
   RotateCcw,
   Receipt,
   Wallet,
-  ChartNoAxesCombined,
   Sparkles,
   Compass,
   Calculator,
