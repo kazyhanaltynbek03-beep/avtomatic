@@ -52,6 +52,10 @@ def test_product_report_consolidates_sales_stock_and_excel_across_marketplaces(c
     })
     assert workbook_response.status_code == 200, workbook_response.text
     workbook = load_workbook(BytesIO(workbook_response.content), data_only=False)
-    assert workbook.sheetnames == ["Отчёт по товарам", "Разрез по магазинам"]
+    assert workbook.sheetnames == ["Отчёт по товарам", "Разрез по магазинам", "Баптаулар", "По неделям", "Тапсырыстар", "Жалпы шығындар"]
     assert workbook["Отчёт по товарам"].max_row == 5
     assert workbook["Разрез по магазинам"].max_row == 3
+    assert workbook["Баптаулар"].max_row == 2
+    assert workbook["По неделям"].max_row == 2
+    assert workbook["Тапсырыстар"].max_row == 3
+    assert workbook["Жалпы шығындар"].max_row == 1
