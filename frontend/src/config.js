@@ -30,7 +30,6 @@ export const groups = [
     [
       ["dashboard", "Обзор бизнеса", LayoutDashboard, "analytics"],
       ["marketplace-product-report", "Финансовый отчёт по SKU", FileText, "analytics"],
-      ["analytics", "Аналитика", ChartNoAxesCombined, "analytics"],
       ["profit", "Прибыль", TrendingUp, "analytics"],
     ],
   ],
