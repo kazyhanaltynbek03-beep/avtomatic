@@ -34,8 +34,17 @@ def _money(value):
     return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + " ₸"
 
 
+def _change(current, previous):
+    if previous in (None, 0):
+        return "нет базы для сравнения"
+    delta = (int(current or 0) - int(previous)) / abs(int(previous)) * 100
+    return f"{delta:+.1f}%"
+
+
 def _build_digest(db, user, company_id, report_date, include_ai):
     data = finance.report(db, user, report_date, report_date, company_id=company_id, active_only=True)
+    previous_date = report_date - timedelta(days=1)
+    previous = finance.report(db, user, previous_date, previous_date, company_id=company_id, active_only=True)
     channels = data.get("channel_summary") or []
     channel_lines = [
         f"{row.get('channel')}: {_money(row.get('revenue'))}"
@@ -46,7 +55,10 @@ def _build_digest(db, user, company_id, report_date, include_ai):
         f"Выручка: {_money(data.get('revenue'))}",
         f"Чистая прибыль: {_money(data.get('net_profit')) if data.get('net_profit_complete') else 'неполная — проверьте себестоимость/источники'}",
         f"Продано единиц: {data.get('units', 0)} · возвраты: {_money(data.get('returns'))}",
+        f"К предыдущему дню: выручка {_change(data.get('revenue'), previous.get('revenue'))}; единицы {_change(data.get('units'), previous.get('units'))}.",
     ]
+    if data.get("net_profit_complete") and previous.get("net_profit_complete"):
+        lines.append(f"Изменение чистой прибыли: {_money((data.get('net_profit') or 0) - (previous.get('net_profit') or 0))} к предыдущему дню.")
     if channel_lines:
         lines.append("По каналам: " + "; ".join(channel_lines))
     stock_alerts = data.get("stock_alerts") or []
@@ -65,10 +77,10 @@ def _build_digest(db, user, company_id, report_date, include_ai):
         try:
             result = ai.assistant(db, user, {
                 "agent": "analyst",
-                "start": str(report_date),
+                "start": str(previous_date),
                 "end": str(report_date),
                 "company_id": company_id,
-                "question": "Подготовь короткий управленческий комментарий к ежедневному отчёту: 1 главный сигнал и 1 рекомендуемая проверка. Используй только доступные данные ERP, не повторяй суммы и не предлагай изменения без подтверждения.",
+                "question": "Сравни последний день выбранного периода с предыдущим: дай 1 главный сигнал и 1 рекомендуемую проверку. Используй только доступные данные ERP, не повторяй суммы и не предлагай изменения без подтверждения.",
             })
             insight = str(result.get("answer") or "").strip()
             if insight:
