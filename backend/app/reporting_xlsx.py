@@ -153,3 +153,137 @@ def executive_workbook(report, start, end, scope_note=''):
         ws.oddFooter.center.text='QOR AI BUSINESS ERP'
         ws.oddFooter.right.text='Page &P of &N'
     out=io.BytesIO(); wb.save(out); return out.getvalue()
+
+
+def workbook_from_template(template_bytes, report, start, end, scope_note=''):
+    """Keep a customer's XLSX layout, fill recognized totals, append QOR details."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+
+    aliases = {
+        'revenue': ('выручка', 'оборот', 'түсім'),
+        'gross_profit': ('валовая прибыль', 'gross profit', 'жалпы пайда'),
+        'net_profit': ('чистая прибыль', 'net profit', 'таза пайда'),
+        'commission': ('комиссия', 'комиссии', 'комиссия wb', 'комиссия kaspi'),
+        'logistics': ('логистика', 'доставка', 'жеткізу'),
+        'cogs': ('себестоимость', 'cogs', 'өзіндік құн'),
+        'expenses': ('расходы', 'операционные расходы', 'шығындар'),
+        'returns': ('возвраты', 'возвратов', 'қайтарым'),
+        'cash_closing': ('остаток на конец', 'остаток денег', 'конечный остаток'),
+        'cash_inflow': ('поступления', 'поступило', 'түсімдер'),
+        'cash_outflow': ('выплаты', 'выплачено', 'төлемдер'),
+    }
+    values = {key: report.get(key) for key in aliases}
+    for key, value in values.items():
+        if value is not None:
+            values[key] = value / 100
+
+    try:
+        wb = load_workbook(BytesIO(template_bytes))
+    except Exception as exc:
+        raise ValueError('Не удалось открыть Excel-образец') from exc
+    filled = 0
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if not isinstance(cell.value, str):
+                    continue
+                label = ' '.join(cell.value.casefold().replace('ё', 'е').split())
+                metric = next((key for key, names in aliases.items()
+                               if any(label == name or label.startswith(name + ':') for name in names)), None)
+                if not metric or values.get(metric) is None:
+                    continue
+                right_edge = cell.column
+                for merged in ws.merged_cells.ranges:
+                    if merged.min_row <= cell.row <= merged.max_row and merged.min_col <= cell.column <= merged.max_col:
+                        right_edge = max(right_edge, merged.max_col)
+                target = None
+                for col in range(right_edge + 1, right_edge + 5):
+                    if any(r.min_row <= cell.row <= r.max_row and r.min_col <= col <= r.max_col for r in ws.merged_cells.ranges):
+                        continue
+                    candidate = ws.cell(cell.row, col)
+                    if candidate.value in (None, '') or isinstance(candidate.value, (int, float)):
+                        target = candidate
+                        break
+                if target is None:
+                    continue
+                target.value = values[metric]
+                target.number_format = MONEY_FMT
+                filled += 1
+    if filled == 0:
+        raise ValueError('Не нашёл в Excel-образце подписанные финансовые итоги для безопасного сопоставления.')
+
+    # Preserve the customer's sheets and add the existing deterministic QOR report.
+    details = load_workbook(BytesIO(executive_workbook(report, start, end, scope_note)))
+    for source in details.worksheets:
+        title = source.title[:31]
+        if title in wb.sheetnames:
+            title = ('QOR ' + title)[:31]
+        dest = wb.create_sheet(title)
+        for row in source.iter_rows():
+            for cell in row:
+                out_cell = dest.cell(cell.row, cell.column, cell.value)
+                if cell.has_style:
+                    out_cell._style = cell._style
+                if cell.number_format:
+                    out_cell.number_format = cell.number_format
+        for key, dim in source.column_dimensions.items():
+            dest.column_dimensions[key].width = dim.width
+        dest.freeze_panes = source.freeze_panes
+        dest.sheet_view.showGridLines = source.sheet_view.showGridLines
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+def workbook_from_layout(report, start, end, layout):
+    """Build a workbook using a Claude-extracted photo layout and ERP values only."""
+    from io import BytesIO
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Отчёт'
+    _title(ws, str(layout.get('title') or 'Отчёт по данным QOR')[:120], f'{start} — {end} · Источник цифр: ERP QOR')
+    datasets = {
+        'summary': [report],
+        'products': report.get('products') or [],
+        'stock': report.get('stock') or [],
+        'daily': report.get('daily') or [],
+        'channels': report.get('channel_summary') or [],
+    }
+    money_fields = {'revenue','gross_profit','net_profit','cogs','known_cogs','commission','logistics','advertising','expenses','returns','cash','cash_flow','cash_opening','cash_inflow','cash_outflow','cash_closing','value','costs','profit','contribution_profit'}
+    row = 4
+    for section in (layout.get('sections') or [])[:8]:
+        title = str(section.get('title') or 'Данные')[:120]
+        kind = section.get('kind')
+        if kind not in datasets:
+            continue
+        ws.cell(row, 1, title).font = Font(size=13, bold=True, color=NAVY)
+        row += 1
+        columns = [c for c in (section.get('columns') or [])[:16] if c.get('field')]
+        if kind == 'summary' and not columns:
+            columns = [{'label': k.replace('_',' ').title(), 'field': k} for k in ('revenue','gross_profit','net_profit','cogs','commission','logistics','expenses')]
+        _header(ws, row, [str(c.get('label') or c['field'])[:80] for c in columns])
+        data = datasets[kind]
+        for item in data[:2000]:
+            row += 1
+            for col_idx, column in enumerate(columns, 1):
+                field = str(column.get('field') or '')
+                value = item.get(field)
+                if value is None and field in {'name', 'channel'}: value = item.get('name') or item.get('channel')
+                if field in money_fields and value is not None:
+                    value = value / 100
+                cell = ws.cell(row, col_idx, _safe_text(value) if isinstance(value, str) else value)
+                if field in money_fields: cell.number_format = MONEY_FMT
+            if kind == 'summary':
+                break
+        row += 2
+    if row <= 5:
+        raise ValueError('На фото не получилось распознать структуру таблиц.')
+    for col in range(1, ws.max_column + 1):
+        ws.column_dimensions[get_column_letter(col)].width = min(max(16, max((len(str(ws.cell(r, col).value or '')) for r in range(1, min(ws.max_row, 40) + 1)), default=12) + 2), 34)
+    ws.freeze_panes = 'A5'
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
