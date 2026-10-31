@@ -84,10 +84,15 @@ python -m app.worker
 | Kaspi live integration | Токен продавца и доступ к нужным API своего магазина |
 | Wildberries live integration | Токен с правами на нужные seller/statistics/finance API |
 | Ozon live integration | Client-Id + Api-Key с нужными правами |
+| Daily WhatsApp business report | WhatsApp Business Cloud API access token, phone number ID, and an approved utility template |
 
 **Важное ограничение:** Kaspi live API в этой версии поддерживает синхронизацию заказов, чтение деталей и состава, изменение документированных статусов, справочники каталога и импорт карточек. Цены и остатки Kaspi обновляются через XML-прайс-лист, а не через REST seller API; динамический QOR feed ещё не подключён. Документированные методы финансовых взаиморасчётов Kaspi seller API отсутствуют — используйте CSV/XLSX-выгрузки. См. [KASPI_API_SETUP.md](KASPI_API_SETUP.md). WB/Ozon функции доступны согласно разделам интеграций; CSV/XLSX остаётся fallback. Demo adapter не создаёт фальшивых продаж.
 
 Claude Messages API code is implemented. Live calls require ANTHROPIC_API_KEY. The optional AI Designer uses OPENAI_IMAGE_API_KEY or the existing OPENAI_API_KEY. AI-тексты и изображения — черновики для проверки владельцем; исходные финансовые числа выводятся отдельно.
+
+### Scheduled daily report
+
+The Owner can configure a previous-business-day digest in **Settings → Daily report**. The deterministic numbers come from the ERP finance engine; optional Claude commentary is separately controlled. Delivery stays off until the Owner enables it, supplies an international-format recipient number, records that the recipient opted in, and WhatsApp credentials are configured. Proactive WhatsApp messages use an approved template; ordinary WhatsApp Web is not automated. Keep `QOR_WHATSAPP_ACCESS_TOKEN` and `QOR_DAILY_REPORT_TRIGGER_TOKEN` in Render secrets and never commit them. The configured template must be named by `QOR_WHATSAPP_TEMPLATE_NAME` and contain one body placeholder for the report. Delivery is deduplicated by company, report date, recipient, and provider, and failures are visible in Settings. For reliable daily checks on a sleeping web service, deploy a separate Render Cron service running `python -m app.daily_report_cron` every 15 minutes with `QOR_DAILY_REPORT_TRIGGER_URL` and the same trigger token; the endpoint checks the owner's local `Asia/Almaty` schedule and sends only when due.
 
 ## Проверки
 

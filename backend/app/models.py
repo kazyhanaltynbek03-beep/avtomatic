@@ -435,6 +435,22 @@ class Audit(Record, Base):
     details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class DailyReportDelivery(Record, Base):
+    """Idempotent log of scheduled report notifications."""
+    __tablename__ = "daily_report_deliveries"
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    report_date: Mapped[DateType] = mapped_column(Date, index=True)
+    recipient: Mapped[str] = mapped_column(String(32))
+    provider: Mapped[str] = mapped_column(String(30), default="whatsapp_cloud")
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_message_id: Mapped[str] = mapped_column(String(180), default="")
+    error: Mapped[str] = mapped_column(String(500), default="")
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("company_id", "report_date", "recipient", "provider", name="uq_daily_report_delivery"),)
+
+
 class Job(Record, Base):
     __tablename__ = "jobs"
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"))
@@ -515,6 +531,11 @@ class Setting(Base):
     business_name: Mapped[str] = mapped_column(String(160), default="QOR Business")
     currency: Mapped[str] = mapped_column(String(3), default="KZT")
     timezone: Mapped[str] = mapped_column(String(60), default="Asia/Almaty")
+    daily_report_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    daily_report_time: Mapped[str] = mapped_column(String(5), default="09:00", nullable=False, server_default="09:00")
+    daily_report_recipient: Mapped[str] = mapped_column(String(32), default="", nullable=False, server_default="")
+    daily_report_consent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    daily_report_ai_summary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
 
 # Composite access-pattern indexes for company scoping and period reports.

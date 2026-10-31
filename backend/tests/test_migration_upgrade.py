@@ -63,7 +63,7 @@ def test_existing_database_upgrade_preserves_sales_and_defaults_discount(tmp_pat
     connection = sqlite3.connect(database)
     try:
         assert connection.execute("SELECT reference, revenue, discount FROM sales WHERE id = 1").fetchone() == ("OLD-SALE", 10000, 0)
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("d68e0f3b9a21",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("fa88d1a42011",)
         assert connection.execute(
             "SELECT quantity, kind, batch_id, reference FROM movements WHERE reference = 'KASPI-ORDER-2'"
         ).fetchall() == [(-3, "sale_pending_fifo", None, "KASPI-ORDER-2")]

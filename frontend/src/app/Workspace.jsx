@@ -4616,6 +4616,26 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
     [error, setError] = useState("");
   const [installingSkills, setInstallingSkills] = useState(false),
     [skillInstallResult, setSkillInstallResult] = useState(null);
+  const [dailyReport, setDailyReport] = useState({enabled:false,time:"09:00",recipient:"",consent:false,ai_summary:false,provider:{configured:false,missing:[]},recent:[]});
+  const [dailyReportBusy, setDailyReportBusy] = useState(false);
+  useEffect(() => {
+    api("/automation/daily-report").then(setDailyReport).catch((e) => setError(e.message));
+  }, []);
+  const saveDailyReport = async (e) => {
+    e.preventDefault();
+    setDailyReportBusy(true);
+    setError("");
+    try {
+      const saved = await api("/automation/daily-report", {method:"PUT", body:{enabled:dailyReport.enabled,time:dailyReport.time,recipient:dailyReport.recipient,consent:dailyReport.consent,ai_summary:dailyReport.ai_summary}});
+      const current = await api("/automation/daily-report");
+      setDailyReport(current);
+      ctx.notify(saved.enabled ? "Ежедневный отчёт включён" : "Настройки ежедневного отчёта сохранены");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDailyReportBusy(false);
+    }
+  };
   const save = async (e) => {
     e.preventDefault();
     try {
@@ -4654,6 +4674,23 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
   };
   return (
     <div className="report-grid">
+      <form className="panel padded" onSubmit={saveDailyReport}>
+        <h2>Ежедневный отчёт владельцу</h2>
+        <p className="muted">Отчёт за предыдущий день: выручка и прибыль из финансового ядра, каналы продаж, возвраты и низкие остатки. Суммы берутся из ERP; Claude может добавить краткий комментарий.</p>
+        <div className="form-grid">
+          <label>Номер получателя<input type="tel" inputMode="tel" placeholder="+77001234567" value={dailyReport.recipient||""} onChange={e=>setDailyReport({...dailyReport,recipient:e.target.value})}/></label>
+          <label>Время отправки · Алматы<input type="time" value={dailyReport.time||"09:00"} onChange={e=>setDailyReport({...dailyReport,time:e.target.value})}/></label>
+        </div>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.consent} onChange={e=>setDailyReport({...dailyReport,consent:e.target.checked})}/> Получатель согласился получать регулярные отчёты</label>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.ai_summary} onChange={e=>setDailyReport({...dailyReport,ai_summary:e.target.checked})}/> Добавлять комментарий Claude к показателям</label>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.enabled} onChange={e=>setDailyReport({...dailyReport,enabled:e.target.checked})}/> Включить ежедневную отправку</label>
+        <div className={dailyReport.provider?.configured?"success-banner":"info-banner"} role="status">
+          Канал: WhatsApp Business API · {dailyReport.provider?.configured?"подключён":"ожидает настройки"}. Для отправки нужны защищённые параметры API в Render и одобренный шаблон сообщения.
+        </div>
+        <p className="muted">Обычный WhatsApp Web не используется. Токен и ID номера не вводятся здесь и не хранятся в настройках ERP.</p>
+        <button className="primary" disabled={dailyReportBusy}>{dailyReportBusy?"Сохраняем…":"Сохранить расписание"}</button>
+        {dailyReport.recent?.length>0&&<details className="mt-12"><summary>Последние отправки</summary><div className="table-scroll"><table><thead><tr><th>Дата отчёта</th><th>Статус</th><th>Отправлен</th><th>Ошибка</th></tr></thead><tbody>{dailyReport.recent.map((row,i)=><tr key={`${row.date}-${i}`}><td>{row.date}</td><td>{row.status}</td><td>{row.sent_at?new Date(row.sent_at).toLocaleString("ru-RU"):"—"}</td><td>{row.error||"—"}</td></tr>)}</tbody></table></div></details>}
+      </form>
       <form className="panel padded" onSubmit={save}>
         <h2>Рабочее пространство</h2>
         <label>

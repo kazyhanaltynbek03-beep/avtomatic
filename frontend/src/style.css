@@ -852,6 +852,10 @@ tr:hover td {
   align-items: center;
   gap: 15px;
 }
+.check-row{display:flex;align-items:flex-start;gap:10px;margin:10px 0;color:#365848;font-size:13px;line-height:1.45}
+.check-row input{width:18px;height:18px;flex:0 0 18px;margin:1px 0 0;accent-color:#0c684d}
+.success-banner{padding:12px 14px;border:1px solid #bfe0ce;border-radius:10px;background:#edf8f1;color:#145c3f;font-size:13px;margin:14px 0}
+.mt-12{margin-top:12px}
 .badge {
   display: inline-flex;
   padding: 4px 8px;
