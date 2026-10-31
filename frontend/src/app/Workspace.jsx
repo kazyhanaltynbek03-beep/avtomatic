@@ -48,6 +48,7 @@ import { ErrorBox, Empty, Spinner } from "../components/Feedback";
 import { useLoad } from "../hooks/useLoad";
 import { groups, forms, columns, labels, monetary } from "../config";
 import "../style.css";
+import clientLogo from "../assets/rrtd-group-logo.svg";
 const flat = groups.flatMap((g) => g[1]);
 const channels = ["Kaspi", "Wildberries", "Ozon", "Offline", "B2B"];
 const KaspiPreorder = lazy(() => import("../features/KaspiPreorder"));
@@ -96,7 +97,7 @@ function Login({ onAuth }) {
     <div className="login">
       <div className="login-story">
         <div className="brand">
-          <img className="client-login-logo" src="/rrtd-group-logo.svg" alt="RRTD Group" />
+          <img className="client-login-logo" src={clientLogo} alt="RRTD Group" />
           <span className="login-product-name">BUSINESS ERP</span>
         </div>
         <span className="eyebrow">BUSINESS WORKSPACE</span>
@@ -322,7 +323,7 @@ export default function App() {
           className="brand"
           onClick={() => navigate("dashboard")}
         >
-          <img className="client-brand-logo" src="/rrtd-group-logo.svg" alt="RRTD Group" />
+          <img className="client-brand-logo" src={clientLogo} alt="RRTD Group" />
           <span className="workspace-tag">БИЗНЕС · ERP</span>
         </a>
         <div className="workspace">
@@ -384,7 +385,7 @@ export default function App() {
             <Menu />
           </button>
           <a className="mobile-brand" href="#dashboard" onClick={() => navigate("dashboard")} aria-label="RRTD Group — главная">
-            <img src="/rrtd-group-logo.svg" alt="RRTD Group" />
+            <img src={clientLogo} alt="RRTD Group" />
           </a>
           <div className="breadcrumb">
             Рабочее пространство <span>/</span> <strong>{current[1]}</strong>
