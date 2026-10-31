@@ -30,7 +30,7 @@ export default function MarketplaceProductReport({ ctx }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState({});
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState(false);\n  const [tab, setTab] = useState("summary");
   const writable = can(ctx.auth, "finance", true);
 
   const accounts = (ctx.refs.accounts || []).filter((account) =>
@@ -155,7 +155,7 @@ export default function MarketplaceProductReport({ ctx }) {
           <Download size={16}/>{downloading ? "Готовим Excel…" : "Скачать сводный Excel"}
         </button>
       </div>
-      <div className="pmr-controls">
+      <div className="pmr-report-tabs">{[["summary","Жиынтық"],["settings","Баптаулар"],["stores","Тапсырыстар"],["weeks","Есеп аптасы"]].map(([id,label]) => <button type="button" key={id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}>{label}</button>)}</div>\n      <div className="pmr-controls">
         <select aria-label="Маркетплейс" value={channel} onChange={(e) => { setChannel(e.target.value); setAccountId(""); }}>
           <option value="">Все маркетплейсы</option>
           <option value="Kaspi">Kaspi</option><option value="Wildberries">Wildberries</option><option value="Ozon">Ozon</option>
@@ -168,7 +168,7 @@ export default function MarketplaceProductReport({ ctx }) {
       </div>
       {incompleteItems > 0 && <div className="pmr-data-hint" role="status"><span>!</span><div><strong>Для {incompleteItems} товаров не хватает данных для расчёта прибыли</strong><small>Заполните себестоимость и ставку налога в строке товара, затем сохраните.</small></div></div>}
       <ErrorBox error={error}/>
-      <div className="pmr-summary">
+      {tab === "summary" && <div className="pmr-summary">
         <div className="pmr-stat"><span className="pmr-stat-icon is-sold"><Package size={16}/></span><div><small>Продано</small><strong>{totals.sold} шт.</strong></div></div>
         <div className="pmr-stat"><span className="pmr-stat-icon is-stock"><Warehouse size={16}/></span><div><small>Общий остаток</small><strong>{totals.stock} шт.</strong></div></div>
         <div className="pmr-stat"><span className="pmr-stat-icon is-return"><RotateCcw size={16}/></span><div><small>Возвращено</small><strong>{totals.returned} шт.</strong></div></div>
