@@ -30,7 +30,8 @@ export default function MarketplaceProductReport({ ctx }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState({});
-  const [downloading, setDownloading] = useState(false);\n  const [tab, setTab] = useState("summary");
+  const [downloading, setDownloading] = useState(false);
+  const [tab, setTab] = useState("summary");
   const writable = can(ctx.auth, "finance", true);
 
   const accounts = (ctx.refs.accounts || []).filter((account) =>
@@ -155,7 +156,8 @@ export default function MarketplaceProductReport({ ctx }) {
           <Download size={16}/>{downloading ? "Готовим Excel…" : "Скачать сводный Excel"}
         </button>
       </div>
-      <div className="pmr-report-tabs">{[["summary","Жиынтық"],["settings","Баптаулар"],["stores","Тапсырыстар"],["weeks","Есеп аптасы"]].map(([id,label]) => <button type="button" key={id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}>{label}</button>)}</div>\n      <div className="pmr-controls">
+      <div className="pmr-report-tabs">{[["summary","Жиынтық"],["settings","Баптаулар"],["stores","Тапсырыстар"],["weeks","Есеп аптасы"]].map(([id,label]) => <button type="button" key={id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}>{label}</button>)}</div>
+      <div className="pmr-controls">
         <select aria-label="Маркетплейс" value={channel} onChange={(e) => { setChannel(e.target.value); setAccountId(""); }}>
           <option value="">Все маркетплейсы</option>
           <option value="Kaspi">Kaspi</option><option value="Wildberries">Wildberries</option><option value="Ozon">Ozon</option>
@@ -175,8 +177,8 @@ export default function MarketplaceProductReport({ ctx }) {
         <div className="pmr-stat"><span className="pmr-stat-icon is-revenue"><Wallet size={16}/></span><div><small>Чистая выручка</small><strong>{moneyCell(totals.revenue)}</strong></div></div>
         <div className="pmr-stat"><span className="pmr-stat-icon is-tax"><Percent size={16}/></span><div><small>Налог</small><strong>{totals.incomplete ? "Не полностью" : moneyCell(totals.tax)}</strong></div></div>
         <div className="pmr-stat"><span className="pmr-stat-icon is-profit"><TrendingUp size={16}/></span><div><small>Прибыль после расходов</small><strong>{totals.incomplete ? "Нужны данные" : moneyCell(totals.profit)}</strong></div></div>
-      </div>
-      {loading ? <Spinner/> : items.length === 0 ? <Empty/> : <>
+      </div>}
+      {tab === "summary" && (loading ? <Spinner/> : items.length === 0 ? <Empty/> : <>
         <div className="pmr-scroll">
           <table className="pmr-table">
             <colgroup><col/><col/><col/><col/><col/><col/><col/><col/></colgroup>
@@ -245,7 +247,10 @@ export default function MarketplaceProductReport({ ctx }) {
             </details>
           </article>;
         })}</div>
-      </>}
+      </>)}
+      {tab === "settings" && <div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Артикул / SKU</th><th>Товар</th><th>Себестоимость за шт., ₸</th><th>Налог, %</th><th></th></tr></thead><tbody>{items.map((row) => { const key = keyOf(row), draft = drafts[key] || {}; return <tr key={key}><td>{row.article || row.sku}</td><td>{row.product_name}</td><td><input type="number" min="0" step="0.01" value={draft.unitCost ?? ""} onChange={(e) => edit(row,"unitCost",e.target.value)} disabled={!writable}/></td><td><input type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} onChange={(e) => edit(row,"taxRate",e.target.value)} disabled={!writable}/></td><td><button className="secondary pmr-row-save" type="button" disabled={!writable || saving[key]} onClick={() => save(row)}><Save size={12}/>{saving[key] ? "Сохраняем…" : "Сохранить"}</button></td></tr>; })}</tbody></table></div>}
+      {tab === "stores" && <div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>SKU</th><th>Товар</th><th>Маркетплейс</th><th>Магазин</th><th>Продано</th><th>Возвраты</th><th>Чистая выручка</th></tr></thead><tbody>{items.flatMap(row => (row.marketplace_breakdown || []).map((part,index) => <tr key={row.product_id+"-"+part.account_id+"-"+index}><td>{row.sku || row.article}</td><td>{row.product_name}</td><td>{part.channel}</td><td>{part.account_name}</td><td>{part.sold_units}</td><td>{part.returned_units}</td><td>{moneyCell(part.sold_revenue-part.returned_revenue)}</td></tr>))}</tbody></table></div>}
+      {tab === "weeks" && <div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Есеп аптасы</th><th>Продано</th><th>Возвраты</th><th>Выручка</th><th>Возвраты, ₸</th><th>Чистая выручка</th><th>Комиссия</th><th>Логистика</th><th>Реклама</th></tr></thead><tbody>{(data?.weekly_summary || []).map(row => <tr key={row.start}><td>{row.start} — {row.end}</td><td>{row.sold_units}</td><td>{row.returned_units}</td><td>{moneyCell(row.sold_revenue)}</td><td>{moneyCell(row.returned_revenue)}</td><td>{moneyCell(row.net_revenue)}</td><td>{moneyCell(row.commission)}</td><td>{moneyCell(row.logistics)}</td><td>{moneyCell(row.advertising)}</td></tr>)}</tbody></table></div>}
     </section>
   );
 }
