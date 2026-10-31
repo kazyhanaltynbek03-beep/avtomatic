@@ -54,6 +54,7 @@ const KaspiPreorder = lazy(() => import("../features/KaspiPreorder"));
 const MarketplaceReturns = lazy(() => import("../features/MarketplaceReturns"));
 const MarketplaceProductReport = lazy(() => import("../features/MarketplaceProductReport"));
 const AI_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const resolvePage = (value) => value === "analytics" ? "dashboard" : value;
 async function waitForAIJob(id, onUpdate = () => {}) {
   const deadline = Date.now() + AI_JOB_TIMEOUT_MS;
   let current = null;
@@ -151,7 +152,7 @@ function Login({ onAuth }) {
 }
 export default function App() {
   const [auth, setAuth] = useState(undefined),
-    [page, setPage] = useState(location.hash.slice(1) || "dashboard"),
+    [page, setPage] = useState(resolvePage(location.hash.slice(1) || "dashboard")),
     [mobile, setMobile] = useState(false),
     [refresh, setRefresh] = useState(0),
     [notice, setNotice] = useState(""),
@@ -215,12 +216,17 @@ export default function App() {
   // Alerts are loaded on the notifications page. Fetching them in the background
   // runs two full report calculations and competes with the page the user opened.
   const navigate = (id) => {
-    setPage(id);
-    location.hash = id;
+    const target = resolvePage(id);
+    setPage(target);
+    location.hash = target;
     setMobile(false);
   };
   useEffect(() => {
-    const fn = () => setPage(location.hash.slice(1) || "dashboard");
+    const fn = () => {
+      const target = resolvePage(location.hash.slice(1) || "dashboard");
+      setPage(target);
+      if (target !== location.hash.slice(1)) location.hash = target;
+    };
     window.addEventListener("hashchange", fn);
     return () => window.removeEventListener("hashchange", fn);
   }, []);
@@ -1235,7 +1241,6 @@ function ReportPage({ page, ctx }) {
             </PieChart></ResponsiveContainer></div>
             <div className="qor-share-legend">{marketplaceChartRows.map((row) => <div key={row.name}><span><i style={{background:marketplaceColor(row.name)}}/>{row.name}</span><b>{marketplaceShareBase ? decimal(row.chartRevenue / marketplaceShareBase * 100) : "0"}%</b><strong>{money(row.chartRevenue)}</strong></div>)}</div>
           </> : <Empty text="Нет данных о продажах по маркетплейсам"/>}
-          <a className="text-button qor-marketplace-link" href="#analytics">Открыть аналитику <span>→</span></a>
         </section>
       </div>
       <div className="qor-overview-bottom-grid">
