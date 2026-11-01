@@ -76,6 +76,13 @@ function Login({ onAuth }) {
   const submit = async (e) => {
     e.preventDefault();
     if (submitLock.current) return;
+    if (kind === "sales") {
+      const missing = fields.filter((f) => f.required && !String(values[f.key] ?? "").trim());
+      if (missing.length) {
+        setError("Заполните обязательные поля: " + missing.map((f) => f.label.replace(/ · ₸$/, "")).join(", ") + ".");
+        return;
+      }
+    }
     submitLock.current = true;
     setBusy(true);
     setError("");
@@ -1829,7 +1836,11 @@ function Stock({ ctx }) {
               ctx.open("accounts", {company_id:ctx.company || ctx.refs.companies?.[0]?.id || "", name:"Офлайн продажи", channel:"Offline"});
               return;
             }
-            ctx.open("sales", {account_id:account.id, company_id:ctx.company || account.company_id});
+            ctx.open("sales", {
+        account_id:account.id,
+        company_id:ctx.company || account.company_id,
+        ...(channel === "Offline" ? {reference: "OFF-" + Date.now().toString(36).toUpperCase()} : {}),
+      });
           }}><Plus size={16}/>Записать офлайн-продажу</button>}
           {can(ctx.auth, "inventory", true) && <button className="secondary" onClick={() => ctx.open("adjustments")}><Plus size={16}/>Корректировка</button>}
         </div>
@@ -3799,6 +3810,7 @@ function EditModal({ kind, item, ctx, close }) {
     >
       <form
         className="modal"
+        noValidate={kind === "sales"}
         onSubmit={submit}
         role="dialog"
         aria-modal="true"
@@ -3826,6 +3838,7 @@ function EditModal({ kind, item, ctx, close }) {
             <X />
           </button>
         </div>
+        {kind === "sales" && <p className="muted">Для офлайн-продажи выберите товар и укажите цену. Номер документа создан автоматически; после заполнения нажмите «Провести».</p>}
         {productWizard && !productQuickMode && <div className="product-wizard-steps" aria-label="Шаги создания товара" role="list">
           {productWizardSections.map((step, index) => <div key={step.title} className={`product-wizard-step${index === productWizardStep ? " active" : index < productWizardStep ? " done" : ""}`} role="listitem" aria-current={index === productWizardStep ? "step" : undefined}><i>{index < productWizardStep ? <CheckCircle2 size={15}/> : index + 1}</i><span>{step.title}</span></div>)}
         </div>}
