@@ -2472,30 +2472,35 @@ function MarketplaceInbox({ channel, ctx }) {
       [`${dayKey.slice(0, 8)}01`, dayKey],
     ];
     const pause = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
-    const warm = async () => {
-      for (const [start, end] of ranges) {
-        if (cancelled) return;
-        const params = new URLSearchParams({channel, start, end});
-        if (ctx.company) params.set("company_id", ctx.company);
-        if (selectedAccountCacheId) params.set("account_id", String(selectedAccountCacheId));
-        const path = "/marketplace-summary?" + params;
-        const key = `qor-report:v1:${ctx.auth.user.id}:${path}`;
-        try {
-          const saved = JSON.parse(window.sessionStorage.getItem(key) || "null");
-          if (saved?.data && Date.now() - Number(saved.savedAt) < 5 * 60 * 1000) continue;
-          const data = await api(path);
-          window.sessionStorage.setItem(key, JSON.stringify({data, savedAt: Date.now()}));
-        } catch {
-          // Report display stays usable if optional warming or browser storage fails.
-        }
-        await pause(150);
+    const warmOne = async ([start, end]) => {
+      if (cancelled) return;
+      const params = new URLSearchParams({channel, start, end});
+      if (ctx.company) params.set("company_id", ctx.company);
+      if (selectedAccountCacheId) params.set("account_id", String(selectedAccountCacheId));
+      const path = "/marketplace-summary?" + params;
+      const key = `qor-report:v1:${ctx.auth.user.id}:${path}`;
+      try {
+        const saved = JSON.parse(window.sessionStorage.getItem(key) || "null");
+        if (saved?.data && Date.now() - Number(saved.savedAt) < 5 * 60 * 1000) return;
+        const data = await api(path);
+        window.sessionStorage.setItem(key, JSON.stringify({data, savedAt: Date.now()}));
+      } catch {
+        // Report display stays usable if optional warming or browser storage fails.
       }
     };
-    // Let the selected report render first, then warm today, yesterday,
-    // week-to-date and month-to-date results in the background.
-    if (!summary.loading && summary.data) warm();
+    const warm = async () => {
+      // Start the two daily filters at page entry, then fill week and month.
+      await Promise.all(ranges.slice(0, 2).map(warmOne));
+      if (cancelled) return;
+      await pause(150);
+      await warmOne(ranges[2]);
+      if (cancelled) return;
+      await pause(150);
+      await warmOne(ranges[3]);
+    };
+    warm();
     return () => { cancelled = true; };
-  }, [channel, ctx.auth.user.id, ctx.company, selectedAccountCacheId, summary.loading, summary.data]);
+  }, [channel, ctx.auth.user.id, ctx.company, selectedAccountCacheId]);
   const summaryCacheRef = useRef({path:"", data:null});
   useEffect(()=>{
     if (summary.data) summaryCacheRef.current = {path:summaryPath, data:summary.data};
