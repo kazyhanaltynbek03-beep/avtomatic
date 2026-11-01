@@ -2448,6 +2448,7 @@ function MarketplaceInbox({ channel, ctx }) {
   if (ctx.company) summaryParams.set("company_id", ctx.company);
   if (selectedAccount) summaryParams.set("account_id", String(selectedAccount.id));
   const summaryPath = "/marketplace-summary?" + summaryParams;
+  const selectedAccountCacheId = selectedAccount?.id;
   // Reuse the last database-backed report for this user/filter immediately,
   // then let useLoad refresh it in the background. The API remains read-only;
   // marketplace synchronization continues through its existing background job.
@@ -2476,7 +2477,7 @@ function MarketplaceInbox({ channel, ctx }) {
         if (cancelled) return;
         const params = new URLSearchParams({channel, start, end});
         if (ctx.company) params.set("company_id", ctx.company);
-        if (selectedAccount) params.set("account_id", String(selectedAccount.id));
+        if (selectedAccountCacheId) params.set("account_id", String(selectedAccountCacheId));
         const path = "/marketplace-summary?" + params;
         const key = `qor-report:v1:${ctx.auth.user.id}:${path}`;
         try {
@@ -2494,7 +2495,7 @@ function MarketplaceInbox({ channel, ctx }) {
     // week-to-date and month-to-date results in the background.
     if (!summary.loading && summary.data) warm();
     return () => { cancelled = true; };
-  }, [channel, ctx.auth.user.id, ctx.company, selectedAccount?.id, summary.loading, summary.data]);
+  }, [channel, ctx.auth.user.id, ctx.company, selectedAccountCacheId, summary.loading, summary.data]);
   const summaryCacheRef = useRef({path:"", data:null});
   useEffect(()=>{
     if (summary.data) summaryCacheRef.current = {path:summaryPath, data:summary.data};
