@@ -36,6 +36,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
 from . import kaspi_integrity
 
+APP_STARTED_AT = datetime.now(timezone.utc)
+
 app = FastAPI(
     title="QOR Business ERP",
     version="1.0.0",
@@ -1639,9 +1641,12 @@ def marketplace_report_job_status(job_id: int, u=Depends(current_user), db=Depen
     if not job or job.kind != "marketplace_report" or job.user_id != u.id:
         raise HTTPException(404, "Задание отчёта не найдено")
     updated = job.started_at or job.created_at
-    if job.status in {"queued", "running"} and updated and updated < now() - timedelta(minutes=20):
+    if updated and updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    interrupted_by_restart = bool(updated and updated < APP_STARTED_AT)
+    if job.status in {"queued", "running"} and updated and (interrupted_by_restart or updated < now() - timedelta(minutes=20)):
         job.status = "failed"
-        job.error = "Задание прервано сервером. Выберите период ещё раз, чтобы сформировать отчёт."
+        job.error = "Задание прервано перезапуском сервера. Нажмите «Сформировать Excel в фоне» ещё раз."
         db.commit()
     return {"id": job.id, "status": job.status, "error": job.error or "",
             "filename": (job.result or {}).get("filename", "")}

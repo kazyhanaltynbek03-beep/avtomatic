@@ -2391,9 +2391,8 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
     setRange({start,end});
     setRefresh(v=>v+1);
     setNotice(channel==="Kaspi"
-      ? "Показываю сохранённые записи из базы. Excel формируется в фоне — можно перейти в другой раздел."
+      ? "Показываю сохранённые записи из базы. Excel можно сформировать отдельной фоновой задачей."
       : "Загружаю сохранённые данные за выбранный период.");
-    if(channel==="Kaspi") void queueReport(start,end);
   };
   const queueReport=async(reportStart,reportEnd)=>{
     setError("");
@@ -2426,7 +2425,7 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
       finally{setBusy(false);}
       return;
     }
-    if(reportJob?.status==="failed") await queueReport(range.start,range.end);
+    if(!reportJob||reportJob.status==="failed") await queueReport(range.start,range.end);
     setBusy(false);
   };
   const reportJobRunning=["queued","running"].includes(reportJob?.status);
