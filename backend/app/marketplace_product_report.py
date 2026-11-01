@@ -241,7 +241,7 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             kind, _, value = link.external_key.partition(":")
             matched_card_keys.add(f"{sale.account_id}:{value}" if kind == "product" else f"{sale.account_id}:sku:{value}")
         card_key = next(iter(matched_card_keys)) if len(matched_card_keys) == 1 else None
-        elif not source_keys and len(linked_cards.get((sale.company_id, sale.product_id), {})) == 1:
+        if card_key is None and not source_keys and len(linked_cards.get((sale.company_id, sale.product_id), {})) == 1:
             card_key = next(iter(linked_cards[(sale.company_id, sale.product_id)]))
         card = linked_cards.get((sale.company_id, sale.product_id), {}).get(card_key)
         if card:
