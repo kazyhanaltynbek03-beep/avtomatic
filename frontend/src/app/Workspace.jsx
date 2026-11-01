@@ -1028,6 +1028,13 @@ function ReportPage({ page, ctx }) {
   );
   const dashboardKaspiSummary = useLoad(usesDashboard && loadedReport ? marketplaceSummaryPath("Kaspi") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:900});
   const dashboardWbSummary = useLoad(usesDashboard && loadedReport ? marketplaceSummaryPath("Wildberries") : null, ctx.refresh, {cacheScope:ctx.auth.user.id, debounceMs:900});
+  const skuOverviewParams = new URLSearchParams({start:ctx.start,end:ctx.end});
+  if (ctx.company) skuOverviewParams.set("company_id", ctx.company);
+  const skuOverview = useLoad(
+    usesDashboard && loadedReport ? `/marketplace-product-report?${skuOverviewParams}` : null,
+    ctx.refresh,
+    {cacheScope:ctx.auth.user.id},
+  );
   const { data: systemAlerts, error: systemAlertsError, loading: systemAlertsLoading } = useLoad(alertsPath, `${ctx.refresh}:${alertRetry}`);
   const onNotificationCount = ctx.onNotificationCount;
   useEffect(() => {
@@ -1343,7 +1350,10 @@ function ReportPage({ page, ctx }) {
     });
     const marketplaceChartRows = marketplaceRows.map((row) => ({...row, chartRevenue:Math.max(0, Number(row.revenue) || 0)})).filter((row) => row.chartRevenue > 0);
     const marketplaceShareBase = marketplaceChartRows.reduce((sum, row) => sum + row.chartRevenue, 0);
-    const topProducts = [...(r.products || [])].sort((a,b)=>(Number(b.revenue)||0)-(Number(a.revenue)||0)).slice(0,5);
+    const skuProducts = skuOverview.data?.items || [];
+    const skuByProduct = new Map(skuProducts.map((product) => [String(product.product_id), product]));
+    const topProducts = [...(r.products || [])].sort((a,b)=>(Number(b.quantity)||0)-(Number(a.quantity)||0)||(Number(b.revenue)||0)-(Number(a.revenue)||0)).slice(0,5);
+    const skuReportReady = Boolean(skuOverview.data);
     const stockAlerts = (r.stock_alerts || []).slice(0,6);
     return <div className="qor-overview">
       <CostPendingNotice report={r} ctx={ctx}/>
@@ -1384,8 +1394,18 @@ function ReportPage({ page, ctx }) {
         </section>
       </div>
       <div className="qor-overview-bottom-grid">
-        <section className="panel"><div className="panel-heading"><div><h2>Топ товаров</h2><span>По выручке за период</span></div><button className="text-button" onClick={()=>ctx.navigate("products")}>Все товары →</button></div>
-          <div className="table-scroll"><table className="qor-overview-table"><thead><tr><th>Товар</th><th>Продажи, шт.</th><th>Выручка</th><th>Валовая прибыль</th></tr></thead><tbody>{topProducts.map((product,index)=><tr key={product.id || product.name || index}><td><b>{product.name || "Товар"}</b><small>{product.sku || "SKU не указан"}</small></td><td>{product.quantity ?? product.units ?? "—"}</td><td>{money(product.revenue)}</td><td>{product.gross_profit == null ? "—" : money(product.gross_profit)}</td></tr>)}</tbody></table></div>
+        <section className="panel"><div className="panel-heading"><div><h2>Топ товаров по SKU</h2><span>Общие продажи по связанным карточкам · {ctx.start} — {ctx.end}</span></div><button className="text-button" onClick={()=>ctx.navigate("marketplace-product-report")}>Сводный отчёт →</button></div>
+          <div className="table-scroll"><table className="qor-overview-table"><thead><tr><th>Товар / карточки</th><th>Продажи, шт.</th><th>Остаток общий</th><th>Выручка</th><th>Валовая прибыль</th></tr></thead><tbody>{topProducts.map((product,index)=>{
+            const skuProduct = skuByProduct.get(String(product.id));
+            const cards = skuProduct?.marketplace_cards || [];
+            const units = product.quantity ?? product.units;
+            const revenue = product.revenue;
+            const detailsByStore = skuProduct?.marketplace_breakdown || [];
+            return <tr key={product.product_id || product.id || product.name || index}><td><b>{product.product_name || product.name || "Товар"}</b><small>{product.sku || "SKU не указан"}{product.article ? ` · Артикул ${product.article}` : ""}</small>
+              {skuReportReady && <details className="overview-sku-cards"><summary>Карточки · {cards.length || detailsByStore.length}</summary><div>{cards.length ? cards.map((card,cardIndex)=><p key={`${card.channel}-${card.account_id}-${card.external_key || card.external_id}-${cardIndex}`}><b>{card.channel} · {card.store}</b><span>Карточка {card.external_id} · {card.sales_attributed ? `продано ${card.sold_units} шт.` : "нет точной разбивки продаж по карточке"}{card.returned_units ? ` · возвраты ${card.returned_units} шт.` : ""}</span></p>) : detailsByStore.map((card,cardIndex)=><p key={`${card.channel}-${card.account_id}-${cardIndex}`}><b>{card.channel} · {card.account_name}</b><span>Продано {card.sold_units} шт.{card.returned_units ? ` · возвраты ${card.returned_units} шт.` : ""} · разбивка по магазину</span></p>)}</div></details>}
+            </td><td>{units ?? "—"}</td><td>{skuProduct ? `${skuProduct.available_stock ?? 0} шт.` : "—"}</td><td>{money(revenue)}</td><td>{product.gross_profit == null && product.profit == null ? "—" : money(product.gross_profit ?? product.profit)}</td></tr>;
+          })}</tbody></table></div>
+          {!topProducts.length && <Empty text={skuOverview.loading ? "Сводка SKU обновляется в фоне" : "За выбранный период нет продаж по связанным SKU"}/>}
         </section>
         <section className="panel"><div className="panel-heading"><div><h2>Низкий остаток</h2><span>{(r.stock_alerts || []).length} товаров требуют внимания</span></div><button className="text-button" onClick={()=>ctx.navigate("stock")}>Единый склад →</button></div>
           <div className="qor-low-stock-list">{stockAlerts.map((item,index)=><article key={item.id || item.sku || index}><span className="qor-stock-icon"><Package size={16}/></span><div><b>{item.name || item.product_name || "Товар"}</b><small>SKU · {item.sku || "—"}</small></div><strong className="qor-stock-amount">{item.quantity ?? item.stock ?? 0} шт.</strong></article>)}</div>
