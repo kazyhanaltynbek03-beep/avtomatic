@@ -2448,7 +2448,53 @@ function MarketplaceInbox({ channel, ctx }) {
   if (ctx.company) summaryParams.set("company_id", ctx.company);
   if (selectedAccount) summaryParams.set("account_id", String(selectedAccount.id));
   const summaryPath = "/marketplace-summary?" + summaryParams;
-  const summary = useLoad(summaryPath, `${ctx.refresh}:${summaryReload}`);
+  // Reuse the last database-backed report for this user/filter immediately,
+  // then let useLoad refresh it in the background. The API remains read-only;
+  // marketplace synchronization continues through its existing background job.
+  const summary = useLoad(summaryPath, `${ctx.refresh}:${summaryReload}`, { cacheScope: ctx.auth.user.id });
+  useEffect(() => {
+    // Warm the standard date filters from the database before the user selects
+    // them. Sequential reads avoid launching several expensive report queries
+    // at once; useLoad can then render each saved response on the same tick.
+    let cancelled = false;
+    const dayKey = today();
+    const shiftDay = (value, amount) => {
+      const date = new Date(`${value}T12:00:00Z`);
+      date.setUTCDate(date.getUTCDate() + amount);
+      return date.toISOString().slice(0, 10);
+    };
+    const mondayOffset = (new Date(`${dayKey}T12:00:00Z`).getUTCDay() + 6) % 7;
+    const ranges = [
+      [dayKey, dayKey],
+      [shiftDay(dayKey, -1), shiftDay(dayKey, -1)],
+      [shiftDay(dayKey, -mondayOffset), dayKey],
+      [`${dayKey.slice(0, 8)}01`, dayKey],
+    ];
+    const pause = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
+    const warm = async () => {
+      for (const [start, end] of ranges) {
+        if (cancelled) return;
+        const params = new URLSearchParams({channel, start, end});
+        if (ctx.company) params.set("company_id", ctx.company);
+        if (selectedAccount) params.set("account_id", String(selectedAccount.id));
+        const path = "/marketplace-summary?" + params;
+        const key = `qor-report:v1:${ctx.auth.user.id}:${path}`;
+        try {
+          const saved = JSON.parse(window.sessionStorage.getItem(key) || "null");
+          if (saved?.data && Date.now() - Number(saved.savedAt) < 5 * 60 * 1000) continue;
+          const data = await api(path);
+          window.sessionStorage.setItem(key, JSON.stringify({data, savedAt: Date.now()}));
+        } catch {
+          // Report display stays usable if optional warming or browser storage fails.
+        }
+        await pause(150);
+      }
+    };
+    // Let the selected report render first, then warm today, yesterday,
+    // week-to-date and month-to-date results in the background.
+    if (!summary.loading && summary.data) warm();
+    return () => { cancelled = true; };
+  }, [channel, ctx.auth.user.id, ctx.company, selectedAccount?.id, summary.loading, summary.data]);
   const summaryCacheRef = useRef({path:"", data:null});
   useEffect(()=>{
     if (summary.data) summaryCacheRef.current = {path:summaryPath, data:summary.data};
