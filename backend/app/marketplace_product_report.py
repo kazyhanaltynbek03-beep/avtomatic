@@ -206,14 +206,51 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         MarketplaceProductMapping.product_id.in_(product_ids or {-1}),
         MarketplaceProductMapping.account_id.in_(account_ids or {-1}),
     )))
-    linked_cards = defaultdict(list)
+    # Keep the stable marketplace product ID as one card; SKU/barcode aliases
+    # are identifiers for the same card and must not inflate the card count.
+    linked_cards = defaultdict(dict)
+    mappings_by_account_product = defaultdict(list)
     for link in links:
         account = account_map.get(link.account_id)
         if account:
-            linked_cards[(link.company_id, link.product_id)].append({
-                "channel": link.channel, "store": account.name,
-                "external_id": link.external_key,
+            mappings_by_account_product[(link.company_id, link.product_id, link.account_id)].append(link)
+            kind, _, value = link.external_key.partition(":")
+            card_key = f"{link.account_id}:{value}" if kind == "product" else None
+            if card_key is None and kind == "sku":
+                card_key = f"{link.account_id}:sku:{value}"
+            if card_key is None:
+                continue
+            linked_cards[(link.company_id, link.product_id)].setdefault(card_key, {
+                "channel": link.channel, "store": account.name, "account_id": account.id,
+                "external_id": value, "external_key": link.external_key,
+                "sold_units": 0, "returned_units": 0, "sales_attributed": False,
             })
+
+    # New projected sales retain their source card identifiers. Older records
+    # can be attributed only when the store has exactly one linked card.
+    card_sales = {}
+    for sale in sales:
+        candidates = mappings_by_account_product.get((sale.company_id, sale.product_id, sale.account_id), [])
+        source_keys = set((sale.source_fx or {}).get("marketplace_product_keys") or [])
+        product_keys = {key for key in source_keys if key.startswith("product:")}
+        matched = [link for link in candidates if link.external_key in product_keys] if product_keys else []
+        if not matched and source_keys:
+            matched = [link for link in candidates if link.external_key in source_keys and link.external_key.startswith("sku:")]
+        card_key = None
+        if len(matched) == 1:
+            kind, _, value = matched[0].external_key.partition(":")
+            card_key = f"{sale.account_id}:{value}" if kind == "product" else f"{sale.account_id}:sku:{value}"
+        elif not source_keys and len(linked_cards.get((sale.company_id, sale.product_id), {})) == 1:
+            card_key = next(iter(linked_cards[(sale.company_id, sale.product_id)]))
+        card = linked_cards.get((sale.company_id, sale.product_id), {}).get(card_key)
+        if card:
+            card["sold_units"] += int(sale.quantity or 0)
+            card["sales_attributed"] = True
+            card_sales[sale.id] = card
+    for ret in returns:
+        card = card_sales.get(return_sales.get(ret.id).id) if return_sales.get(ret.id) else None
+        if card:
+            card["returned_units"] += int(ret.quantity or 0)
 
     products_for_price = products
     for key, row in combined.items():
@@ -252,7 +289,8 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
             key=lambda detail: (detail["channel"], detail["account_name"].casefold()),
         )
         row["marketplace_cards"] = sorted(
-            linked_cards.get(key, []), key=lambda link: (link["channel"], link["store"].casefold(), link["external_id"])
+            linked_cards.get(key, {}).values(),
+            key=lambda link: (link["channel"], link["store"].casefold(), link["external_id"]),
         )
         row["marketplace_card_count"] = len(row["marketplace_cards"])
         row["marketplace_names"] = ", ".join(
