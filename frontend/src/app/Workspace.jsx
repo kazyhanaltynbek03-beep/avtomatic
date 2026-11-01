@@ -1077,15 +1077,25 @@ function ReportPage({ page, ctx }) {
       ["Продано единиц", fast.units, Package, "Количество по операциям"],
     ];
     const channelColors = { kaspi:"#ed4c4c", wildberries:"#8c38ce", ozon:"#2473dd", offline:"#40856a", b2b:"#d5a426" };
-    const quickChannels = (fast.channel_summary || []).map((row) => ({
-      ...row,
-      channel: row.channel || row.name || "Другие",
-      revenue: Number(row.revenue) || 0,
-    }));
+    const quickChannels = (fast.channel_summary || []).map((row) => {
+      const channel = row.channel || row.name || "Другие";
+      return {
+        ...row,
+        channel,
+        label: channel === "Offline" ? "Офлайн" : channel,
+        revenue: Number(row.revenue) || 0,
+      };
+    });
     const quickChannelTotal = quickChannels.reduce((sum, row) => sum + Math.max(0, row.revenue), 0);
-    const marketplaceCards = ["Kaspi", "Wildberries"].map((name) => {
+    const marketplaceCards = ["Kaspi", "Wildberries", "Offline"].map((name) => {
       const row = quickChannels.find((item) => String(item.channel).trim().toLowerCase() === name.toLowerCase());
-      return { name, revenue: row?.revenue ?? null, returns: row?.returns ?? null, units: row?.quantity ?? null };
+      return {
+        name,
+        label: name === "Offline" ? "Офлайн" : name,
+        revenue: row?.revenue ?? 0,
+        returns: row?.returns ?? 0,
+        units: row?.quantity ?? 0,
+      };
     });
     const chartChannels = quickChannels.filter((row) => row.revenue > 0);
     return (
@@ -1104,16 +1114,16 @@ function ReportPage({ page, ctx }) {
             <strong>{value == null ? "—" : index === 3 ? decimal(value) : money(value)}</strong><small>{note}</small>
           </article>)}
         </div>
-        <section className="qor-quick-marketplaces" aria-label="Продажи по маркетплейсам">
+        <section className="qor-quick-marketplaces" aria-label="Продажи по каналам">
           {marketplaceCards.map((row) => {
             const key = row.name.toLowerCase(), color = channelColors[key];
             const share = quickChannelTotal && row.revenue != null ? Math.min(100, Math.max(0, row.revenue / quickChannelTotal * 100)) : 0;
             return <article className={`qor-quick-marketplace qor-quick-marketplace--${key}`} key={row.name}>
-              <div className="qor-quick-marketplace-mark">{row.name === "Wildberries" ? "WB" : "K"}</div>
-              <div className="qor-quick-marketplace-body"><div><strong>{row.name}</strong><span>{row.units == null ? "Продажи за период" : `${decimal(row.units)} шт. продано`}</span></div>
-                <b>{row.revenue == null ? "Нет данных в сводке" : money(row.revenue)}</b>
+              <div className="qor-quick-marketplace-mark">{row.name === "Wildberries" ? "WB" : row.name === "Offline" ? "ОФ" : "K"}</div>
+              <div className="qor-quick-marketplace-body"><div><strong>{row.label}</strong><span>{decimal(row.units)} шт. продано за период</span></div>
+                <b>{money(row.revenue)}</b>
                 <div className="qor-quick-marketplace-track"><i style={{width:`${share}%`,background:color}}/></div>
-                <small>{row.returns == null ? "Возвраты: —" : `Возвраты: ${money(row.returns)}`}</small>
+                <small>{`Возвраты: ${money(row.returns)}`}</small>
               </div>
             </article>;
           })}
@@ -1123,14 +1133,14 @@ function ReportPage({ page, ctx }) {
             <div className="panel-heading"><div><h2>Продажи по каналам</h2><span>Доля выручки за выбранный период</span></div><span className="qor-chart-caption">{ctx.start} — {ctx.end}</span></div>
             {chartChannels.length ? <div className="qor-quick-channel-list">{chartChannels.sort((a,b)=>b.revenue-a.revenue).map((row) => {
               const color = channelColors[String(row.channel).toLowerCase()] || "#40856a", share = quickChannelTotal ? row.revenue / quickChannelTotal * 100 : 0;
-              return <div className="qor-quick-channel-row" key={row.channel}><div><span><i style={{background:color}}/>{row.channel}</span><b>{money(row.revenue)}</b></div><div className="qor-quick-channel-track"><i style={{width:`${share}%`,background:color}}/></div><small>{decimal(share)}% выручки</small></div>;
+              return <div className="qor-quick-channel-row" key={row.channel}><div><span><i style={{background:color}}/>{row.label}</span><b>{money(row.revenue)}</b></div><div className="qor-quick-channel-track"><i style={{width:`${share}%`,background:color}}/></div><small>{decimal(share)}% выручки</small></div>;
             })}</div> : <Empty text="За выбранный период нет продаж по каналам"/>}
           </section>
           <section className="panel qor-quick-share-panel">
             <div className="panel-heading"><div><h2>Структура продаж</h2><span>Распределение по каналам</span></div></div>
             {chartChannels.length ? <>
               <div className="qor-quick-share-chart"><ResponsiveContainer width="100%" height={188}><PieChart>
-                <Pie data={chartChannels} dataKey="revenue" nameKey="channel" innerRadius={55} outerRadius={78} paddingAngle={3} stroke="none">
+                <Pie data={chartChannels} dataKey="revenue" nameKey="label" innerRadius={55} outerRadius={78} paddingAngle={3} stroke="none">
                   {chartChannels.map((row) => <Cell key={row.channel} fill={channelColors[String(row.channel).toLowerCase()] || "#40856a"}/>)}
                 </Pie><Tooltip formatter={(value) => money(value)}/>
               </PieChart></ResponsiveContainer></div>
@@ -1602,7 +1612,7 @@ function ReportPage({ page, ctx }) {
           ["Kaspi API оборот", dashboardKaspiSummary.data?.api_revenue ?? null, true],
            ["WB API оборот", dashboardWbSummary.data?.api_revenue ?? null, true],
           ["Ozon оборот", dash?.selected?.channels?.Ozon || 0, true],
-          ["Offline оборот", dash?.selected?.channels?.Offline || 0, true],
+          ["Офлайн-оборот", dash?.selected?.channels?.Offline || 0, true],
           ["B2B оборот", dash?.selected?.channels?.B2B || 0, true],
         ].map(([k, v, m]) => (
           <div key={k}>
