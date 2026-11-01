@@ -677,6 +677,20 @@ function BuildingSelect({ refs, company, setCompany }) {
     </select>
   );
 }
+function PageNavigation({ total = 0, offset = 0, pageSize = 30, onPage, className = "pagination" }) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(pageCount, Math.floor(offset / pageSize) + 1);
+  const pages = [...new Set([1, page - 1, page, page + 1, pageCount].filter((n) => n >= 1 && n <= pageCount))].sort((a, b) => a - b);
+  let previous = 0;
+  return <nav className={className} aria-label="Страницы таблицы">
+    <span>{total ? offset + 1 : 0}–{Math.min(offset + pageSize, total)} из {total} · страница {page} из {pageCount}</span>
+    <div className="pagination-pages">
+      <button className="secondary" aria-label="Предыдущая страница" disabled={page <= 1} onClick={() => onPage(page - 1)}>Назад</button>
+      {pages.map((number) => { const gap = previous && number - previous > 1; previous = number; return <span className="pagination-page-item" key={number}>{gap && <span className="pagination-ellipsis" aria-hidden="true">…</span>}<button type="button" className={`secondary pagination-number${number === page ? " active" : ""}`} aria-label={`Страница ${number}`} aria-current={number === page ? "page" : undefined} onClick={() => onPage(number)}>{number}</button></span>; })}
+      <button className="secondary" aria-label="Следующая страница" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>Далее</button>
+    </div>
+  </nav>;
+}
 function Table({ rows, cols, refs = {}, actions, raw = false, entity = "" }) {
   const fmt = (row, k) => {
     const v = k === "score" ? row.analysis?.score : row[k];
@@ -1878,7 +1892,7 @@ function Stock({ ctx }) {
       )}
       <section className="panel stock-lot-history">
         <div className="section-heading"><div><h3>История приходов по партиям</h3><p className="muted">Каждое поступление хранится отдельной строкой: дата, принято, продано, возвращено и остаток партии.</p></div></div>
-        {batches.loading ? <Spinner/> : batches.error ? <ErrorBox error={batches.error}/> : !batches.data?.items?.length && batchOffset === 0 ? <Empty/> : <><div className="table-scroll"><table><thead><tr><th>Дата прихода</th><th>Товар / SKU</th><th>Поступило</th><th>Продано</th><th>Возвращено</th><th>Остаток партии</th></tr></thead><tbody>{(batches.data?.items || []).map(batch=>{const product=ctx.refs.products?.find(p=>p.id===batch.product_id);return <tr key={batch.id}><td>{batch.date}</td><td>{product?.name || "Товар"}<small className="muted"> · {product?.sku || `#${batch.product_id}`}</small></td><td>{batch.quantity} шт.</td><td>{batch.sold_quantity ?? 0} шт.</td><td>{batch.returned_quantity ?? 0} шт.</td><td><b>{batch.remaining} шт.</b></td></tr>})}</tbody></table></div><div className="stock-actions"><button className="secondary" disabled={batchOffset===0} onClick={()=>setBatchOffset(Math.max(0,batchOffset-100))}>Назад</button><span className="muted">Показано {batchOffset+1}–{Math.min(batchOffset+(batches.data?.items?.length || 0), batches.data?.total || 0)} из {batches.data?.total || 0}</span><button className="secondary" disabled={batchOffset+100 >= (batches.data?.total || 0)} onClick={()=>setBatchOffset(batchOffset+100)}>Дальше</button></div></>}
+        {batches.loading ? <Spinner/> : batches.error ? <ErrorBox error={batches.error}/> : !batches.data?.items?.length && batchOffset === 0 ? <Empty/> : <><div className="table-scroll"><table><thead><tr><th>Дата прихода</th><th>Товар / SKU</th><th>Поступило</th><th>Продано</th><th>Возвращено</th><th>Остаток партии</th></tr></thead><tbody>{(batches.data?.items || []).map(batch=>{const product=ctx.refs.products?.find(p=>p.id===batch.product_id);return <tr key={batch.id}><td>{batch.date}</td><td>{product?.name || "Товар"}<small className="muted"> · {product?.sku || `#${batch.product_id}`}</small></td><td>{batch.quantity} шт.</td><td>{batch.sold_quantity ?? 0} шт.</td><td>{batch.returned_quantity ?? 0} шт.</td><td><b>{batch.remaining} шт.</b></td></tr>})}</tbody></table></div><PageNavigation total={batches.data?.total||0} offset={batchOffset} pageSize={100} onPage={(page)=>setBatchOffset((page-1)*100)}/></>}
       </section>
     </div>
   );
@@ -2345,14 +2359,15 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
       </tbody></table></div>
       <h4>Финансовые операции WB</h4>
       <div className="table-wrap"><table className="data-table"><thead><tr><th>Дата</th><th>Тип операции</th><th>Артикул</th><th>Сумма WB (исходная)</th><th>Влияние на начисление</th><th>ID источника</th></tr></thead><tbody>{operations.slice(opPage*200,(opPage+1)*200).map((o)=><tr key={o.external_id}><td>{o.date}</td><td>{o.is_return ? "Возврат" : o.operation||"—"}</td><td>{o.article}</td><td>{amount(o.raw_amount,o.currency)}</td><td>{amount(o.amount,o.currency)}</td><td>{o.external_id}</td></tr>)}</tbody></table></div>
-      {pageCount>1 && <div className="row-actions"><button type="button" disabled={opPage===0} onClick={()=>setOpPage((v)=>v-1)}>Назад</button><span className="muted">Страница {opPage+1} из {pageCount} · всего операций: {operations.length}</span><button type="button" disabled={opPage+1>=pageCount} onClick={()=>setOpPage((v)=>v+1)}>Далее</button></div>}
+      {pageCount>1 && <PageNavigation total={operations.length} offset={opPage*200} pageSize={200} onPage={(page)=>setOpPage(page-1)} />}
     </>}
   </section>;
 }
 
 function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefresh}) {
-  const [filter,setFilter]=useState("all"),[reload,setReload]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState("");
-  const params=new URLSearchParams({channel,status_filter:filter,limit:"200"});
+  const [filter,setFilter]=useState("all"),[reload,setReload]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(""),[offset,setOffset]=useState(0);
+  useEffect(()=>setOffset(0),[filter,channel,ctx.company,selectedAccount?.id]);
+  const params=new URLSearchParams({channel,status_filter:filter,limit:"30",offset:String(offset)});
   if(ctx.company) params.set("company_id",ctx.company);
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const data=useLoad("/marketplace-orders?"+params,`${ctx.refresh}:${reload}`);
@@ -2366,7 +2381,7 @@ function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefres
   const summary=data.data?.summary||{};
   return <section className="panel marketplace-orders-report"><div className="section-heading"><div><h3>Заказы и товары в пути</h3><p className="muted">Статус берётся из API выбранных магазинов. Сумма заказа не считается выплатой; финансовые расчёты продаж остаются отдельными.</p></div>{canRefresh&&<button type="button" disabled={busy||!accounts.length} onClick={refresh}>{busy?"Обновляем…":"Обновить статусы API"}</button>}</div>
     <div className="row-actions" role="group" aria-label="Фильтр статуса заказа">{[["all","Все"],["in_delivery","В доставке"],["delivered","Доставлены"],["waiting","Ожидают"],["canceled","Отменены"],["returns","Возвраты / брак"]].map(([id,label])=><button key={id} type="button" aria-pressed={filter===id} className={filter===id?"primary":""} onClick={()=>setFilter(id)}>{label}{id==="all"?` · ${data.data?.total||0}`:` · ${summary[id]||0}`}</button>)}</div>
-    {error&&<ErrorBox error={error}/ >}{data.loading?<Spinner/>:data.error?<ErrorBox error={data.error}/>:!data.data?.items?.length?<Empty text="Заказы для этого фильтра не найдены."/>:<div className="table-scroll"><table><thead><tr><th>Магазин</th><th>Дата</th><th>Заказ</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма заказа</th><th>Статус API</th><th>Учёт / деньги</th></tr></thead><tbody>{data.data.items.map((x,i)=><tr key={`${x.account_id}:${x.order_id}:${i}`}><td>{x.store}</td><td>{x.date?new Date(x.date).toLocaleString("ru-RU"):"—"}</td><td>{x.order_id}</td><td>{x.product}{x.sku&&<small className="muted"> · {x.sku}</small>}</td><td>{x.quantity??"—"}</td><td>{x.amount==null?"—":money(Math.round(Number(x.amount)*100))}</td><td><span className={`pill marketplace-order-status marketplace-order-status--${x.group}`}>{x.status}</span></td><td><strong>{x.finance_status}</strong><small className="muted">{x.erp_status}</small></td></tr>)}</tbody></table></div>}
+    {error&&<ErrorBox error={error}/ >}{data.loading?<Spinner/>:data.error?<ErrorBox error={data.error}/>:!data.data?.items?.length?<Empty text="Заказы для этого фильтра не найдены."/>:<><div className="table-scroll"><table><thead><tr><th>Магазин</th><th>Дата</th><th>Заказ</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма заказа</th><th>Статус API</th><th>Учёт / деньги</th></tr></thead><tbody>{data.data.items.map((x,i)=><tr key={`${x.account_id}:${x.order_id}:${i}`}><td>{x.store}</td><td>{x.date?new Date(x.date).toLocaleString("ru-RU"):"—"}</td><td>{x.order_id}</td><td>{x.product}{x.sku&&<small className="muted"> · {x.sku}</small>}</td><td>{x.quantity??"—"}</td><td>{x.amount==null?"—":money(Math.round(Number(x.amount)*100))}</td><td><span className={`pill marketplace-order-status marketplace-order-status--${x.group}`}>{x.status}</span></td><td><strong>{x.finance_status}</strong><small className="muted">{x.erp_status}</small></td></tr>)}</tbody></table></div><PageNavigation total={data.data.total||0} offset={offset} pageSize={30} onPage={(page)=>setOffset((page-1)*30)}/></>}
     <p className="muted">Kaspi подтверждает статусы заказа, но не банковское зачисление. Для WB финансовая строка означает наличие строки отчёта реализации, а не подтверждение выплаты банком.</p>
   </section>;
 }
@@ -2737,7 +2752,7 @@ function MarketplaceInbox({ channel, ctx }) {
     <ErrorBox error={error || state.error}/>
     {state.loading ? <Spinner/> : <Table raw rows={state.data?.items || []} cols={["reference","product_name","sku","quantity","amount","currency","marketplace_status","status","stage_status","projection_reason"]} actions={row=>row.external_keys?.length && !["mapped_product","projected"].includes(row.status) && can(ctx.auth,"accounts",true) ? <button disabled={busy} onClick={()=>{setSelected(row);setKey(row.external_keys[0]);setProduct("");}}>Привязать товар</button> : null}/>}
     {selected && <div className="panel"><h3>Привязка товара</h3><label>Идентификатор источника<select value={key} onChange={e=>setKey(e.target.value)}>{selected.external_keys.map(k=><option key={k}>{k}</option>)}</select></label><label>Товар ERP<select value={product} onChange={e=>setProduct(e.target.value)}><option value="">Выберите товар</option>{(ctx.refs.products || []).map(p=><option value={p.id} key={p.id}>{p.sku} · {p.name}</option>)}</select></label><button className="primary" disabled={busy || !product} onClick={bind}>Сохранить привязку</button><button onClick={()=>setSelected(null)}>Закрыть</button></div>}
-    <div className="row-actions"><button disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>Предыдущие</button><span>{offset+1}–{Math.min(offset+30,state.data?.total || 0)}</span><button disabled={offset+30 >= (state.data?.total || 0)} onClick={()=>setOffset(offset+30)}>Следующие</button></div>
+    <PageNavigation total={state.data?.total || 0} offset={offset} pageSize={30} onPage={(page)=>setOffset((page-1)*30)} />
     </>}
     </>}
     {kpiDetail && (kpiDetail.source === "api" ? <MarketplaceRecordDetails ctx={ctx} detail={kpiDetail} onClose={()=>setKpiDetail(null)}/> : <ReportDetails ctx={ctx} detail={{...kpiDetail,account_id:selectedAccount?.id}} onClose={()=>setKpiDetail(null)}/>)}
@@ -3265,28 +3280,7 @@ function DataPage({ page, ctx }) {
                 </>
               )}
             />}
-            <div className="pagination">
-              <span>
-                {state.data.total ? offset + 1 : 0}–
-                {Math.min(offset + 30, state.data.total)} из {state.data.total}
-              </span>
-              <div>
-                <button
-                  className="secondary"
-                  disabled={!offset}
-                  onClick={() => setOffset(Math.max(0, offset - 30))}
-                >
-                  Назад
-                </button>
-                <button
-                  className="secondary"
-                  disabled={offset + 30 >= state.data.total}
-                  onClick={() => setOffset(offset + 30)}
-                >
-                  Далее
-                </button>
-              </div>
-            </div>
+            <PageNavigation total={state.data.total} offset={offset} pageSize={30} onPage={(page) => setOffset((page - 1) * 30)} />
           </>
         )}
       </div>
