@@ -245,6 +245,9 @@ def _sale_event(db, acc, payload, quantity, amount, dt, external, currency, lega
     if len(legacy) > 1: raise Pending('LEGACY_DUPLICATES_REQUIRE_RECONCILIATION')
     if legacy: ref = legacy[0].reference
     total,fx=amount_snapshot(db,acc,amount,currency,dt,Sale,ref)
+    # Preserve the marketplace card identity on each newly projected sale so
+    # consolidated SKU reports can show a truthful per-card breakdown.
+    fx = {**fx, "marketplace_product_keys": identifiers(payload)}
     unit=(total+qty-1)//qty
     return 'sale', s.SaleIn(company_id=acc.company_id, account_id=acc.id, product_id=product.id,
         reference=ref, date=_day_for_account(dt, acc), quantity=qty, unit_price=unit,
