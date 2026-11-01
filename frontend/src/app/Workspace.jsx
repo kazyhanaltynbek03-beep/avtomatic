@@ -76,13 +76,6 @@ function Login({ onAuth }) {
   const submit = async (e) => {
     e.preventDefault();
     if (submitLock.current) return;
-    if (kind === "sales") {
-      const missing = fields.filter((f) => f.required && !String(values[f.key] ?? "").trim());
-      if (missing.length) {
-        setError("Заполните обязательные поля: " + missing.map((f) => f.label.replace(/ · ₸$/, "")).join(", ") + ".");
-        return;
-      }
-    }
     submitLock.current = true;
     setBusy(true);
     setError("");
@@ -1836,11 +1829,7 @@ function Stock({ ctx }) {
               ctx.open("accounts", {company_id:ctx.company || ctx.refs.companies?.[0]?.id || "", name:"Офлайн продажи", channel:"Offline"});
               return;
             }
-            ctx.open("sales", {
-        account_id:account.id,
-        company_id:ctx.company || account.company_id,
-        ...(channel === "Offline" ? {reference: "OFF-" + Date.now().toString(36).toUpperCase()} : {}),
-      });
+            ctx.open("sales", {account_id:account.id, company_id:ctx.company || account.company_id});
           }}><Plus size={16}/>Записать офлайн-продажу</button>}
           {can(ctx.auth, "inventory", true) && <button className="secondary" onClick={() => ctx.open("adjustments")}><Plus size={16}/>Корректировка</button>}
         </div>
@@ -2807,7 +2796,11 @@ function DataPage({ page, ctx }) {
       ctx.open("accounts", {company_id:ctx.company || ctx.refs.companies?.[0]?.id || "", name:channel === "Offline" ? "Офлайн продажи" : "B2B продажи", channel});
       return;
     }
-    ctx.open("sales", {account_id:account.id, company_id:ctx.company || account.company_id});
+    ctx.open("sales", {
+      account_id:account.id,
+      company_id:ctx.company || account.company_id,
+      ...(channel === "Offline" ? {reference: "OFF-" + Date.now().toString(36).toUpperCase()} : {}),
+    });
   };
   const remove = async (row) => {
     if (
@@ -3553,6 +3546,13 @@ function EditModal({ kind, item, ctx, close }) {
     e.preventDefault();
     if (productWizard && !productQuickMode && productWizardStep < productWizardSections.length - 1) { advanceProductWizard(); return; }
     if (submitLock.current) return;
+    if (kind === "sales") {
+      const missing = fields.filter((f) => f.required && !String(values[f.key] ?? "").trim());
+      if (missing.length) {
+        setError("Заполните обязательные поля: " + missing.map((f) => f.label.replace(/ · ₸$/, "")).join(", ") + ".");
+        return;
+      }
+    }
     submitLock.current = true;
     setBusy(true);
     setError("");
