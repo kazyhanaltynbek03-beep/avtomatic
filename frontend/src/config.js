@@ -38,7 +38,7 @@ export const groups = [
       ["Kaspi", "Kaspi", Store, "sales"],
       ["Wildberries", "Wildberries", Store, "sales"],
       ["Ozon", "Ozon", Store, "sales"],
-      ["Offline", "Offline", Store, "sales"],
+      ["Offline", "Офлайн", Store, "sales"],
       ["marketplace-returns", "Возвраты", RotateCcw, "sales"],
     ],
   ],
