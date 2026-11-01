@@ -2465,11 +2465,30 @@ function MarketplaceInbox({ channel, ctx }) {
       return date.toISOString().slice(0, 10);
     };
     const mondayOffset = (new Date(`${dayKey}T12:00:00Z`).getUTCDay() + 6) % 7;
+    const yesterday = shiftDay(dayKey, -1);
+    const weekStart = shiftDay(dayKey, -mondayOffset);
+    const previousWeekStart = shiftDay(dayKey, -mondayOffset - 7);
+    const previousWeekEnd = shiftDay(dayKey, -mondayOffset - 1);
+    const monthStart = `${dayKey.slice(0, 8)}01`;
+    const previousMonthEnd = shiftDay(monthStart, -1);
+    const previousMonthStart = `${previousMonthEnd.slice(0, 8)}01`;
+    const currentDate = new Date(`${dayKey}T12:00:00Z`);
+    const quarterDate = new Date(currentDate);
+    quarterDate.setUTCMonth(Math.floor(quarterDate.getUTCMonth() / 3) * 3, 1);
+    const quarterStart = quarterDate.toISOString().slice(0, 10);
+    const yearStart = `${dayKey.slice(0, 4)}-01-01`;
+    const previousYearStart = `${String(Number(dayKey.slice(0, 4)) - 1)}-01-01`;
+    const previousYearEnd = shiftDay(yearStart, -1);
     const ranges = [
-      [dayKey, dayKey],
-      [shiftDay(dayKey, -1), shiftDay(dayKey, -1)],
-      [shiftDay(dayKey, -mondayOffset), dayKey],
-      [`${dayKey.slice(0, 8)}01`, dayKey],
+      [dayKey, dayKey],                         // Сегодня
+      [yesterday, yesterday],                   // Вчера
+      [weekStart, dayKey],                       // Неделя
+      [previousWeekStart, previousWeekEnd],     // Прошлая неделя
+      [monthStart, dayKey],                      // Месяц
+      [previousMonthStart, previousMonthEnd],   // Прошлый месяц
+      [quarterStart, dayKey],                    // Квартал
+      [yearStart, dayKey],                       // Год
+      [previousYearStart, previousYearEnd],     // Прошлый год
     ];
     const pause = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
     const warmOne = async ([start, end]) => {
@@ -2489,14 +2508,14 @@ function MarketplaceInbox({ channel, ctx }) {
       }
     };
     const warm = async () => {
-      // Start the two daily filters at page entry, then fill week and month.
+      // Prepare the day filters together, then fill all other quick periods
+      // one at a time to avoid several expensive summary scans at once.
       await Promise.all(ranges.slice(0, 2).map(warmOne));
-      if (cancelled) return;
-      await pause(150);
-      await warmOne(ranges[2]);
-      if (cancelled) return;
-      await pause(150);
-      await warmOne(ranges[3]);
+      for (const period of ranges.slice(2)) {
+        if (cancelled) return;
+        await pause(150);
+        await warmOne(period);
+      }
     };
     warm();
     return () => { cancelled = true; };
