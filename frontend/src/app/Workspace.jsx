@@ -157,6 +157,7 @@ export default function App() {
     [mobile, setMobile] = useState(false),
     [refresh, setRefresh] = useState(0),
     [notice, setNotice] = useState(""),
+    [reportDownload, setReportDownload] = useState(null),
     [notificationCount, setNotificationCount] = useState(0),
     [refs, setRefs] = useState({}),
     [company, setCompany] = useState(""),
@@ -180,6 +181,7 @@ export default function App() {
       .catch(() => setAuth(null));
   }, []);
   const notify = (m) => {
+    setReportDownload(null);
     setNotice(m);
     setRefresh((v) => v + 1);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -187,6 +189,17 @@ export default function App() {
       setNotice("");
       noticeTimer.current = null;
     }, 5000);
+  };
+  const notifyReportReady = (id, filename) => {
+    setNotice(`Excel готов: ${filename}`);
+    setReportDownload({ id, filename });
+    setRefresh((v) => v + 1);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => {
+      setNotice("");
+      setReportDownload(null);
+      noticeTimer.current = null;
+    }, 60000);
   };
   useEffect(() => {
     if (!auth) return;
@@ -301,6 +314,7 @@ export default function App() {
     setMarketplaceReportChannel,
     onNotificationCount: setNotificationCount,
     notify,
+    onReportReady: notifyReportReady,
     navigate,
     open: (kind, item) => setModal({ kind, item }),
     reload: () => setRefresh(value => value + 1),
@@ -625,6 +639,15 @@ export default function App() {
         <div className="toast" role="status">
           <CheckCircle2 size={19} />
           {notice}
+          {reportDownload && <button type="button" onClick={async () => {
+            try {
+              await downloadApiFile(`/marketplace-report/jobs/${reportDownload.id}/download`, reportDownload.filename);
+              setReportDownload(null);
+              setNotice("Excel отчёт скачан");
+            } catch (e) {
+              setNotice(e.message);
+            }
+          }}>Скачать Excel</button>}
         </div>
       )}
       {modal && (
@@ -2350,16 +2373,17 @@ function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefres
 
 function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
   const [start,setStart]=useState(ctx.start), [end,setEnd]=useState(ctx.end);
-  const [range,setRange]=useState(null), [refresh,setRefresh]=useState(0), [busy,setBusy]=useState(false), [error,setError]=useState(""), [notice,setNotice]=useState("");
+  const [range,setRange]=useState(null), [refresh,setRefresh]=useState(0), [busy,setBusy]=useState(false), [error,setError]=useState(""), [notice,setNotice]=useState(""), [reportJob,setReportJob]=useState(null);
   const params=new URLSearchParams({channel,start:range?.start||start,end:range?.end||end});
   if(ctx.company) params.set("company_id",ctx.company);
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const active=Boolean(range);
-  const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh);
+  const reportCacheScope=ctx.auth?.user?.id;
+  const summary=useLoad(channel==="Kaspi"&&active?"/marketplace-summary?"+params:null,refresh,{cacheScope:reportCacheScope});
   const salesParams=new URLSearchParams(params); salesParams.set("metric","sales");
   const returnsParams=new URLSearchParams(params); returnsParams.set("metric","returns");
-  const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh);
-  const returns=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+returnsParams:null,refresh);
+  const sales=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+salesParams:null,refresh,{cacheScope:reportCacheScope});
+  const returns=useLoad(channel==="Kaspi"&&active?"/marketplace-record-details?"+returnsParams:null,refresh,{cacheScope:reportCacheScope});
   const apiAvailable=summary.data?.api_data_available===true;
   const generate=async(event)=>{
     event.preventDefault(); setError(""); setNotice("");
@@ -2367,16 +2391,45 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
     setRange({start,end});
     setRefresh(v=>v+1);
     setNotice(channel==="Kaspi"
-      ? "Загружаю уже сохранённые записи из базы. Выбор периода не запускает синхронизацию."
+      ? "Показываю сохранённые записи из базы. Excel формируется в фоне — можно перейти в другой раздел."
       : "Загружаю сохранённые данные за выбранный период.");
+    if(channel==="Kaspi") void queueReport(start,end);
+  };
+  const queueReport=async(reportStart,reportEnd)=>{
+    setError("");
+    try {
+      const job=await api("/marketplace-report/jobs",{method:"POST",body:{channel,start:reportStart,end:reportEnd,...(ctx.company?{company_id:Number(ctx.company)}:{}),...(selectedAccount?{account_id:selectedAccount.id}:{})}});
+      setReportJob({...job,filename:`${channel}-API-${reportStart}-${reportEnd}.xlsx`});
+      setNotice(`Отчёт №${job.id} формируется в фоне. Можно перейти на другой экран.`);
+      const deadline=Date.now()+15*60*1000;
+      while(Date.now()<deadline){
+        await new Promise(resolve=>setTimeout(resolve,3000));
+        const status=await api(`/marketplace-report/jobs/${job.id}`,{timeoutMs:15000});
+        setReportJob(current=>({...current,...status}));
+        if(status.status==="succeeded"){
+          const filename=status.filename||`${channel}-API-${reportStart}-${reportEnd}.xlsx`;
+          setNotice("Excel готов. Откройте уведомление сверху, чтобы скачать файл.");
+          ctx.onReportReady?.(job.id,filename);
+          return;
+        }
+        if(status.status==="failed") throw new Error(status.error||"Не удалось сформировать Excel");
+      }
+      throw new Error("Отчёт ещё формируется. Его статус можно проверить позже.");
+    } catch(e){setError(e.message||"Не удалось сформировать Excel");}
   };
   const download=async()=>{
     if(!range) return;
     setError(""); setBusy(true);
-    try { await downloadApiFile(`/marketplace-report.xlsx?${params.toString()}`,`${channel}-API-${range.start}-${range.end}.xlsx`); }
-    catch(e){setError(e.message||"Не удалось сформировать Excel");}
-    finally{setBusy(false);}
+    if(reportJob?.status==="succeeded"){
+      try { await downloadApiFile(`/marketplace-report/jobs/${reportJob.id}/download`,reportJob.filename||`${channel}-API-${range.start}-${range.end}.xlsx`); }
+      catch(e){setError(e.message||"Не удалось скачать Excel");}
+      finally{setBusy(false);}
+      return;
+    }
+    if(reportJob?.status==="failed") await queueReport(range.start,range.end);
+    setBusy(false);
   };
+  const reportJobRunning=["queued","running"].includes(reportJob?.status);
   const reportReady=channel!=="Kaspi"||(summary.data?.sync_status==="done"&&summary.data?.source_complete===true);
   return <section className="panel marketplace-client-report" aria-label={`Отдельный отчёт ${channel}`}>
     <div className="section-heading"><div><h3>Отдельный отчёт {channel}</h3><p className="muted">Для Kaspi это отчёт по заказам/позициям API, не финансовая выписка Kaspi Pay. Для точной сверки выплат, фактических возвратов и комиссии загрузите официальный XLSX через «Импорт → Отчёт маркетплейса».</p></div></div>
@@ -2384,9 +2437,10 @@ function ClientMarketplaceReport({channel,ctx,accounts,selectedAccount}) {
       <label>С<input type="date" value={start} onChange={e=>setStart(e.target.value)} required/></label>
       <label>По<input type="date" value={end} onChange={e=>setEnd(e.target.value)} required/></label>
       <button className="primary" type="submit" disabled={busy||!accounts.length}>{busy?"Готовим…":"Показать отчёт"}</button>
-      {channel==="Kaspi"&&<button type="button" disabled={!range||busy} onClick={download}>{busy?"Формируем…":"Скачать Excel"}</button>}
+      {channel==="Kaspi"&&<button type="button" disabled={!range||busy||reportJobRunning} onClick={download}>{busy?"Создаём задание…":reportJobRunning?"Excel формируется в фоне…":reportJob?.status==="succeeded"?"Скачать Excel":"Сформировать Excel в фоне"}</button>}
     </form>
     {error&&<ErrorBox error={error}/>}{notice&&<p className="muted" role="status" aria-live="polite">{notice}</p>}
+    {reportJobRunning&&<p className="muted" role="status" aria-live="polite">Задание №{reportJob.id} обрабатывается на сервере. Можно продолжать работу в других разделах; по готовности появится уведомление со скачиванием Excel.</p>}
     {active&&<>
       {channel==="Wildberries" ? <WBFinanceReport key={`client-custom:${range.start}:${range.end}`} accounts={selectedAccount?[selectedAccount]:accounts} company={ctx.company} period="custom" start={range.start} end={range.end}/> : <>
         {summary.loading&&!summary.data?<Spinner/>:summary.error?<ErrorBox error={summary.error}/>:<>

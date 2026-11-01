@@ -1548,6 +1548,120 @@ def marketplace_report_xlsx(channel: str, start: date, end: date,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+def _run_marketplace_report_job(job_id: int):
+    """Build a marketplace XLSX after the request returns; keep status and file in Postgres."""
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if not job or job.kind != "marketplace_report":
+            return
+        payload = dict(job.payload or {})
+        job.status = "running"
+        job.started_at = now()
+        db.commit()
+        try:
+            user = db.get(User, job.user_id)
+            response = marketplace_report_xlsx(
+                channel=payload["channel"],
+                start=date.fromisoformat(payload["start"]),
+                end=date.fromisoformat(payload["end"]),
+                company_id=payload.get("company_id"),
+                account_id=payload.get("account_id"),
+                u=user,
+                db=db,
+            )
+            disposition = response.headers.get("Content-Disposition", "")
+            filename = re.search(r'filename="?([^";]+)', disposition)
+            job.result = {
+                "filename": filename.group(1) if filename else f'{payload["channel"]}-API-{payload["start"]}-{payload["end"]}.xlsx',
+                "xlsx_base64": base64.b64encode(response.body).decode("ascii"),
+            }
+            job.status = "succeeded"
+            job.error = ""
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            job = db.get(Job, job_id)
+            if job:
+                job.status = "failed"
+                job.error = str(getattr(exc, "detail", exc))[:500]
+                db.commit()
+
+
+@app.post("/api/marketplace-report/jobs")
+def enqueue_marketplace_report(payload: dict, tasks: BackgroundTasks,
+                               u=Depends(current_user), db=Depends(get_db)):
+    """Queue a long XLSX export so the user can continue using the workspace."""
+    require(u, "analytics")
+    try:
+        channel = str(payload.get("channel") or "")
+        start = date.fromisoformat(str(payload.get("start") or ""))
+        end = date.fromisoformat(str(payload.get("end") or ""))
+        company_id = int(payload["company_id"]) if payload.get("company_id") not in (None, "") else None
+        account_id = int(payload["account_id"]) if payload.get("account_id") not in (None, "") else None
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Проверьте маркетплейс и даты отчёта")
+    if channel not in {"Kaspi", "Wildberries"}:
+        raise HTTPException(422, "Отчёт API доступен для Kaspi и Wildberries")
+    if end < start:
+        raise HTTPException(422, "Дата окончания раньше даты начала")
+    if company_id is not None:
+        scope(u, company_id)
+    if account_id is not None:
+        account = db.get(Account, account_id)
+        if not account or not account.active or account.channel != channel:
+            raise HTTPException(422, "Выбранный магазин не относится к активной интеграции отчёта")
+        scope(u, account.company_id)
+        if company_id is not None and company_id != account.company_id:
+            raise HTTPException(422, "Магазин не относится к выбранной компании")
+        company_id = account.company_id
+    job = Job(
+        user_id=u.id,
+        company_id=company_id,
+        kind="marketplace_report",
+        status="queued",
+        payload={"channel": channel, "start": str(start), "end": str(end),
+                 "company_id": company_id, "account_id": account_id},
+        result={},
+    )
+    db.add(job)
+    db.flush()
+    audit(db, u, "enqueue", "jobs", job.id, {"type": "marketplace_report", "channel": channel})
+    db.commit()
+    tasks.add_task(_run_marketplace_report_job, job.id)
+    return {"id": job.id, "status": job.status, "channel": channel,
+            "start": str(start), "end": str(end)}
+
+
+@app.get("/api/marketplace-report/jobs/{job_id}")
+def marketplace_report_job_status(job_id: int, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "analytics")
+    job = db.get(Job, job_id)
+    if not job or job.kind != "marketplace_report" or job.user_id != u.id:
+        raise HTTPException(404, "Задание отчёта не найдено")
+    updated = job.started_at or job.created_at
+    if job.status in {"queued", "running"} and updated and updated < now() - timedelta(minutes=20):
+        job.status = "failed"
+        job.error = "Задание прервано сервером. Выберите период ещё раз, чтобы сформировать отчёт."
+        db.commit()
+    return {"id": job.id, "status": job.status, "error": job.error or "",
+            "filename": (job.result or {}).get("filename", "")}
+
+
+@app.get("/api/marketplace-report/jobs/{job_id}/download")
+def download_marketplace_report_job(job_id: int, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "analytics")
+    job = db.get(Job, job_id)
+    if not job or job.kind != "marketplace_report" or job.user_id != u.id:
+        raise HTTPException(404, "Задание отчёта не найдено")
+    result = job.result or {}
+    if job.status != "succeeded" or not result.get("xlsx_base64"):
+        raise HTTPException(409, "Excel ещё формируется")
+    raw = base64.b64decode(result["xlsx_base64"])
+    filename = result.get("filename") or f"marketplace-report-{job.id}.xlsx"
+    return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @app.post("/api/marketplace-returns/discover")
 def discover_marketplace_returns(payload: dict, tasks: BackgroundTasks,
                                  u=Depends(current_user), db=Depends(get_db)):

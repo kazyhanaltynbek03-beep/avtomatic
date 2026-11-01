@@ -1071,6 +1071,7 @@ textarea {
   grid-template-columns: 1fr 1fr;
   gap: 15px;
 }
+.toast button { flex: 0 0 auto; margin-left: 8px; padding: 8px 12px; border: 1px solid #ffffff80; border-radius: 7px; background: #fff; color: #25292b; font-weight: 650; }
 .toast {
   position: fixed;
   bottom: 25px;
@@ -2908,12 +2909,14 @@ thead th{background:#f3f4f4!important;color:#515a5e!important}
 tbody tr:hover{background:#fbf7f7}
 .product-link-filters>button.active,.catalog-view-switch button.active{background:#d93643;border-color:#d93643;color:#fff}
 .chat-row.user .chat-bubble{background:#fff1f2;border-color:#f2d9dc}
-.login-story{background:#26292b}
+.login-story{background:#fff;color:#25292b}
 .login-story .brand{display:flex;align-items:center;gap:13px}
 .client-login-logo{display:block;width:142px;height:58px;object-fit:contain}
-.login-product-name{color:#fff;font-size:12px;letter-spacing:.14em;font-weight:750}
-.login-story .eyebrow{color:#e9878e}
-.login-lines{border-color:#484c4e;color:#d1d5d6}
+.login-product-name{color:#25292b;font-size:12px;letter-spacing:.14em;font-weight:750}
+.login-story .eyebrow{color:#c52d39}
+.login-story h1{color:#25292b}
+.login-story p{color:#737b7e}
+.login-lines{border-color:#e1e4e5;color:#687175}
 .mobile-brand img{display:block;width:106px;height:42px;object-fit:contain}
 .mobile-dock{grid-template-columns:repeat(4,minmax(0,1fr));border-color:#e0e3e4}
 .mobile-dock button.active{background:#fae9eb;color:#b92935}

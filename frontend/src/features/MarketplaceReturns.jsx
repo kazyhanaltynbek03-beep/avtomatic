@@ -195,9 +195,14 @@ export default function MarketplaceReturns({ ctx }) {
   const autoEligible = useMemo(() => active.filter((x) => x.marketplace === "Kaspi" || x.marketplace === "Wildberries"), [active]);
   const progressByAccount = useMemo(() => Object.fromEntries((syncData?.items || []).map((x) => [x.account_id, x])), [syncData?.items]);
 
+  const isActivelySyncing = useCallback((sync) => {
+    const startedAt = Date.parse(sync?.started_at || "");
+    return sync?.status === "running" && Number.isFinite(startedAt) && startedAt > Date.now() - 20 * 60 * 1000;
+  }, []);
+
   useEffect(() => { setOffset(0); }, [marketplace, search, ctx.company, ctx.start, ctx.end, selectedAccountId, selectedMetric]);
   useEffect(() => { setSelectedAccountId(""); setSelectedMetric(""); }, [marketplace]);
-  const syncRunning = (syncData?.items || []).some((x) => x.status === "running");
+  const syncRunning = (syncData?.items || []).some(isActivelySyncing);
   useEffect(() => {
     if (!syncRunning && !pendingAccounts.length) return undefined;
     const timer = window.setInterval(() => setPollTick((n) => n + 1), 5000);
@@ -247,14 +252,14 @@ export default function MarketplaceReturns({ ctx }) {
         const accountId = Number(store.account_id);
         if (!accountId || autoStarted.current.has(accountId)) continue;
         autoStarted.current.add(accountId);
-        if (progressByAccount[accountId]?.status === "running") continue;
+        if (isActivelySyncing(progressByAccount[accountId])) continue;
         if (cancelled) return;
         await discover(accountId, true);
       }
     };
     startOnce();
     return () => { cancelled = true; };
-  }, [data, syncData, autoEligible, progressByAccount, discover]);
+  }, [data, syncData, autoEligible, progressByAccount, discover, isActivelySyncing]);
 
   const previewStatement = async (file, accountId = statementAccount) => {
     if (!file || !accountId) return;
@@ -293,7 +298,7 @@ export default function MarketplaceReturns({ ctx }) {
 
   return <section className="marketplace-returns-page">
     <div className="returns-intro"><div><div className="eyebrow">ОПЕРАЦИИ · ИЗОЛИРОВАННЫЙ ЖУРНАЛ</div><h2>Возвраты маркетплейсов</h2><p>Финансовая сверка остаётся отдельной. Для склада возврат нужно сопоставить с исходной ERP-продажей, затем отметить получение и результат осмотра.</p></div>
-      {wbOrKaspiStores.length > 0 && <div className="returns-sync-actions">{wbOrKaspiStores.map((store) => { const sync = progressByAccount[store.account_id]; const running = sync?.status === "running"; const resume = sync?.status === "partial"; return <button className="secondary returns-sync-button" key={store.account_id} disabled={Boolean(busyAccount || running)} onClick={() => discover(store.account_id)}><RefreshCw size={16} className={running ? "returns-spin" : ""}/>{busyAccount === store.account_id || running ? `Проверяем ${storeLabel(store)}` : resume ? `Продолжить ${storeLabel(store)} · ${sync.scanned}` : `Проверить ${storeLabel(store)}`}</button>; })}</div>}
+      {wbOrKaspiStores.length > 0 && <div className="returns-sync-actions">{wbOrKaspiStores.map((store) => { const sync = progressByAccount[store.account_id]; const running = isActivelySyncing(sync); const resume = sync?.status === "partial" || (sync?.status === "running" && !running); return <button className="secondary returns-sync-button" key={store.account_id} disabled={Boolean(busyAccount || running)} onClick={() => discover(store.account_id)}><RefreshCw size={16} className={running ? "returns-spin" : ""}/>{busyAccount === store.account_id || running ? `Проверяем ${storeLabel(store)}` : resume ? `Продолжить ${storeLabel(store)} · ${sync.scanned}` : `Проверить ${storeLabel(store)}`}</button>; })}</div>}
     </div>
     {actionError && <ErrorBox error={actionError}/>}
     {financeWrite && <details className="returns-import-panel">
