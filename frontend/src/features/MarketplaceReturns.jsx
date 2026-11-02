@@ -186,8 +186,9 @@ export default function MarketplaceReturns({ ctx }) {
     if (selectedMetric === "unknown") p.set("unknown_only", "true");
     return p.toString();
   }, [marketplace, offset, ctx.start, ctx.end, ctx.company, search, selectedAccountId, selectedMetric]);
-  const { data, error, loading } = useLoad(`/marketplace-returns?${params}`, `${ctx.refresh}:${listRefreshTick}`);
-  const { data: syncData } = useLoad(`/marketplace-returns/sync-status${ctx.company ? `?company_id=${ctx.company}` : ""}`, `${ctx.refresh}:${pollTick}`);
+  const returnCacheScope = ctx.auth?.user?.id;
+  const { data, error, loading } = useLoad(`/marketplace-returns?${params}`, `${ctx.refresh}:${listRefreshTick}`, { cacheScope: returnCacheScope });
+  const { data: syncData } = useLoad(`/marketplace-returns/sync-status${ctx.company ? `?company_id=${ctx.company}` : ""}`, `${ctx.refresh}:${pollTick}`, { cacheScope: returnCacheScope });
   const records = data?.items || [];
   const summary = data?.summary || {};
   const stores = useMemo(() => data?.integrations || [], [data?.integrations]);

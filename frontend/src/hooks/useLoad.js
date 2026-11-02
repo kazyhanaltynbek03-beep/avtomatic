@@ -46,8 +46,16 @@ export function useLoad(path, refresh, options = {}) {
     path.startsWith("/expenses/summary?") ||
     path.startsWith("/forecast?") ||
     path.startsWith("/accounting/summary?") ||
+    path === "/stock" ||
+    path.startsWith("/stock?") ||
+    path.startsWith("/marketplace-returns?") ||
+    path.startsWith("/marketplace-returns/sync-status?") ||
     path.startsWith("/data/cash?") ||
-    path.startsWith("/data/niches?")
+    path.startsWith("/data/niches?") ||
+    path.startsWith("/data/products?") ||
+    path.startsWith("/data/sales?") ||
+    path.startsWith("/data/movements?") ||
+    path.startsWith("/data/batches?")
   ) && options.cacheScope != null);
   const storageKey = cacheableReport
     ? `qor-report:v1:${String(options.cacheScope)}:${path}`

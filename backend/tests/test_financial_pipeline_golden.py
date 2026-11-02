@@ -15,7 +15,7 @@ from app import finance as f, importing, main
 from app import schemas as s
 from app.ai import _agent_tool_data
 from app.db import Base, SessionLocal, engine
-from app.models import Account, Company, Customer, Product, ProductCompany, Return, Sale, User
+from app.models import Account, Company, Customer, Movement, Product, ProductCompany, Return, Sale, User
 
 
 START, END = date(2026, 10, 1), date(2026, 10, 31)
@@ -201,6 +201,25 @@ def test_dashboard_sales_finance_inventory_and_ai_share_backend_truth(ledger, mo
     ai_finance = _agent_tool_data(truth, "get_finance_summary")
     for key in ("revenue", "cogs", "gross_profit", "net_profit", "commission", "logistics", "advertising", "cash_flow", "b2b_debt"):
         assert ai_finance[key] == truth[key]
+
+
+def test_stock_deficit_is_not_reported_as_negative_inventory_value(ledger, monkeypatch):
+    db, user = ledger
+    monkeypatch.setattr(main, "product_company_ids", lambda *_: pytest.fail("per-product company lookup must be batched"))
+    db.add(Movement(company_id=1, product_id=1, batch_id=None, date=END,
+        quantity=-20, cost=0, kind="sale_pending_fifo", reference="DEFICIT-SALE"))
+    db.commit()
+    monkeypatch.setattr(main, "business_today", lambda: END)
+
+    row = next(item for item in main.stock(1, user, db) if item["product_id"] == 1)
+    listing = main.listing("products", search="", company_id=1, account_id=None,
+        catalog_kind="master", channel=None, start=START, end=END,
+        offset=0, limit=50, u=user, db=db)
+
+    assert row["quantity"] == -8
+    assert row["stock_deficit"] == 8
+    assert row["value"] == 0
+    assert listing["items"][0]["company_ids"] == [1]
 
 
 

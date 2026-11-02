@@ -3055,10 +3055,21 @@ def listing(
         )
     count = db.scalar(select(func.count()).select_from(q.subquery()))
     rows = []
-    for obj in db.scalars(q.order_by(model.id.desc()).offset(offset).limit(limit)):
+    objects = list(db.scalars(q.order_by(model.id.desc()).offset(offset).limit(limit)))
+    product_company_map = {}
+    if entity == "products" and objects:
+        product_ids = [obj.id for obj in objects]
+        product_company_map = {product_id: set() for product_id in product_ids}
+        for product_id, linked_company_id in db.execute(
+            select(ProductCompany.product_id, ProductCompany.company_id).where(
+                ProductCompany.product_id.in_(product_ids)
+            )
+        ):
+            product_company_map[product_id].add(linked_company_id)
+    for obj in objects:
         row = dump(obj)
         if entity == "products":
-            company_ids = product_company_ids(db, obj.id)
+            company_ids = product_company_map.get(obj.id, set())
             if not company_ids:
                 company_ids = {int(value) for value in ((obj.specifications or {}).get("_qor_company_ids") or []) if str(value).isdigit()}
             if u.role != "Owner":
@@ -3861,10 +3872,19 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
     for pid, quantity in db.execute(returns_query):
         sold_totals[pid] = sold_totals.get(pid, 0) - int(quantity or 0)
     products = db.scalars(scope_query(select(Product).where(Product.active.is_(True)), Product, u)).all()
+    product_ids = [product.id for product in products]
+    product_company_map = {product_id: set() for product_id in product_ids}
+    if product_ids:
+        for product_id, linked_company_id in db.execute(
+            select(ProductCompany.product_id, ProductCompany.company_id).where(
+                ProductCompany.product_id.in_(product_ids)
+            )
+        ):
+            product_company_map[product_id].add(linked_company_id)
     rows = []
     for product in products:
         specs = product.specifications or {}
-        company_ids = product_company_ids(db, product.id)
+        company_ids = product_company_map.get(product.id, set())
         if not company_ids:
             company_ids = {int(value) for value in (specs.get("_qor_company_ids") or []) if str(value).isdigit()}
         if company_id is not None and company_id not in company_ids:
@@ -3874,11 +3894,17 @@ def stock(company_id: int | None = None, u=Depends(current_user), db=Depends(get
         if getattr(product, "catalog_kind", "master") != "master":
             continue
         quantity, value = movement_totals.get(product.id, (0, 0))
+        stock_deficit = max(0, -quantity)
+        # A negative quantity is a reconciliation deficit, not negative-valued
+        # inventory. Keep the deficit visible while reporting no on-hand value.
+        if quantity <= 0:
+            value = 0
         sold = sold_totals.get(product.id, 0)
         days = max(1, (today - month_start).days + 1)
         row = {
             "product_id": product.id, "sku": product.sku, "name": product.name,
             "company_ids": sorted(company_ids), "quantity": quantity, "value": value, "min_stock": int(product.min_stock or 0),
+            "stock_deficit": stock_deficit,
             "sold": sold, "unit_cost": f.rounded(value, quantity) if quantity > 0 else 0,
             "days_of_stock": round(quantity / (sold / days), 1) if sold > 0 else None,
             "turnover_days": round(days * quantity / sold, 1) if sold > 0 else None,
