@@ -263,7 +263,8 @@ def _dashboard_report_cache_loop():
 
 @app.on_event("startup")
 def start_dashboard_report_cache():
-    if not os.getenv("PYTEST_CURRENT_TEST"):
+    enabled = os.getenv("REPORT_CACHE_WORKER", "").strip().lower()
+    if enabled in {"1", "true", "yes", "on"} and not os.getenv("PYTEST_CURRENT_TEST"):
         threading.Thread(target=_dashboard_report_cache_loop,
                          name="dashboard-report-cache", daemon=True).start()
 
