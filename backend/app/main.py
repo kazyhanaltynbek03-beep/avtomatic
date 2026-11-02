@@ -35,6 +35,7 @@ from .connectors import AccessRequired, connector, load_saved_credentials
 from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
 from . import kaspi_integrity
+from . import report_cache
 
 APP_STARTED_AT = datetime.now(timezone.utc)
 
@@ -3719,18 +3720,23 @@ def dashboard_summary(
     """
     require(u, "analytics")
     today = business_today()
-    # Reuse the same marketplace completeness scan across all three date windows.
-    pending_source_days = f.marketplace_source_event_days(db, u, company_id)
-    selected = f.report_headline(db, u, start, end, company_id, pending_source_days)
+    # Serve precomputed ranges immediately. Cache misses are calculated from the
+    # existing ERP ledger; the background worker fills and refreshes standard ranges.
+    if company_id is not None:
+        scope(u, company_id)
     month_start = today.replace(day=1)
-    month_report = (
-        selected if (start, end) == (month_start, today)
-        else f.report_headline(db, u, month_start, today, company_id, pending_source_days, include_balances=False)
-    )
-    today_report = (
-        selected if (start, end) == (today, today)
-        else f.report_headline(db, u, today, today, company_id, pending_source_days, include_balances=False)
-    )
+    selected = report_cache.get(db, u, start, end, company_id)
+    month_report = selected if (start, end) == (month_start, today) else report_cache.get(db, u, month_start, today, company_id)
+    today_report = selected if (start, end) == (today, today) else report_cache.get(db, u, today, today, company_id)
+    pending_source_days = None
+    if selected is None or month_report is None or today_report is None:
+        pending_source_days = f.marketplace_source_event_days(db, u, company_id)
+    if selected is None:
+        selected = f.report_headline(db, u, start, end, company_id, pending_source_days)
+    if month_report is None:
+        month_report = f.report_headline(db, u, month_start, today, company_id, pending_source_days, include_balances=False)
+    if today_report is None:
+        today_report = f.report_headline(db, u, today, today, company_id, pending_source_days, include_balances=False)
 
     def channels(report):
         found = {str(x.get("channel", "")): x for x in report.get("channel_summary", [])}
