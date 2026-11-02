@@ -33,10 +33,6 @@ function ReportPagination({ total, page, onChange }) {
   return <nav className="pagination" aria-label="Страницы таблицы"><span>{total ? (page - 1) * PAGE_SIZE + 1 : 0}–{Math.min(page * PAGE_SIZE, total)} из {total} · страница {page} из {pages}</span><div className="pagination-pages"><button className="secondary" disabled={page <= 1} onClick={() => onChange(page - 1)}>Назад</button>{visible.map((number, index) => <span className="pagination-page-item" key={number}>{index > 0 && number - visible[index - 1] > 1 && <span className="pagination-ellipsis">…</span>}<button type="button" className={`secondary pagination-number${number === page ? " active" : ""}`} aria-current={number === page ? "page" : undefined} onClick={() => onChange(number)}>{number}</button></span>)}<button className="secondary" disabled={page >= pages} onClick={() => onChange(page + 1)}>Далее</button></div></nav>;
 }
 function pageRows(rows, page) { return rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE); }
-function statusRu(status) {
-  const labels = { COMPLETED: "Завершён", ACCEPTED_BY_MERCHANT: "Принят продавцом", ARRIVED: "Прибыл в пункт выдачи", ASSEMBLE: "Сборка заказа", CANCELLED: "Отменён", CANCELED: "Отменён", RETURNED: "Возвращён", WAITING: "Ожидает обработки", NEW: "Новый" };
-  return labels[String(status || "").toUpperCase()] || String(status || "Не указан").replaceAll("_", " ");
-}
 const marketplaceParts = (value) => String(value || "").split(/\s*[,;]\s*/).filter(Boolean).map((label) => {
   const lower = label.toLowerCase();
   const channel = /wildberries|\bwb\b|вайлдберриз/.test(lower) ? "Wildberries" : /ozon|озон/.test(lower) ? "Ozon" : /kaspi|каспи/.test(lower) ? "Kaspi" : "Маркетплейс";
@@ -64,6 +60,7 @@ export default function MarketplaceProductReport({ ctx }) {
   const [tab, setTab] = useState("summary");
   const [tablePages, setTablePages] = useState({});
   const writable = can(ctx.auth, "finance", true);
+  const userId = ctx.auth?.user?.id || "anonymous";
 
   const accounts = (ctx.refs.accounts || []).filter((account) =>
     account.active !== false &&
@@ -86,7 +83,7 @@ export default function MarketplaceProductReport({ ctx }) {
 
   useEffect(() => {
     let current = true;
-    const cacheKey = `${ctx.auth?.user?.id || "anonymous"}:${params.toString()}`;
+    const cacheKey = `${userId}:${params.toString()}`;
     const cached = readReportCache(cacheKey);
     if (cached) setData(cached);
     setLoading(!cached);
@@ -117,7 +114,7 @@ export default function MarketplaceProductReport({ ctx }) {
       .catch((e) => { if (current) setError(cached ? `Не удалось обновить отчёт. Показаны сохранённые данные. ${e.message}` : e.message); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [params, ctx.refresh]);
+  }, [params, ctx.refresh, userId]);
 
   const items = data?.items || [];
   const pagedItems = pageRows(items, tablePages.summary || 1);
