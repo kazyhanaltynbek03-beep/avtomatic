@@ -4993,7 +4993,6 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
               <label className="check-row"><input type="checkbox" checked={!!whatsappForm.inbound_enabled} onChange={e=>setWhatsappForm({...whatsappForm,inbound_enabled:e.target.checked})}/>Включить ответы личного ИИ</label>
             </div>
           </details>
-          </div>
           <div className="button-row"><button className="primary" disabled={integrationBusy}>{integrationBusy?"Сохраняем…":"Сохранить WhatsApp"}</button><button className="secondary" type="button" onClick={testWhatsAppConnection} disabled={integrationBusy||!siteIntegrations.whatsapp?.phone_number_id}>Проверить подключение</button></div>
           {siteIntegrations.whatsapp?.source==="site"&&<button className="danger mt-12" type="button" onClick={clearWhatsAppConnection} disabled={integrationBusy}>Удалить настройки WhatsApp</button>}
           <p className="muted">Проверка читает данные подключённого номера и не отправляет сообщение. Для ежедневной рассылки шаблон должен быть одобрен Meta.</p>
