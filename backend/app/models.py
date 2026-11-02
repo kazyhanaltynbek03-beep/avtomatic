@@ -146,6 +146,19 @@ class ExchangeRate(Record, Base):
     )
 
 
+class DashboardReportCache(Record, Base):
+    """Precomputed dashboard KPI values for one scope and date range."""
+    __tablename__ = "dashboard_report_cache"
+    scope_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    start_date: Mapped[DateType] = mapped_column(Date, nullable=False)
+    end_date: Mapped[DateType] = mapped_column(Date, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("scope_key", "start_date", "end_date", name="uq_dashboard_report_cache_range"),
+    )
+
+
 class MarketplaceRecord(Record, Base):
     stage_status: Mapped[str] = mapped_column(String(30),default="received")
     reason_code: Mapped[str] = mapped_column(String(100),default="")
