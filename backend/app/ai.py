@@ -883,9 +883,10 @@ def assistant(db, user, payload):
         elif calls:
             history += res["output"]
         for c in calls:
+            try: args=json.loads(c.get("arguments") or "{}")
+            except json.JSONDecodeError: raise HTTPException(422,"AI сформировал некорректный вызов инструмента")
+            if not isinstance(args, dict): raise HTTPException(422,"AI сформировал некорректные параметры инструмента")
             if c["name"] in {"propose_erp_action","propose_erp_plan"}:
-                try: args=json.loads(c.get("arguments") or "{}")
-                except json.JSONDecodeError: raise HTTPException(422,"AI сформировал некорректное действие")
                 role_actions=set(AGENT_ACTIONS[agent_id])
                 requested = ([x.get("action_type") for x in (args.get("steps") or [])] if c["name"] == "propose_erp_plan" else [args.get("action_type")])
                 if not requested or any(x not in role_actions for x in requested):
