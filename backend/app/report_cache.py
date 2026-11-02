@@ -108,18 +108,40 @@ def refresh_one(db):
     return False
 
 
+def cache_ready(db):
+    owner = db.scalar(select(User).where(
+        User.active.is_(True), User.role == "Owner"
+    ).order_by(User.id).limit(1))
+    if owner is None:
+        return True
+    today = business_today()
+    ranges = standard_ranges(today)
+    company_ids = list(db.scalars(select(Company.id).where(Company.active.is_(True)).order_by(Company.id)))
+    keys = ["all"] + [f"company:{company_id}" for company_id in company_ids]
+    cutoff = now() - timedelta(minutes=5)
+    rows = db.scalars(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key.in_(keys),
+        DashboardReportCache.refreshed_at >= cutoff,
+    )).all()
+    ready = {(row.scope_key, row.start_date, row.end_date) for row in rows}
+    return all((key, start, end) in ready for key in keys for start, end in ranges)
+
+
 if __name__ == "__main__":
     import logging
     import time
     from .db import SessionLocal
 
     logging.basicConfig(level=logging.INFO)
+    warming = "--warm" in __import__("sys").argv[1:]
     while True:
         try:
             with SessionLocal() as db:
+                if warming and cache_ready(db):
+                    break
                 refreshed = refresh_one(db)
         except Exception:
             logging.exception("Dashboard report cache refresh failed")
             refreshed = False
         if not refreshed:
-            time.sleep(5)
+            time.sleep(2 if warming else 5)
