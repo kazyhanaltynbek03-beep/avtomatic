@@ -142,10 +142,12 @@ def make_report_workbook(tool_results, answer, period, question):
     summary = wb.active
     summary.title = "Сводка"
     summary.append(["Отчёт QOR"])
-    summary.append(["Запрос", str(question)[:1000]])
+    summary.append(["Запрос", _excel_safe(str(question)[:1000])])
     summary.append(["Период", " — ".join(period or []) if isinstance(period, list) else str(period or "")])
-    summary.append(["Ответ Claude", str(answer)[:4000]])
+    summary.append(["Ответ Claude", _excel_safe(str(answer)[:4000])])
     summary.append(["Данные", "Листы ниже содержат ответы ERP-инструментов, использованных Claude. Значения сохранены в исходных единицах источника."])
+    was_limited = any(bool((item.get("result") or {}).get("report_truncated")) for item in (tool_results or []) if isinstance(item, dict))
+    summary.append(["Объём выгрузки", "Достигнут предел выгрузки: сузьте период или магазин." if was_limited else "Все строки выбранной выгрузки помещены в файл."])
     summary.column_dimensions["A"].width = 24
     summary.column_dimensions["B"].width = 100
     for row in summary.iter_rows():
@@ -175,14 +177,29 @@ def make_report_workbook(tool_results, answer, period, question):
         nonlocal table_count, rows_remaining
         if not isinstance(rows, list) or not rows or rows_remaining <= 0:
             return
-        objects = [item for item in rows if isinstance(item, dict)]
+        def flatten(item):
+            flattened = {}
+            for key, value in item.items():
+                if isinstance(value, dict):
+                    for nested_key, nested_value in value.items():
+                        flattened[f"{key}.{nested_key}"] = nested_value
+                else:
+                    flattened[key] = value
+            return flattened
+        objects = [flatten(item) for item in rows if isinstance(item, dict)]
         ws = wb.create_sheet(make_title(title))
         if objects:
-            headers = list(dict.fromkeys(key for item in objects for key in item.keys()))[:24]
-            ws.append([str(key)[:120] for key in headers])
+            all_headers = list(dict.fromkeys(key for item in objects for key in item.keys()))
+            headers = all_headers[:39]
+            overflow_headers = all_headers[39:]
+            display_headers = headers + (["Дополнительные поля (JSON)"] if overflow_headers else [])
+            ws.append([str(key)[:120] for key in display_headers])
             count = min(len(objects), rows_remaining)
             for item in objects[:count]:
-                ws.append([_excel_safe(item.get(key)) for key in headers])
+                values = [_excel_safe(item.get(key)) for key in headers]
+                if overflow_headers:
+                    values.append(_excel_safe({key: item.get(key) for key in overflow_headers if key in item}))
+                ws.append(values)
             rows_remaining -= count
         else:
             ws.append(["Значение"])
