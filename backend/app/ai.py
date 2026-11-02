@@ -144,7 +144,8 @@ def install_claude_skills(update_existing=False):
                 )
                 if response.is_error:
                     _raise_claude_skills_error(response)
-                item = response.json()
+                version_item = response.json()
+                item = {**item, "latest_version_id": version_item.get("id")}
             skill_id = str(item.get("id") or "")
             version = str(item.get("latest_version_id") or "")
             if not skill_id.startswith("skill_") or not version:
@@ -446,6 +447,7 @@ def _tool_schema(name):
         return {"type": "function", "name": name, "description": TOOL_DESCRIPTIONS[name], "parameters": {
             "type": "object", "properties": {
                 "channel": {"anyOf": [{"type": "string", "enum": ["Kaspi", "Wildberries", "Ozon"]}, {"type": "null"}]},
+                "company_id": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
                 "account_id": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
                 "start": {"anyOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
                 "end": {"anyOf": [{"type": "string", "format": "date"}, {"type": "null"}]},
@@ -454,7 +456,7 @@ def _tool_schema(name):
                 "search": {"type": ["string", "null"]},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
-            }, "required": ["channel", "account_id", "start", "end", "group_by", "stage_status", "search", "limit", "offset"],
+            }, "required": ["channel", "company_id", "account_id", "start", "end", "group_by", "stage_status", "search", "limit", "offset"],
             "additionalProperties": False,
         }}
     return {"type": "function", "name": name, "description": TOOL_DESCRIPTIONS[name] + " Money is in tiyn; 100 tiyn = 1 KZT. Read-only.",
@@ -572,6 +574,7 @@ def _marketplace_api_query(db, user, snapshot, args):
     try:
         start = date.fromisoformat(str(args.get("start") or snapshot["start"]))
         end = date.fromisoformat(str(args.get("end") or snapshot["end"]))
+        company_id = int(args["company_id"]) if args.get("company_id") is not None else None
         account_id = int(args["account_id"]) if args.get("account_id") is not None else None
     except (ValueError, TypeError, KeyError):
         raise HTTPException(422, "Проверьте период и магазин")
@@ -590,6 +593,10 @@ def _marketplace_api_query(db, user, snapshot, args):
     accounts_q = select(Account).where(Account.channel.in_([channel] if channel else ["Kaspi", "Wildberries", "Ozon"]))
     if user.role != "Owner":
         accounts_q = accounts_q.where(Account.company_id.in_(user.company_ids or []))
+    if company_id is not None:
+        if user.role != "Owner" and company_id not in (user.company_ids or []):
+            raise HTTPException(404, "Компания не найдена или недоступна для вашей роли")
+        accounts_q = accounts_q.where(Account.company_id == company_id)
     if account_id is not None:
         accounts_q = accounts_q.where(Account.id == account_id)
     accounts = {a.id: a for a in db.scalars(accounts_q.order_by(Account.channel, Account.name))}
@@ -614,26 +621,29 @@ def _marketplace_api_query(db, user, snapshot, args):
     # beside raw API rows; the model is told not to treat their definitions as identical.
     sales_q = select(Sale).where(Sale.account_id.in_(accounts), Sale.date >= start, Sale.date <= end)
     sales = db.scalars(sales_q.order_by(Sale.date.desc(), Sale.id.desc())).all()
-    sales_by_ref = {sale.reference: sale for sale in sales}
+    sales_by_ref = {(sale.account_id, sale.reference): sale for sale in sales}
     returns_by_sale = {}
-    if sales:
-        return_rows = db.execute(select(Return, Sale).join(Sale, Sale.id == Return.sale_id)
-            .where(Sale.account_id.in_(accounts), Return.date >= start, Return.date <= end)).all()
-        for ret, sale in return_rows:
-            current = returns_by_sale.setdefault(sale.id, {"quantity": 0, "amount_tiyn": 0, "items": 0})
-            current["quantity"] += int(ret.quantity or 0)
-            current["amount_tiyn"] += int(ret.revenue or 0)
-            current["items"] += 1
+    return_totals = {}
+    return_rows = db.execute(select(Return, Sale).join(Sale, Sale.id == Return.sale_id)
+        .where(Sale.account_id.in_(accounts), Return.date >= start, Return.date <= end)).all()
+    for ret, sale in return_rows:
+        current = returns_by_sale.setdefault(sale.id, {"quantity": 0, "amount_tiyn": 0, "items": 0})
+        current["quantity"] += int(ret.quantity or 0)
+        current["amount_tiyn"] += int(ret.revenue or 0)
+        current["items"] += 1
+        account_return = return_totals.setdefault(sale.account_id, {"returns": 0, "returned_units": 0, "return_amount_tiyn": 0})
+        account_return["returns"] += 1
+        account_return["returned_units"] += int(ret.quantity or 0)
+        account_return["return_amount_tiyn"] += int(ret.revenue or 0)
     erp_by_account = {}
     for sale in sales:
         summary_row = erp_by_account.setdefault(sale.account_id, {"sales": 0, "units": 0, "revenue_tiyn": 0, "returns": 0, "returned_units": 0, "return_amount_tiyn": 0})
         summary_row["sales"] += 1
         summary_row["units"] += int(sale.quantity or 0)
         summary_row["revenue_tiyn"] += int(sale.revenue or 0)
-        ret_summary = returns_by_sale.get(sale.id, {})
-        summary_row["returns"] += int(ret_summary.get("items", 0))
-        summary_row["returned_units"] += int(ret_summary.get("quantity", 0))
-        summary_row["return_amount_tiyn"] += int(ret_summary.get("amount_tiyn", 0))
+    for account_id, totals in return_totals.items():
+        summary_row = erp_by_account.setdefault(account_id, {"sales": 0, "units": 0, "revenue_tiyn": 0, "returns": 0, "returned_units": 0, "return_amount_tiyn": 0})
+        summary_row.update(totals)
 
     allowed_fields = (
         "record_type", "order_id", "order_code", "code", "posting_number", "rid", "rrdId", "rrd_id",
@@ -661,7 +671,7 @@ def _marketplace_api_query(db, user, snapshot, args):
         if search and search not in searchable:
             continue
         erp_reference = marketplace_pipeline.reference(account, rec.external_id)
-        sale = sales_by_ref.get(erp_reference)
+        sale = sales_by_ref.get((account.id, erp_reference))
         clean_api_fields = {key_name: p.get(key_name) for key_name in allowed_fields if key_name in p and p.get(key_name) is not None}
         rows.append({
             "record_id": rec.id, "account_id": account.id, "store": account.name, "channel": account.channel,
