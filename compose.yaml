@@ -53,6 +53,13 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+  report-cache-worker:
+    <<: *app
+    command: ["python", "-m", "app.report_cache"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 volumes:
   pgdata:
   uploads:
