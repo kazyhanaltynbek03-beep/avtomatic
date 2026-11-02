@@ -142,8 +142,8 @@ class KaspiConnector(Connector):
     def test_connection(self):
         if self.connection_status()["missing"]:
             raise AccessRequired("Kaspi credentials отсутствуют: token")
-        # Match the smallest normal order-list request used by fetch(). Kaspi
-        # rejects page sizes below 10 even though a one-row probe looks cheaper.
+        # Kaspi validates order-list query parameters as a set. Match the
+        # bounded request shape used by fetch() instead of a bare page-size probe.
         now = datetime.now(timezone.utc)
         params = {
             "page[number]": 0,
