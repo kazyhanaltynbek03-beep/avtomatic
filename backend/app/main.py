@@ -31,6 +31,7 @@ from .db import get_db, SessionLocal
 from .models import *
 from .security import *
 from . import schemas as s, finance as f, importing, ai, action_engine, reporting_xlsx, marketplace_pipeline, canonical, wb_weekly, marketplace_costs, marketplace_returns, marketplace_matching, marketplace_product_report, daily_reports
+from .system_secrets import load_config, save_config, delete_config, SecretStorageError
 from .connectors import AccessRequired, connector, load_saved_credentials
 from cryptography.fernet import Fernet, InvalidToken
 from .product_studio import assess_performance, next_experiment
@@ -4155,10 +4156,113 @@ def settings(u=Depends(current_user), db=Depends(get_db)):
     obj = db.get(Setting, 1)
     return {
         **dump(obj),
-        "ai_enabled": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "ai_enabled": ai.key_status(db)["configured"],
+        "ai_key_source": ai.key_status(db)["source"],
         "claude_skills": ai.claude_skills_status(),
         "demo": os.getenv("DEMO_MODE", "false").strip().lower() == "true",
     }
+
+
+@app.get("/api/settings/integrations")
+def site_integrations_get(u=Depends(current_user), db=Depends(get_db)):
+    require(u, "settings")
+    try:
+        whatsapp = daily_reports.provider_status(db)
+        claude = ai.key_status(db)
+    except SecretStorageError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"claude": claude, "whatsapp": whatsapp}
+
+
+@app.put("/api/settings/integrations/claude")
+def site_claude_settings_save(p: dict, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "settings", True)
+    allowed = {"api_key", "clear"}
+    if set(p) - allowed:
+        raise HTTPException(422, "Недопустимые поля настройки Claude")
+    try:
+        if p.get("clear"):
+            delete_config(db, "anthropic")
+        elif "api_key" in p and str(p.get("api_key") or "").strip():
+            value = str(p["api_key"]).strip()
+            if len(value) > 500 or any(char.isspace() for char in value):
+                raise HTTPException(422, "Проверьте формат ключа Claude API")
+            config = load_config("anthropic", db)
+            config["api_key"] = value
+            save_config(db, "anthropic", config)
+        db.commit()
+        status = ai.key_status(db)
+    except SecretStorageError as exc:
+        db.rollback()
+        raise HTTPException(503, str(exc)) from exc
+    audit(db, u, "update", "integration_secret", 1,
+          {"provider": "anthropic", "configured": status["configured"]})
+    db.commit()
+    return status
+
+
+@app.post("/api/settings/integrations/claude/test")
+def site_claude_connection_test(u=Depends(current_user), db=Depends(get_db)):
+    require(u, "settings", True)
+    try:
+        return ai.test_connection(db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, "Не удалось проверить Claude API. Проверьте ключ и доступ к API.") from exc
+
+
+@app.put("/api/settings/integrations/whatsapp")
+def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get_db)):
+    require(u, "settings", True)
+    allowed = {"access_token", "phone_number_id", "template_name", "language", "graph_version", "clear"}
+    if set(p) - allowed:
+        raise HTTPException(422, "Недопустимые поля настройки WhatsApp")
+    try:
+        if p.get("clear"):
+            delete_config(db, "whatsapp_cloud")
+        else:
+            config = load_config("whatsapp_cloud", db)
+            token = str(p.get("access_token") or "").strip()
+            if token:
+                if len(token) > 4096 or any(char.isspace() for char in token):
+                    raise HTTPException(422, "Проверьте формат токена WhatsApp")
+                config["access_token"] = token
+            phone_id = str(p.get("phone_number_id", config.get("phone_number_id", "")) or "").strip()
+            template = str(p.get("template_name", config.get("template_name", "")) or "").strip()
+            language = str(p.get("language", config.get("language", "ru")) or "ru").strip()
+            version = str(p.get("graph_version", config.get("graph_version", "v26.0")) or "v26.0").strip()
+            if phone_id and not phone_id.isdigit():
+                raise HTTPException(422, "ID номера WhatsApp должен содержать только цифры")
+            if template and not re.fullmatch(r"[A-Za-z0-9_]{1,128}", template):
+                raise HTTPException(422, "Имя шаблона должно содержать только латинские буквы, цифры и подчёркивание")
+            if not language or len(language) > 20 or any(char.isspace() for char in language):
+                raise HTTPException(422, "Проверьте код языка шаблона WhatsApp")
+            if not re.fullmatch(r"v\d+\.\d+", version):
+                raise HTTPException(422, "Версия Graph API должна выглядеть, например, как v26.0")
+            config.update({"phone_number_id": phone_id, "template_name": template,
+                           "language": language, "graph_version": version})
+            save_config(db, "whatsapp_cloud", config)
+        db.commit()
+        status = daily_reports.provider_status(db)
+    except SecretStorageError as exc:
+        db.rollback()
+        raise HTTPException(503, str(exc)) from exc
+    audit(db, u, "update", "integration_secret", 2,
+          {"provider": "whatsapp_cloud", "configured": status["configured"]})
+    db.commit()
+    return status
+
+
+@app.post("/api/settings/integrations/whatsapp/test")
+def site_whatsapp_connection_test(u=Depends(current_user), db=Depends(get_db)):
+    require(u, "settings", True)
+    try:
+        return daily_reports.test_whatsapp_connection(db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, str(exc)[:220]) from exc
 
 
 @app.get("/api/automation/daily-report")
@@ -4172,7 +4276,7 @@ def daily_report_settings_get(u=Depends(current_user), db=Depends(get_db)):
         "recipient": getattr(obj, "daily_report_recipient", ""),
         "consent": bool(getattr(obj, "daily_report_consent", False)),
         "ai_summary": bool(getattr(obj, "daily_report_ai_summary", False)),
-        "provider": daily_reports.provider_status(),
+        "provider": daily_reports.provider_status(db),
         "scheduler": "in_app",
         "recent": [{"date": str(x.report_date), "status": x.status, "error": x.error,
                     "sent_at": x.sent_at.isoformat() if x.sent_at else None}
@@ -4201,8 +4305,8 @@ def daily_report_settings_save(p: dict, u=Depends(current_user), db=Depends(get_
         raise HTTPException(422, "Введите номер получателя в международном формате, например +77001234567")
     if enabled and (not consent or not recipient):
         raise HTTPException(422, "Для включения укажите номер и подтвердите согласие получателя")
-    if enabled and not daily_reports.provider_status()["configured"]:
-        raise HTTPException(409, "Перед включением добавьте настройки WhatsApp Business API в Render")
+    if enabled and not daily_reports.provider_status(db)["configured"]:
+        raise HTTPException(409, "Сначала подключите WhatsApp Business API в настройках сайта")
     obj.daily_report_enabled = enabled
     obj.daily_report_time = schedule
     obj.daily_report_recipient = recipient
@@ -4215,7 +4319,7 @@ def daily_report_settings_save(p: dict, u=Depends(current_user), db=Depends(get_
     return {"ok": True, "enabled": enabled, "time": schedule,
             "recipient": recipient, "consent": consent,
             "ai_summary": obj.daily_report_ai_summary,
-            "provider": daily_reports.provider_status()}
+            "provider": daily_reports.provider_status(db)}
 
 
 @app.post("/api/ai/skills/install")
