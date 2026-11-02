@@ -4896,15 +4896,15 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
       setError(e.message);
     }
   };
-  const installSkills = async () => {
+  const installSkills = async (updateExisting = false) => {
     setInstallingSkills(true);
     setError("");
     try {
-      const result = await api("/ai/skills/install", { method: "POST" });
+      const result = await api(updateExisting ? "/ai/skills/update" : "/ai/skills/install", { method: "POST" });
       setSkillInstallResult(result.skills);
       const updated = await api("/settings");
       onSkillsUpdated?.(updated);
-      ctx.notify(`Загружено Skills: ${result.configured}/${result.required}. Сохраните JSON в настройках Render, чтобы включить их в Claude.`);
+      ctx.notify(`${updateExisting ? "Опубликованы новые версии" : "Загружены Skills"}: ${result.configured}/${result.required}. Обновите QOR_CLAUDE_SKILLS_JSON в Render, чтобы сайт использовал новые версии.`);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -4955,10 +4955,10 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
         </p>
         <ErrorBox error={error} />
       </form>
-      {settings.ai_enabled && !settings.claude_skills?.enabled && can(ctx.auth, "settings", true) && <section className="panel padded wide">
+      {settings.ai_enabled && can(ctx.auth, "settings", true) && <section className="panel padded wide">
         <h2>Claude Skills · команда QOR</h2>
-        <p className="muted">Загрузит 11 подготовленных Skills в тот же Anthropic API workspace, к которому подключён серверный ключ. Ключ остаётся на сервере.</p>
-        <button className="primary" type="button" onClick={installSkills} disabled={installingSkills}>{installingSkills ? "Загружаем в Anthropic…" : "Загрузить 11 Skills в Claude API"}</button>
+        <p className="muted">Загружает или обновляет 11 Skills в Anthropic API workspace, к которому подключён серверный ключ. Ключ остаётся на сервере. После обновления сохраните выданный JSON в Render, чтобы подключить новые версии.</p>
+        <button className="primary" type="button" onClick={() => installSkills(!!settings.claude_skills?.enabled)} disabled={installingSkills}>{installingSkills ? "Отправляем в Anthropic…" : settings.claude_skills?.enabled ? "Обновить все 11 Skills" : "Загрузить 11 Skills в Claude API"}</button>
         {skillInstallResult && <label>Конфигурация для Render · QOR_CLAUDE_SKILLS_JSON<textarea readOnly rows={10} value={JSON.stringify(skillInstallResult, null, 2)} /></label>}
       </section>}
       <form className="panel padded" onSubmit={change}>
