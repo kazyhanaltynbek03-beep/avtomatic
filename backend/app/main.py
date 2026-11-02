@@ -4158,7 +4158,7 @@ def settings(u=Depends(current_user), db=Depends(get_db)):
         **dump(obj),
         "ai_enabled": ai.key_status(db)["configured"],
         "ai_key_source": ai.key_status(db)["source"],
-        "claude_skills": ai.claude_skills_status(),
+        "claude_skills": ai.claude_skills_status(db),
         "demo": os.getenv("DEMO_MODE", "false").strip().lower() == "true",
     }
 
@@ -4329,9 +4329,12 @@ def install_claude_skills(u=Depends(current_user), db=Depends(get_db)):
     if not CLAUDE_SKILL_INSTALL_LOCK.acquire(blocking=False):
         raise HTTPException(409, "Загрузка Skills уже выполняется")
     try:
-        if ai.claude_skills_status()["enabled"]:
+        if ai.claude_skills_status(db)["enabled"]:
             raise HTTPException(409, "Все 11 Skills уже подключены")
-        skills = ai.install_claude_skills()
+        skills = ai.install_claude_skills(db=db)
+        config = load_config("anthropic", db)
+        config["skills_json"] = skills
+        save_config(db, "anthropic", config)
         audit(db, u, "create", "claude_skills", 1)
         db.commit()
         return {"skills": skills, "configured": len(skills), "required": len(ai.CLAUDE_SKILL_KEYS)}
@@ -4343,12 +4346,15 @@ def install_claude_skills(u=Depends(current_user), db=Depends(get_db)):
 def update_claude_skills(u=Depends(current_user), db=Depends(get_db)):
     """Publish new versions of all bundled QOR Skills in the configured Anthropic workspace."""
     require(u, "settings", True)
-    if not ai.claude_skills_status()["enabled"]:
+    if not ai.claude_skills_status(db)["enabled"]:
         raise HTTPException(409, "Сначала подключите все 11 Skills")
     if not CLAUDE_SKILL_INSTALL_LOCK.acquire(blocking=False):
         raise HTTPException(409, "Обновление Skills уже выполняется")
     try:
-        skills = ai.install_claude_skills(update_existing=True)
+        skills = ai.install_claude_skills(update_existing=True, db=db)
+        config = load_config("anthropic", db)
+        config["skills_json"] = skills
+        save_config(db, "anthropic", config)
         audit(db, u, "update", "claude_skills", len(skills))
         db.commit()
         return {"skills": skills, "configured": len(skills), "required": len(ai.CLAUDE_SKILL_KEYS)}
