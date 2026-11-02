@@ -390,7 +390,12 @@ def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
     from types import SimpleNamespace
     from app import ai
 
-    expected = {"revenue": 456}
+    expected = {
+        "revenue": 456, "gross_profit": 200, "net_profit": 150, "margin": 32.89,
+        "units": 3, "returns": 10, "advertising": 0, "expenses": 5,
+        "cash": 150, "stock_value": 90, "b2b_debt": 0,
+        "profit_complete": True, "pending_cogs_sales": 0,
+    }
     captured = {}
 
     class DB:
@@ -407,5 +412,10 @@ def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
     result = ai._cached_executive_snapshot(
         DB(), SimpleNamespace(role="Owner"), "2026-10-01", "2026-10-31"
     )
-    assert result is expected
+    assert result["revenue"] == expected["revenue"]
+    assert result["start"] == "2026-10-01"
+    assert result["end"] == "2026-10-31"
+    assert result["currency"] == "KZT"
+    assert result["money_unit"] == "tiyn"
+    assert ai._agent_tool_data(result, "get_executive_summary")["revenue"] == 456
     assert captured["active_only"] is False
