@@ -996,7 +996,20 @@ def _cached_executive_snapshot(db, user, start, end, company_id=None, account_id
 
     # Headline uses bounded SQL aggregates and preserves the finance formulas;
     # it avoids loading years of sales for a KPI-only question on a cache miss.
-    return report_headline(db, user, start, end, company_id, active_only=False)
+    headline = report_headline(db, user, start, end, company_id, active_only=False)
+    # report_headline is a compact KPI response, while AI tool responses use
+    # the full report contract. Restore the period and money metadata here so
+    # a cold-cache executive question can be answered from the fast query.
+    return {
+        **headline,
+        "start": headline.get("start", str(start)),
+        "end": headline.get("end", str(end)),
+        "currency": headline.get("currency", "KZT"),
+        "money_unit": headline.get("money_unit", "tiyn"),
+        "method": headline.get("method", "FIFO; расходы по начислению; деньги по датам платежей; без автоматического расчёта налогов"),
+        "pending_source_events": headline.get("pending_source_events", 0),
+        "incomplete_reason": headline.get("incomplete_reason"),
+    }
 
 
 def _release_db_before_claude(db):
