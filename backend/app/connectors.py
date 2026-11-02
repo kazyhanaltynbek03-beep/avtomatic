@@ -779,9 +779,19 @@ class WildberriesConnector(Connector):
             raise AccessRequired('WB: превышен лимит страниц; выгрузка неполная')
 
         if section == 'realization':
+            # WB's operational orders/sales feeds retain at most 90 days, but
+            # Finance API realization details are available much further back.
+            # Reset the legacy 90-day row cursor once so existing integrations
+            # backfill the complete 370-day financial window. Keep the marker
+            # in the durable cursor to resume safely after every committed page.
+            history_days = 370
+            if int(state.get('realization_history_days') or 0) < history_days:
+                state['realization_rrd'] = 0
+                state['realization_history_days'] = history_days
             rrd=int(state.get('realization_rrd') or 0)
+            realization_start = (now-timedelta(days=history_days)).date().isoformat()
             for _ in range(10000):
-                items=self._request(self.finance_url,'POST',{'dateFrom':start,'dateTo':now.date().isoformat(),'period':'weekly','limit':self.finance_page_size,'rrdId':rrd},interval=60)
+                items=self._request(self.finance_url,'POST',{'dateFrom':realization_start,'dateTo':now.date().isoformat(),'period':'weekly','limit':self.finance_page_size,'rrdId':rrd},interval=60)
                 if not items: return
                 if not isinstance(items,list): raise AccessRequired('WB: неожиданная схема реализации')
                 out=[]
