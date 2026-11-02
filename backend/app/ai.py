@@ -185,7 +185,7 @@ def key(db=None):
     api_key = configured_key(db)
     if not api_key:
         raise HTTPException(
-            409, "Claude API не подключён. Добавьте ключ в настройках сайта."
+            409, "Claude API не подключён. Добавьте ANTHROPIC_API_KEY в настройках сайта."
         )
     return api_key
 
