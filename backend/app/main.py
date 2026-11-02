@@ -4229,6 +4229,23 @@ def install_claude_skills(u=Depends(current_user), db=Depends(get_db)):
         CLAUDE_SKILL_INSTALL_LOCK.release()
 
 
+@app.post("/api/ai/skills/update")
+def update_claude_skills(u=Depends(current_user), db=Depends(get_db)):
+    """Publish new versions of all bundled QOR Skills in the configured Anthropic workspace."""
+    require(u, "settings", True)
+    if not ai.claude_skills_status()["enabled"]:
+        raise HTTPException(409, "Сначала подключите все 11 Skills")
+    if not CLAUDE_SKILL_INSTALL_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "Обновление Skills уже выполняется")
+    try:
+        skills = ai.install_claude_skills(update_existing=True)
+        audit(db, u, "update", "claude_skills", len(skills))
+        db.commit()
+        return {"skills": skills, "configured": len(skills), "required": len(ai.CLAUDE_SKILL_KEYS)}
+    finally:
+        CLAUDE_SKILL_INSTALL_LOCK.release()
+
+
 @app.put("/api/settings")
 def save_settings(p: dict, u=Depends(current_user), db=Depends(get_db)):
     require(u, "settings", True)
