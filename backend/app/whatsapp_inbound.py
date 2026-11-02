@@ -130,32 +130,33 @@ def _excel_safe(value):
 
 
 def make_report_workbook(tool_results, answer, period, question):
-    """Build an Excel file from the exact ERP tool outputs used to answer a question."""
+    """Stream a transparent workbook from exact ERP tool outputs without holding cells in memory."""
     import json
     import re
     from io import BytesIO
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
-    wb = Workbook()
-    summary = wb.active
-    summary.title = "Сводка"
-    summary.append(["Отчёт QOR"])
-    summary.append(["Запрос", _excel_safe(str(question)[:1000])])
-    summary.append(["Период", " — ".join(period or []) if isinstance(period, list) else str(period or "")])
-    summary.append(["Ответ Claude", _excel_safe(str(answer)[:4000])])
-    summary.append(["Данные", "Листы ниже содержат ответы ERP-инструментов, использованных Claude. Значения сохранены в исходных единицах источника."])
+    wb = Workbook(write_only=True)
+    summary = wb.create_sheet("Сводка")
+    title = WriteOnlyCell(summary, value="Отчёт QOR")
+    title.font = Font(size=16, bold=True, color="FFFFFF")
+    title.fill = PatternFill("solid", fgColor="172033")
+    summary.append([title])
     was_limited = any(bool((item.get("result") or {}).get("report_truncated")) for item in (tool_results or []) if isinstance(item, dict))
-    summary.append(["Объём выгрузки", "Достигнут предел выгрузки: сузьте период или магазин." if was_limited else "Все строки выбранной выгрузки помещены в файл."])
+    summary_rows = [
+        ("Запрос", _excel_safe(str(question)[:1000])),
+        ("Период", " — ".join(period or []) if isinstance(period, list) else str(period or "")),
+        ("Ответ Claude", _excel_safe(str(answer)[:4000])),
+        ("Данные", "Листы содержат результаты ERP-инструментов, использованных Claude. Значения сохранены в исходных единицах источника."),
+        ("Объём выгрузки", "Достигнут предел выгрузки: сузьте период или магазин." if was_limited else "Все строки выбранной выгрузки помещены в файл."),
+    ]
+    for label, value in summary_rows:
+        summary.append([label, value])
     summary.column_dimensions["A"].width = 24
     summary.column_dimensions["B"].width = 100
-    for row in summary.iter_rows():
-        for cell in row:
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-    summary["A1"].font = Font(size=16, bold=True, color="FFFFFF")
-    summary["A1"].fill = PatternFill("solid", fgColor="172033")
-    summary.row_dimensions[4].height = 100
 
     used_titles = {"Сводка"}
     table_count = 0
@@ -173,6 +174,15 @@ def make_report_workbook(tool_results, answer, period, question):
         used_titles.add(title)
         return title
 
+    def styled_header(ws, headers):
+        cells = []
+        for header in headers:
+            cell = WriteOnlyCell(ws, value=str(header)[:120])
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="2563EB")
+            cells.append(cell)
+        ws.append(cells)
+
     def add_table(title, rows):
         nonlocal table_count, rows_remaining
         if not isinstance(rows, list) or not rows or rows_remaining <= 0:
@@ -188,12 +198,13 @@ def make_report_workbook(tool_results, answer, period, question):
             return flattened
         objects = [flatten(item) for item in rows if isinstance(item, dict)]
         ws = wb.create_sheet(make_title(title))
+        ws.freeze_panes = "A2"
         if objects:
             all_headers = list(dict.fromkeys(key for item in objects for key in item.keys()))
             headers = all_headers[:39]
             overflow_headers = all_headers[39:]
             display_headers = headers + (["Дополнительные поля (JSON)"] if overflow_headers else [])
-            ws.append([str(key)[:120] for key in display_headers])
+            styled_header(ws, display_headers)
             count = min(len(objects), rows_remaining)
             for item in objects[:count]:
                 values = [_excel_safe(item.get(key)) for key in headers]
@@ -201,22 +212,16 @@ def make_report_workbook(tool_results, answer, period, question):
                     values.append(_excel_safe({key: item.get(key) for key in overflow_headers if key in item}))
                 ws.append(values)
             rows_remaining -= count
+            for index in range(len(display_headers)):
+                ws.column_dimensions[get_column_letter(index + 1)].width = 28
+            ws.auto_filter.ref = f"A1:{get_column_letter(len(display_headers))}{count + 1}"
         else:
-            ws.append(["Значение"])
+            styled_header(ws, ["Значение"])
             count = min(len(rows), rows_remaining)
             for item in rows[:count]:
                 ws.append([_excel_safe(item)])
             rows_remaining -= count
-        ws.freeze_panes = "A2"
-        if ws.max_row > 1:
-            ws.auto_filter.ref = ws.dimensions
-        for cell in ws[1]:
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill("solid", fgColor="2563EB")
-        for col in range(1, ws.max_column + 1):
-            letter = get_column_letter(col)
-            width = max((len(str(ws.cell(row, col).value or "")) for row in range(1, min(ws.max_row, 80) + 1)), default=12)
-            ws.column_dimensions[letter].width = min(max(width + 2, 14), 34)
+            ws.column_dimensions["A"].width = 36
         table_count += 1
 
     def collect(value, path, depth=0):
@@ -244,24 +249,20 @@ def make_report_workbook(tool_results, answer, period, question):
         if table_count == before and source_data is not None and rows_remaining > 0:
             rows = [[str(key), _excel_safe(value)] for key, value in list(source_data.items())[:min(500, rows_remaining)]] if isinstance(source_data, dict) else [[_excel_safe(value)] for value in source_data[:min(500, rows_remaining)]]
             ws = wb.create_sheet(make_title(tool))
-            ws.append(["Поле", "Значение"] if rows and len(rows[0]) == 2 else ["Значение"])
+            ws.freeze_panes = "A2"
+            styled_header(ws, ["Поле", "Значение"] if rows and len(rows[0]) == 2 else ["Значение"])
             for row in rows:
                 ws.append(row)
             rows_remaining -= len(rows)
-            ws.freeze_panes = "A2"
-            for cell in ws[1]:
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill("solid", fgColor="2563EB")
             table_count += 1
 
     if table_count == 0:
         ws = wb.create_sheet("Данные")
-        ws.append(["Результаты инструментов"])
+        styled_header(ws, ["Результаты инструментов"])
         ws.append([_excel_safe(json.dumps(tool_results or [], ensure_ascii=False, default=str)[:30000])])
     output = BytesIO()
     wb.save(output)
     return output.getvalue()
-
 
 def send_whatsapp_document(db, recipient, content, filename="qor-report.xlsx"):
     import httpx
