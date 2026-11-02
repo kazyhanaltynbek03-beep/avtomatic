@@ -118,10 +118,8 @@ def cache_ready(db):
     ranges = standard_ranges(today)
     company_ids = list(db.scalars(select(Company.id).where(Company.active.is_(True)).order_by(Company.id)))
     keys = ["all"] + [f"company:{company_id}" for company_id in company_ids]
-    cutoff = now() - timedelta(minutes=5)
     rows = db.scalars(select(DashboardReportCache).where(
         DashboardReportCache.scope_key.in_(keys),
-        DashboardReportCache.refreshed_at >= cutoff,
     )).all()
     ready = {(row.scope_key, row.start_date, row.end_date) for row in rows}
     return all((key, start, end) in ready for key in keys for start, end in ranges)
