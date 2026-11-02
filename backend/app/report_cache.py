@@ -84,7 +84,6 @@ def refresh_one(db):
     refresh_interval = timedelta(minutes=5)
 
     for key, company_id in scopes:
-        pending_days = finance.marketplace_source_event_days(db, owner, company_id)
         for start, end in ranges:
             row = db.scalar(select(DashboardReportCache).where(
                 DashboardReportCache.scope_key == key,
@@ -93,6 +92,7 @@ def refresh_one(db):
             ))
             if row and row.refreshed_at and row.refreshed_at > current - refresh_interval:
                 continue
+            pending_days = finance.marketplace_source_event_days(db, owner, company_id)
             payload = finance.report_headline(db, owner, start, end, company_id, pending_days)
             if row is None:
                 row = DashboardReportCache(
@@ -106,3 +106,20 @@ def refresh_one(db):
             db.commit()
             return True
     return False
+
+
+if __name__ == "__main__":
+    import logging
+    import time
+    from .db import SessionLocal
+
+    logging.basicConfig(level=logging.INFO)
+    while True:
+        try:
+            with SessionLocal() as db:
+                refreshed = refresh_one(db)
+        except Exception:
+            logging.exception("Dashboard report cache refresh failed")
+            refreshed = False
+        if not refreshed:
+            time.sleep(5)
