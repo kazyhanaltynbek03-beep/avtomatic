@@ -10,6 +10,7 @@ from .finance import report
 from .security import require, scope
 from .models import Document, Product, Account, MarketplaceRecord, MarketplaceProductMapping, MarketplaceProductCost, Return, Sale, business_today
 from . import action_engine, marketplace_pipeline
+from .system_secrets import load_config
 
 ANTHROPIC_MESSAGES_API = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_SKILLS_API = "https://api.anthropic.com/v1/skills"
@@ -79,9 +80,9 @@ def claude_skills_status():
 
 def install_claude_skills(update_existing=False):
     """Create the packaged QOR Skills, or publish a new version of existing Skills."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = key()
     if not api_key:
-        raise HTTPException(409, "Claude API не подключён на сервере")
+        raise HTTPException(409, "Сначала сохраните ключ Claude API в настройках сайта")
     if not CLAUDE_SKILL_BUNDLE_DIR.is_dir():
         raise HTTPException(500, "Пакет Claude Skills отсутствует в сборке сайта")
 
@@ -176,13 +177,35 @@ def agent_catalog():
     return [{"id": k, **{x: v[x] for x in ("name", "title", "scope")}} for k, v in AI_AGENTS.items()]
 
 
-def key():
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+def configured_key(db=None):
+    saved = load_config("anthropic", db).get("api_key")
+    return str(saved or os.getenv("ANTHROPIC_API_KEY", "")).strip()
+
+
+def key(db=None):
+    api_key = configured_key(db)
     if not api_key:
         raise HTTPException(
-            409, "ANTHROPIC_API_KEY не задан. Обычная аналитика доступна без Claude AI."
+            409, "Claude API не подключён. Добавьте ключ в настройках сайта."
         )
     return api_key
+
+
+def key_status(db=None):
+    return {"configured": bool(configured_key(db)),
+            "source": "site" if load_config("anthropic", db).get("api_key") else
+                      ("server" if os.getenv("ANTHROPIC_API_KEY", "").strip() else "missing")}
+
+
+def test_connection(db=None):
+    response = call_response(
+        [{"role": "user", "content": "Reply exactly: CLAUDE_OK"}],
+        "You are checking Claude API availability only. Do not access ERP data or tools. Reply exactly: CLAUDE_OK.",
+    )
+    answer = output_text(response).strip()
+    if answer != "CLAUDE_OK":
+        raise HTTPException(502, "Claude API подключён, но тестовый ответ не совпал")
+    return {"ok": True, "message": "Claude API отвечает"}
 
 
 def _decode_data_uri(value):
