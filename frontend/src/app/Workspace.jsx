@@ -169,6 +169,7 @@ export default function App() {
   const [marketplaceStoreByChannel, setMarketplaceStoreByChannel] = useState({Kaspi:"", Wildberries:""});
   const [marketplaceReportChannel, setMarketplaceReportChannel] = useState("");
   const noticeTimer = useRef(null);
+  const notificationCountRef = useRef(0);
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
   }, []);
@@ -245,6 +246,42 @@ export default function App() {
     return () => window.removeEventListener("hashchange", fn);
   }, []);
   useEffect(() => {
+    if (!auth || page === "alerts") return;
+    let live = true;
+    const checkAlerts = async () => {
+      const params = new URLSearchParams({ start, end });
+      if (company) params.set("company_id", company);
+      try {
+        const result = await api(`/alerts?${params}`);
+        if (!live) return;
+        const count = Math.max(0, Number(result.count) || 0);
+        if (count > notificationCountRef.current) {
+          setNotice("Появились новые уведомления");
+          if (noticeTimer.current) clearTimeout(noticeTimer.current);
+          noticeTimer.current = setTimeout(() => {
+            setNotice("");
+            noticeTimer.current = null;
+          }, 5000);
+        }
+        notificationCountRef.current = count;
+        setNotificationCount(count);
+      } catch {
+        // A failed background check should not interrupt the current page.
+      }
+    };
+    checkAlerts();
+    const interval = window.setInterval(checkAlerts, 60_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") checkAlerts();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      live = false;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [auth, page, start, end, company]);
+  useEffect(() => {
     if (!auth) return;
     const item = flat.find((x) => x[0] === page);
     if (!item || !can(auth, item[3]))
@@ -312,7 +349,7 @@ export default function App() {
     marketplaceAccountId,
     marketplaceReportChannel,
     setMarketplaceReportChannel,
-    onNotificationCount: setNotificationCount,
+    onNotificationCount: (count) => { notificationCountRef.current = count; setNotificationCount(count); },
     notify,
     onReportReady: notifyReportReady,
     navigate,
