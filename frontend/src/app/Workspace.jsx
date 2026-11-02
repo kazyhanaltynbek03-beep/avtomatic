@@ -883,7 +883,7 @@ function CostPendingNotice({ report, ctx }) {
 function ExpenseSummary({ ctx, channelFilter, setChannelFilter }) {
   const params = new URLSearchParams({start:ctx.start, end:ctx.end});
   if (ctx.company) params.set("company_id", ctx.company);
-  const {data, error, loading} = useLoad(`/expenses/summary?${params}`, ctx.refresh);
+  const {data, error, loading} = useLoad(`/expenses/summary?${params}`, ctx.refresh, {cacheScope:ctx.auth.user.id});
   if (loading) return <section className="panel expense-summary"><Spinner/></section>;
   if (error) return <section className="panel expense-summary"><ErrorBox error={error}/></section>;
   const summary = data || {};
@@ -1865,6 +1865,7 @@ function Forecast({ ctx }) {
       ctx.end +
       (ctx.company ? "&company_id=" + ctx.company : ""),
     ctx.refresh,
+    {cacheScope:ctx.auth.user.id},
   );
   return (
     <div className="panel">
@@ -2886,7 +2887,7 @@ function DataPage({ page, ctx }) {
     params.set("end", ctx.end || today());
     params.set("catalog_kind", page === "marketplace-products" ? "marketplace" : "master");
   }
-  const state = useLoad("/data/" + entity + "?" + params, ctx.refresh);
+  const state = useLoad("/data/" + entity + "?" + params, ctx.refresh, {cacheScope:ctx.auth.user.id});
   useEffect(() => setOffset(0), [search, ctx.company, ctx.start, ctx.end]);
   const cap = flat.find((x) => x[0] === page)?.[3];
   const writable =
