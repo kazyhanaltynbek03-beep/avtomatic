@@ -4,7 +4,10 @@ import pytest
 from .conftest import buy, sell, post, report, restock_return
 
 
-def test_dashboard_summary_reuses_selected_finance_report(client):
+def test_dashboard_summary_reuses_selected_finance_report(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "business_today", lambda: date(2026, 10, 31))
     buy(client, qty=10, cost=1000)
     sell(client, qty=1, price=2000, day="2026-10-02")
     summary = client.get(
@@ -15,7 +18,6 @@ def test_dashboard_summary_reuses_selected_finance_report(client):
     report_response = report(client)
     assert summary.json()["report"]["revenue"] == report_response["revenue"]
     assert summary.json()["report"]["net_profit"] == report_response["net_profit"]
-    from app import main
     today = str(main.business_today())
     month_report = report(client, "2026-10-01", today)
     today_report = report(client, today, today)

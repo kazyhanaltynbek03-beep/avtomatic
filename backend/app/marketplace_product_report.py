@@ -214,10 +214,15 @@ def build_report(db, user, start, end, company_id=None, channel=None, account_id
         account = account_map.get(link.account_id)
         if account:
             mappings_by_account_product[(link.company_id, link.product_id, link.account_id)].append(link)
-            kind, _, value = link.external_key.partition(":")
+            kind, separator, value = link.external_key.partition(":")
             card_key = f"{link.account_id}:{value}" if kind == "product" else None
             if card_key is None and kind == "sku":
                 card_key = f"{link.account_id}:sku:{value}"
+            if card_key is None and not separator:
+                # Older mappings stored the marketplace card ID without a
+                # product:/sku: prefix. Keep those visible as linked cards.
+                value = link.external_key
+                card_key = f"{link.account_id}:{value}"
             if card_key is None:
                 continue
             linked_cards[(link.company_id, link.product_id)].setdefault(card_key, {

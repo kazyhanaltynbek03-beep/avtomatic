@@ -246,6 +246,28 @@ def start_wb_weekly_scheduler():
     thread.start()
 
 
+def _dashboard_report_cache_loop():
+    """Keep standard dashboard periods warm outside the user's request path."""
+    while True:
+        refreshed = False
+        try:
+            with SessionLocal() as db:
+                refreshed = report_cache.refresh_one(db)
+        except Exception:
+            logger.exception("Dashboard report cache refresh failed")
+        # Move through missing/stale periods steadily, then check again in the
+        # background. Dashboard requests still calculate a bounded headline on a
+        # cold cache; AI KPI requests no longer need the full historical report.
+        time.sleep(1 if refreshed else 10)
+
+
+@app.on_event("startup")
+def start_dashboard_report_cache():
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        threading.Thread(target=_dashboard_report_cache_loop,
+                         name="dashboard-report-cache", daemon=True).start()
+
+
 @app.post("/api/internal/daily-report/run")
 def run_scheduled_daily_report(request: Request):
     """Private endpoint for the Render Cron service; never expose a token in the URL."""
@@ -3737,7 +3759,10 @@ def dashboard_summary(
     if selected is None:
         selected = f.report_headline(db, u, start, end, company_id, pending_source_days)
     if month_report is None:
-        month_report = f.report_headline(db, u, month_start, today, company_id, pending_source_days, include_balances=False)
+        if (start, end) == (month_start, today):
+            month_report = selected
+        else:
+            month_report = f.report_headline(db, u, month_start, today, company_id, pending_source_days, include_balances=False)
     if today_report is None:
         today_report = f.report_headline(db, u, today, today, company_id, pending_source_days, include_balances=False)
 

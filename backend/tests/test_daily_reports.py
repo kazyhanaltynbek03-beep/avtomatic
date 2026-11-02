@@ -39,7 +39,7 @@ def test_daily_digest_is_deduplicated_per_company_and_report_date(client, monkey
         db.commit()
 
     sent = []
-    monkeypatch.setattr(daily_reports, "_send_template", lambda recipient, message: sent.append((recipient, message)) or "wamid.test")
+    monkeypatch.setattr(daily_reports, "_send_template", lambda recipient, message, db=None: sent.append((recipient, message)) or "wamid.test")
     scheduled_time = datetime(2026, 10, 31, 9, 5, tzinfo=ZoneInfo("Asia/Almaty"))
     first = daily_reports.run_due_daily_reports(at=scheduled_time)
     second = daily_reports.run_due_daily_reports(at=scheduled_time)

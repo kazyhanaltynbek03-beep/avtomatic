@@ -776,7 +776,7 @@ def marketplace_source_event_days(db, user, company_id=None, account_ids=None, a
     return event_days
 
 
-def report_headline(db, user, start, end, company_id=None, pending_source_days=None, include_balances=True):
+def report_headline(db, user, start, end, company_id=None, pending_source_days=None, include_balances=True, active_only=True):
     """Calculate the small dashboard KPI set from only the selected date window.
 
     The full report includes inventory, receivables, historical cash and product
@@ -786,7 +786,9 @@ def report_headline(db, user, start, end, company_id=None, pending_source_days=N
         fail("Конец периода раньше начала")
     if company_id:
         scope(user, company_id)
-    account_query = scope_query(select(Account), Account, user).where(Account.active.is_(True))
+    account_query = scope_query(select(Account), Account, user)
+    if active_only:
+        account_query = account_query.where(Account.active.is_(True))
     accounts = {a.id: a for a in db.scalars(account_query)}
     account_ids = set(accounts)
     if not account_ids:

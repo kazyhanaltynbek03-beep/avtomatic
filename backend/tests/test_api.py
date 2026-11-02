@@ -222,7 +222,7 @@ def test_missing_ai_key_and_real_connector_fail_honestly(client, monkeypatch):
     run_one()
     res = client.get("/api/jobs/" + str(j["id"])).json()
     assert res["status"] == "failed"
-    assert "ANTHROPIC_API_KEY" in res["error"]
+    assert "Claude API" in res["error"]
     with SessionLocal() as db:
         db.get(Account, 1).mode = "api"
         db.commit()
