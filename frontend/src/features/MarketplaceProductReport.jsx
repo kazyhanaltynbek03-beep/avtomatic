@@ -7,6 +7,36 @@ import { Empty, ErrorBox, Spinner } from "../components/Feedback";
 
 const moneyCell = (value) => value == null ? "—" : money(value);
 const keyOf = (row) => `${row.company_id}:${row.product_id}`;
+const PAGE_SIZE = 30;
+const reportCache = new Map();
+const REPORT_CACHE_MAX_AGE = 24 * 60 * 60 * 1000;
+function readReportCache(key) {
+  const memory = reportCache.get(key);
+  if (memory && Date.now() - memory.savedAt <= REPORT_CACHE_MAX_AGE) return memory.data;
+  try {
+    const stored = JSON.parse(window.sessionStorage.getItem(`qor-sku-report:${key}`) || "null");
+    if (stored?.data && Date.now() - stored.savedAt <= REPORT_CACHE_MAX_AGE) {
+      reportCache.set(key, stored);
+      return stored.data;
+    }
+  } catch { /* Browser storage can be disabled or full. */ }
+  return null;
+}
+function writeReportCache(key, data) {
+  const cached = { data, savedAt: Date.now() };
+  reportCache.set(key, cached);
+  try { window.sessionStorage.setItem(`qor-sku-report:${key}`, JSON.stringify(cached)); } catch { /* Keep the in-memory copy. */ }
+}
+function ReportPagination({ total, page, onChange }) {
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const visible = [...new Set([1, page - 1, page, page + 1, pages].filter((n) => n >= 1 && n <= pages))].sort((a, b) => a - b);
+  return <nav className="pagination" aria-label="Страницы таблицы"><span>{total ? (page - 1) * PAGE_SIZE + 1 : 0}–{Math.min(page * PAGE_SIZE, total)} из {total} · страница {page} из {pages}</span><div className="pagination-pages"><button className="secondary" disabled={page <= 1} onClick={() => onChange(page - 1)}>Назад</button>{visible.map((number, index) => <span className="pagination-page-item" key={number}>{index > 0 && number - visible[index - 1] > 1 && <span className="pagination-ellipsis">…</span>}<button type="button" className={`secondary pagination-number${number === page ? " active" : ""}`} aria-current={number === page ? "page" : undefined} onClick={() => onChange(number)}>{number}</button></span>)}<button className="secondary" disabled={page >= pages} onClick={() => onChange(page + 1)}>Далее</button></div></nav>;
+}
+function pageRows(rows, page) { return rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE); }
+function statusRu(status) {
+  const labels = { COMPLETED: "Завершён", ACCEPTED_BY_MERCHANT: "Принят продавцом", ARRIVED: "Прибыл в пункт выдачи", ASSEMBLE: "Сборка заказа", CANCELLED: "Отменён", CANCELED: "Отменён", RETURNED: "Возвращён", WAITING: "Ожидает обработки", NEW: "Новый" };
+  return labels[String(status || "").toUpperCase()] || String(status || "Не указан").replaceAll("_", " ");
+}
 const marketplaceParts = (value) => String(value || "").split(/\s*[,;]\s*/).filter(Boolean).map((label) => {
   const lower = label.toLowerCase();
   const channel = /wildberries|\bwb\b|вайлдберриз/.test(lower) ? "Wildberries" : /ozon|озон/.test(lower) ? "Ozon" : /kaspi|каспи/.test(lower) ? "Kaspi" : "Маркетплейс";
@@ -32,6 +62,7 @@ export default function MarketplaceProductReport({ ctx }) {
   const [saving, setSaving] = useState({});
   const [downloading, setDownloading] = useState(false);
   const [tab, setTab] = useState("summary");
+  const [tablePages, setTablePages] = useState({});
   const writable = can(ctx.auth, "finance", true);
 
   const accounts = (ctx.refs.accounts || []).filter((account) =>
@@ -51,14 +82,20 @@ export default function MarketplaceProductReport({ ctx }) {
     return query;
   }, [ctx.start, ctx.end, ctx.company, channel, accountId]);
 
+  useEffect(() => { setTablePages({}); }, [params]);
+
   useEffect(() => {
     let current = true;
-    setLoading(true);
+    const cacheKey = `${ctx.auth?.user?.id || "anonymous"}:${params.toString()}`;
+    const cached = readReportCache(cacheKey);
+    if (cached) setData(cached);
+    setLoading(!cached);
     setError("");
     api("/marketplace-product-report?" + params.toString())
       .then((result) => {
         if (!current) return;
         setData(result);
+        writeReportCache(cacheKey, result);
         setDrafts((old) => {
           const next = { ...old };
           for (const row of result.items || []) {
@@ -77,12 +114,17 @@ export default function MarketplaceProductReport({ ctx }) {
           return next;
         });
       })
-      .catch((e) => { if (current) setError(e.message); })
+      .catch((e) => { if (current) setError(cached ? `Не удалось обновить отчёт. Показаны сохранённые данные. ${e.message}` : e.message); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
   }, [params, ctx.refresh]);
 
   const items = data?.items || [];
+  const pagedItems = pageRows(items, tablePages.summary || 1);
+  const pagedOperations = pageRows(data?.operations || [], tablePages.orders || 1);
+  const pagedExpenses = pageRows(data?.expenses || [], tablePages.expenses || 1);
+  const pagedWeeks = pageRows(data?.weekly_summary || [], tablePages.weeks || 1);
+  const setTablePage = (table, page) => setTablePages((old) => ({ ...old, [table]: page }));
   const incompleteItems = items.filter((row) => row.profit == null).length;
   const totals = items.reduce((sum, row) => ({
     sold: sum.sold + Number(row.sold_units || 0),
@@ -156,7 +198,7 @@ export default function MarketplaceProductReport({ ctx }) {
           <Download size={16}/>{downloading ? "Готовим Excel…" : "Скачать сводный Excel"}
         </button>
       </div>
-      <div className="pmr-report-tabs">{[["summary","Жиынтық"],["settings","Баптаулар"],["orders","Тапсырыстар"],["expenses","Жалпы шығындар"],["weeks","Есеп аптасы"]].map(([id,label]) => <button type="button" key={id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}>{label}</button>)}</div>
+      <div className="pmr-report-tabs">{[["summary","Сводка"],["settings","Настройки"],["orders","Продажи и возвраты"],["expenses","Расходы"],["weeks","По неделям"]].map(([id,label]) => <button type="button" key={id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}>{label}</button>)}</div>
       <div className="pmr-controls">
         <select aria-label="Маркетплейс" value={channel} onChange={(e) => { setChannel(e.target.value); setAccountId(""); }}>
           <option value="">Все маркетплейсы</option>
@@ -186,7 +228,7 @@ export default function MarketplaceProductReport({ ctx }) {
               <th>Товар / площадки</th><th>Цена / остаток</th><th>Продано / возврат</th><th>Чистая выручка</th>
               <th>Себестоимость</th><th>Налог</th><th>Расходы площадки</th><th>Прибыль</th>
             </tr></thead>
-            <tbody>{items.map((row) => {
+            <tbody>{pagedItems.map((row) => {
               const key = keyOf(row), draft = drafts[key] || {};
               return <tr key={`${key}:${row.account_id}`}>
                 <td>
@@ -218,7 +260,8 @@ export default function MarketplaceProductReport({ ctx }) {
             })}</tbody>
           </table>
         </div>
-        <div className="pmr-mobile">{items.map((row) => {
+        <ReportPagination total={items.length} page={tablePages.summary || 1} onChange={(page) => setTablePage("summary", page)}/>
+        <div className="pmr-mobile">{pagedItems.map((row) => {
           const key = keyOf(row), draft = drafts[key] || {};
           return <article className="pmr-card" key={`${key}:${row.account_id}`}>
             <div className="pmr-card-top"><div className="pmr-card-title"><strong>{row.product_name}</strong><small>SKU · {row.sku || row.article || "не указан"}</small></div><b className="pmr-card-profit">{moneyCell(row.profit)}</b></div>
@@ -248,10 +291,10 @@ export default function MarketplaceProductReport({ ctx }) {
           </article>;
         })}</div>
       </>)}
-      {tab === "settings" && <div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Артикул / SKU</th><th>Товар</th><th>Себестоимость за шт., ₸</th><th>Налог, %</th><th></th></tr></thead><tbody>{items.map((row) => { const key = keyOf(row), draft = drafts[key] || {}; return <tr key={key}><td>{row.article || row.sku}</td><td>{row.product_name}</td><td><input type="number" min="0" step="0.01" value={draft.unitCost ?? ""} onChange={(e) => edit(row,"unitCost",e.target.value)} disabled={!writable}/></td><td><input type="number" min="0" max="100" step="0.01" value={draft.taxRate ?? ""} onChange={(e) => edit(row,"taxRate",e.target.value)} disabled={!writable}/></td><td><button className="secondary pmr-row-save" type="button" disabled={!writable || saving[key]} onClick={() => save(row)}><Save size={12}/>{saving[key] ? "Сохраняем…" : "Сохранить"}</button></td></tr>; })}</tbody></table></div>}
-      {tab === "orders" && <div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Дата</th><th>Операция</th><th>Заказ</th><th>Артикул / SKU</th><th>Товар</th><th>Маркетплейс</th><th>Магазин</th><th>Количество</th><th>Сумма</th></tr></thead><tbody>{(data?.operations || []).map((row,index) => <tr key={row.date+"-"+row.reference+"-"+index}><td>{row.date}</td><td>{row.type}</td><td>{row.reference}</td><td>{row.article || row.sku}</td><td>{row.product_name}</td><td>{row.channel}</td><td>{row.account_name}</td><td>{row.quantity}</td><td>{moneyCell(row.revenue)}</td></tr>)}</tbody></table></div>}
-      {tab === "expenses" && <div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Дата</th><th>Ссылка</th><th>Категория</th><th>Описание</th><th>Магазин</th><th>Сумма</th></tr></thead><tbody>{(data?.expenses || []).map((row,index) => <tr key={row.date+"-"+row.reference+"-"+index}><td>{row.date}</td><td>{row.reference}</td><td>{row.category}</td><td>{row.description}</td><td>{row.account_name || "Общий расход"}</td><td>{moneyCell(row.amount)}</td></tr>)}</tbody></table></div>}
-      {tab === "weeks" && <div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Есеп аптасы</th><th>Продано</th><th>Возвраты</th><th>Выручка</th><th>Возвраты, ₸</th><th>Чистая выручка</th><th>Комиссия</th><th>Логистика</th><th>Реклама</th></tr></thead><tbody>{(data?.weekly_summary || []).map(row => <tr key={row.start}><td>{row.start} — {row.end}</td><td>{row.sold_units}</td><td>{row.returned_units}</td><td>{moneyCell(row.sold_revenue)}</td><td>{moneyCell(row.returned_revenue)}</td><td>{moneyCell(row.net_revenue)}</td><td>{moneyCell(row.commission)}</td><td>{moneyCell(row.logistics)}</td><td>{moneyCell(row.advertising)}</td></tr>)}</tbody></table></div>}
+      {tab === "settings" && <><div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Артикул / SKU</th><th>Товар</th><th>Себестоимость за шт., ₸</th><th>Налог, %</th><th></th></tr></thead><tbody>{pagedItems.map((row) => { const key = keyOf(row), draft = drafts[key] || {}; return <tr key={key}><td>{row.article || row.sku}</td><td>{row.product_name}</td><td><input type="number" min="0" step="0.01" value={draft.unitCost ?? ""} onChange={(e) => edit(row,"unitCost",e.target.value)} disabled={!writable}/></td><td><input type="number" min="0" max="100" value={draft.taxRate ?? ""} onChange={(e) => edit(row,"taxRate",e.target.value)} disabled={!writable}/></td><td><button className="secondary pmr-row-save" type="button" disabled={!writable || saving[key]} onClick={() => save(row)}><Save size={12}/>{saving[key] ? "Сохраняем…" : "Сохранить"}</button></td></tr>; })}</tbody></table></div><ReportPagination total={items.length} page={tablePages.settings || 1} onChange={(page) => setTablePage("settings", page)}/></>}
+      {tab === "orders" && <><div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Дата</th><th>Операция</th><th>Заказ</th><th>Артикул / SKU</th><th>Товар</th><th>Маркетплейс</th><th>Магазин</th><th>Количество</th><th>Сумма</th></tr></thead><tbody>{pagedOperations.map((row,index) => <tr key={row.date+"-"+row.reference+"-"+index}><td>{row.date}</td><td>{row.type}</td><td>{row.reference}</td><td>{row.article || row.sku}</td><td>{row.product_name}</td><td>{row.channel}</td><td>{row.account_name}</td><td>{row.quantity}</td><td>{moneyCell(row.revenue)}</td></tr>)}</tbody></table></div><ReportPagination total={(data?.operations || []).length} page={tablePages.orders || 1} onChange={(page) => setTablePage("orders", page)}/></>}
+      {tab === "expenses" && <><div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Дата</th><th>Ссылка</th><th>Категория</th><th>Описание</th><th>Магазин</th><th>Сумма</th></tr></thead><tbody>{pagedExpenses.map((row,index) => <tr key={row.date+"-"+row.reference+"-"+index}><td>{row.date}</td><td>{row.reference}</td><td>{row.category}</td><td>{row.description}</td><td>{row.account_name || "Общий расход"}</td><td>{moneyCell(row.amount)}</td></tr>)}</tbody></table></div><ReportPagination total={(data?.expenses || []).length} page={tablePages.expenses || 1} onChange={(page) => setTablePage("expenses", page)}/></>}
+      {tab === "weeks" && <><div className="pmr-scroll"><table className="pmr-table"><thead><tr><th>Неделя отчёта</th><th>Продано</th><th>Возвраты</th><th>Выручка</th><th>Возвраты, ₸</th><th>Чистая выручка</th><th>Комиссия</th><th>Логистика</th><th>Реклама</th></tr></thead><tbody>{pagedWeeks.map(row => <tr key={row.start}><td>{row.start} — {row.end}</td><td>{row.sold_units}</td><td>{row.returned_units}</td><td>{moneyCell(row.sold_revenue)}</td><td>{moneyCell(row.returned_revenue)}</td><td>{moneyCell(row.net_revenue)}</td><td>{moneyCell(row.commission)}</td><td>{moneyCell(row.logistics)}</td><td>{moneyCell(row.advertising)}</td></tr>)}</tbody></table></div><ReportPagination total={(data?.weekly_summary || []).length} page={tablePages.weeks || 1} onChange={(page) => setTablePage("weeks", page)}/></>}
     </section>
   );
 }
