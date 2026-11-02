@@ -3940,6 +3940,12 @@ def forecast(
     db=Depends(get_db),
 ):
     require(u, "analytics")
+    if end < start:
+        raise HTTPException(422, "Конец периода раньше начала")
+    # Forecasts require at least a week by definition. Avoid running the full
+    # historical finance report for short ranges that can never produce a result.
+    if (end - start).days + 1 < 7:
+        return ai.forecast({"start": str(start), "end": str(end), "daily": [], "units": 0})
     return ai.forecast(f.report(db, u, start, end, company_id))
 
 
