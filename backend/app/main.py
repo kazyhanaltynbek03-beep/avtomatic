@@ -4106,6 +4106,8 @@ def alerts(
             .select_from(all_sales)
             .outerjoin(return_totals, return_totals.c.sale_id == all_sales.c.id)
             .outerjoin(paid_totals, paid_totals.c.sale_id == all_sales.c.id)
+            .order_by(all_sales.c.due_date.asc().nullslast())
+            .limit(100)
         )
         for sale_id, reference, customer_id, channel, revenue, due_date, returned, paid in receivable_rows:
             due = max(0, int(revenue) - int(returned or 0) - int(paid or 0))
@@ -4196,7 +4198,7 @@ def alerts(
                     "account_id":account.id,"channel":account.channel,
                     "action":(account.sync_error or "Откройте интеграцию и проверьте состояние подключения.")[:300]})
     return {"items":items, "count":len(items), "stock_alerts":current.get("stock_alerts", []),
-            "receivables":receivables, "period":[str(start),str(end)], "comparison_period":[str(prev_start),str(prev_end)],
+            "receivables":receivables, "receivables_limit":100, "period":[str(start),str(end)], "comparison_period":[str(prev_start),str(prev_end)],
             "method":"Детерминированные правила ERP; без LLM. Рыночные сигналы добавляются только при наличии подтверждённого источника."}
 
 
