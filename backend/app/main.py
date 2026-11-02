@@ -245,6 +245,31 @@ def start_wb_weekly_scheduler():
     thread = threading.Thread(target=_wb_weekly_loop, name="wb-weekly-reports", daemon=True)
     thread.start()
 
+def _dashboard_report_cache_loop():
+    """Refresh one report snapshot at a time without blocking API requests."""
+    while True:
+        refreshed = False
+        try:
+            with SessionLocal() as db:
+                refreshed = report_cache.refresh_one(db)
+        except Exception:
+            logger.exception("Dashboard report cache background refresh failed")
+        time.sleep(5 if refreshed else 10)
+
+
+@app.on_event("startup")
+def start_dashboard_report_cache_worker():
+    # Dockerfile deployments (including Render) do not use the Compose worker
+    # service. Compose explicitly disables this thread because it runs a
+    # dedicated report-cache-worker container.
+    enabled = os.getenv("REPORT_CACHE_WORKER", "").strip().lower()
+    if enabled in {"1", "true", "yes", "on"} and not os.getenv("PYTEST_CURRENT_TEST"):
+        threading.Thread(
+            target=_dashboard_report_cache_loop,
+            name="dashboard-report-cache",
+            daemon=True,
+        ).start()
+
 
 @app.post("/api/internal/daily-report/run")
 def run_scheduled_daily_report(request: Request):
