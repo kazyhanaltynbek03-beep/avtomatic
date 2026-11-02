@@ -817,7 +817,7 @@ def assistant(db, user, payload):
     snapshot = report(db, user, start, end, payload.get("company_id"), payload.get("account_id"))
     logging.info("AI ERP snapshot loaded in %.2fs", time.monotonic() - snapshot_started)
     allowed = AGENT_TOOLS[agent_id]
-    tools = [_tool_schema(name) for name in allowed] + _action_tools(agent_id)
+    tools = [_tool_schema(name) for name in allowed] + ([] if payload.get("read_only") else _action_tools(agent_id))
     language = _answer_language(question)
     instructions = agent["prompt"] + (
         f" Reply in {language}, matching the language of the user’s latest message. Understand Kazakh business requests as well as Russian. "
@@ -830,7 +830,7 @@ def assistant(db, user, payload):
         "Аналитические инструменты только для чтения; любые изменения ERP разрешены только через propose_erp_action или propose_erp_plan и отдельное подтверждение пользователя. "
         "Указывай период, отделяй факты от гипотез. Максимум 250 слов. "
         "Если пользователь просит изменить себестоимость товара, сначала найди точный товар и магазин через get_marketplace_cost_catalog; если совпадение неоднозначно или товар не сопоставлен, задай уточняющий вопрос и не создавай действие. Для известного совпадения предложи set_marketplace_cost с суммой в KZT за единицу и датой действия; действие всё равно ждёт подтверждения пользователя. "
-        + ("Если запрос относится к твоей профессиональной зоне и требует изменения ERP, используй только доступные тебе propose_erp_action/propose_erp_plan. Они создают preview и НИКОГДА не означают, что операция уже выполнена. Любое изменение ждёт подтверждения пользователя. " if AGENT_ACTIONS[agent_id] else "Ты работаешь только на чтение и не предлагаешь write-действия. ")
+        + ("Если запрос относится к твоей профессиональной зоне и требует изменения ERP, используй только доступные тебе propose_erp_action/propose_erp_plan. Они создают preview и НИКОГДА не означают, что операция уже выполнена. Любое изменение ждёт подтверждения пользователя. " if AGENT_ACTIONS[agent_id] and not payload.get("read_only") else "Ты работаешь только на чтение и не предлагаешь write-действия. ")
     )
     history = []
     for item in (payload.get("history") or [])[-12:]:
