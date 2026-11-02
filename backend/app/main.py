@@ -753,11 +753,10 @@ def marketplace_products(channel: str, company_id: int | None = None, account_id
         if channel == "Kaspi":
             observed = {}
             raw_q = select(MarketplaceRecord.account_id, MarketplaceRecord.payload).where(
-                MarketplaceRecord.account_id.in_(account_ids), MarketplaceRecord.source == "kaspi")
+                MarketplaceRecord.account_id.in_(account_ids), MarketplaceRecord.source == "kaspi",
+                MarketplaceRecord.payload["record_type"].as_string() == "order_entry")
             for account_id, payload in db.execute(raw_q):
                 p = payload or {}
-                if p.get("record_type") != "order_entry":
-                    continue
                 try:
                     day = marketplace_pipeline._day(p.get("order_creation_date"))
                     if start is not None and day < start: continue
@@ -773,7 +772,7 @@ def marketplace_products(channel: str, company_id: int | None = None, account_id
                     "images":images,"account_id":account_id,"account_name":account_by_id[account_id].name,"currency":getattr(account_by_id[account_id], "currency", None) or "KZT","sold_units":0,"revenue":0,
                     "lifetime_sold_units":0,"lifetime_revenue":0,"unconverted_sales":0,"cogs":0,"commission":0,
                     "logistics":0,"advertising":0,"profit":None,"stock_quantity":None,"specifications":{},
-                    "source":"Kaspi order items","orders":[]})
+                    "source":"Kaspi order items"})
                 try:
                     qty = int(p.get("quantity") or 0)
                     amount = float(p.get("total_price") or 0)
@@ -781,8 +780,6 @@ def marketplace_products(channel: str, company_id: int | None = None, account_id
                     qty, amount = 0, 0
                 row["lifetime_sold_units"] += qty
                 row["lifetime_revenue"] += amount
-                row["orders"].append({"order_id":p.get("order_id"),"status":p.get("order_status"),
-                    "date":day.isoformat() if day else None,"quantity":qty,"total_price":amount})
                 if (start is None or day is None or day >= start) and (end is None or day is None or day <= end):
                     row["sold_units"] += qty
                     row["revenue"] += amount
