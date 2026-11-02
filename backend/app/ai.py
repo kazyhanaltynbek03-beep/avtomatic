@@ -950,6 +950,13 @@ def _cached_executive_snapshot(db, user, start, end, company_id=None, account_id
     return report_headline(db, user, start, end, company_id, active_only=False)
 
 
+def _release_db_before_claude(db):
+    """Release any read transaction/checked-out connection before network waits."""
+    rollback = getattr(db, "rollback", None)
+    if callable(rollback):
+        rollback()
+
+
 def assistant(db, user, payload):
     require(user, "ai")
     require(user, "analytics")
@@ -960,6 +967,7 @@ def assistant(db, user, payload):
         raise HTTPException(422, "Неизвестный AI-сотрудник")
     if _is_claude_connection_check(question):
         # Health checks must not load or transmit the ERP snapshot, chat history, or attachments.
+        _release_db_before_claude(db)
         call_response(
             [{"role": "user", "content": "Reply exactly: CLAUDE_OK"}],
             "You are checking Claude API availability only. Do not access ERP data or tools. Reply exactly: CLAUDE_OK.",
@@ -1040,6 +1048,7 @@ def assistant(db, user, payload):
     tool_results = []
     turn = 0
     turn_started = time.monotonic()
+    _release_db_before_claude(db)
     res = call_response(history, instructions, tools, tool_choice="required", **request_options)
     turn += 1
     logging.info("AI Claude turn=%s elapsed=%.2fs stop_reason=%s blocks=%s", turn,
@@ -1132,6 +1141,7 @@ def assistant(db, user, payload):
         if container_id:
             next_options["container_id"] = container_id
         turn_started = time.monotonic()
+        _release_db_before_claude(db)
         res = call_response(history, instructions, tools, **next_options)
         turn += 1
         logging.info("AI Claude turn=%s elapsed=%.2fs stop_reason=%s blocks=%s", turn,
@@ -1156,6 +1166,7 @@ def assistant(db, user, payload):
             " Сейчас режим финализации: инструментов нет и вызывать их нельзя. "
             "Сформулируй ответ только по приложенным результатам ERP."
         )
+        _release_db_before_claude(db)
         fallback = call_response(fallback_messages, fallback_instructions, tools=None)
         logging.info("AI final recovery elapsed=%.2fs stop_reason=%s blocks=%s",
                      time.monotonic() - turn_started, fallback.get("stop_reason"),

@@ -215,8 +215,14 @@ def test_claude_connection_check_does_not_load_or_send_erp_data(monkeypatch):
     from app import ai
 
     sent = {}
+    class FakeSession:
+        rolled_back = False
+
+        def rollback(self):
+            self.rolled_back = True
 
     def fake_call_response(messages, instructions, *args, **kwargs):
+        assert db.rolled_back, "DB transaction must be released before waiting on Claude"
         sent.update({"messages": messages, "instructions": instructions, "args": args, "kwargs": kwargs})
         return {"output": []}
 
@@ -227,7 +233,8 @@ def test_claude_connection_check_does_not_load_or_send_erp_data(monkeypatch):
     monkeypatch.setattr(ai, "call_response", fake_call_response)
     monkeypatch.setattr(ai, "report", forbidden_report)
 
-    result = ai.assistant(object(), object(), {
+    db = FakeSession()
+    result = ai.assistant(db, object(), {
         "agent": "rick",
         "question": "Техническая проверка соединения Claude. Ответь строго: CLAUDE_OK. Не анализируй ERP.",
         "history": [{"role": "assistant", "content": "confidential prior ERP context"}],
