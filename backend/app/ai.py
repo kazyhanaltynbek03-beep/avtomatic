@@ -22,7 +22,7 @@ AI_AGENTS = {
     "rick": {"name": "Арман", "title": "AI-руководитель", "scope": "Весь бизнес", "prompt": "Ты Арман, AI-руководитель. Дай владельцу краткий управленческий вывод: что происходит, что требует внимания и какие следующие действия разумны. Не выдумывай факты и не меняй записи."},
     "finance": {"name": "Данияр", "title": "AI CFO", "scope": "P&L · Cash Flow · B2B", "prompt": "Ты Данияр, AI-финансист. Анализируй только подтверждённые финансовые показатели: выручку, COGS, gross/net profit, расходы, cash и дебиторку. Можешь подготовить изменение себестоимости товара в магазине маркетплейса через подтверждаемое действие. Не рассчитывай критические показатели самостоятельно и не выдавай гипотезу за факт."},
     "analyst": {"name": "Тимур", "title": "Marketplace Director", "scope": "SKU · каналы · динамика", "prompt": "Ты Тимур, директор маркетплейсов. Ищи закономерности в переданном ERP snapshot: каналы, SKU, динамика, лидеры и слабые места. Если сравнительных данных нет, прямо скажи, что причинное объяснение невозможно."},
-    "buyer": {"name": "Ерлан", "title": "Inventory & Procurement", "scope": "Склад · партии · закуп", "prompt": "Ты Ерлан, специалист по складу и закупкам. Работай с остатками, стоимостью склада, продажами и stock alerts из ERP. Можешь подготовить закупку, корректировку остатков, привязку точных карточек из нескольких магазинов к одному master-SKU, порог предупреждений и внутренний статус осмотра возврата только через подтверждаемое действие. Не считай изменение ERP выполненным до отдельного подтверждения пользователя. Не придумывай сроки поставки, спрос или рекомендуемое количество, если система не передала достаточных данных."},
+    "buyer": {"name": "Ерлан", "title": "Inventory & Procurement", "scope": "Склад · спрос · закуп", "prompt": "Ты Ерлан, аналитик закупок QOR. По данным продаж, категорий, остатков, возвратов и себестоимости находи товары и категории с подтверждёнными продажами, запасом на исходе и потенциалом пополнения. Объясняй, почему товар кандидат: чистые проданные единицы и выручка за период, остаток, скорость продаж, покрытие в днях, возвраты и полнота себестоимости. Можешь предлагать закупку, но не размещай заказ и не меняй ERP без подтверждения. Не выдумывай спрос, конкурентов, сроки поставки и маржу. Если данных о внешнем рынке нет, назови вывод по новой нише гипотезой, а не фактом."},
     "marketing": {"name": "Алия", "title": "Marketing & Targeting", "scope": "Kaspi · WB · Ozon", "prompt": "Ты Алия, AI-маркетолог. Анализируй только переданные показатели каналов, рекламы и продаж. Не придумывай CTR, CPC, спрос или данные конкурентов, которых нет в snapshot."},
     "content": {"name": "Аружан", "title": "Product Content", "scope": "Карточки · SEO · креатив", "prompt": "Ты Аружан, AI-контент-менеджер. Помогай с позиционированием и контентом, но не придумывай характеристики товара. Для продуктовых фактов требуй подтверждённые данные."},
 }
@@ -41,7 +41,7 @@ AGENT_SKILL_KEYS = {
     "rick": CLAUDE_SKILL_KEYS,
     "finance": ("qor-daniyar-finance",),
     "analyst": ("qor-timur-marketplace", "qor-nurlan-market-research", "qor-miras-kaspi", "qor-dias-wildberries", "qor-azamat-ozon"),
-    "buyer": ("qor-erlan-inventory",),
+    "buyer": ("qor-erlan-inventory", "qor-nurlan-market-research"),
     "marketing": ("qor-aliya-marketing", "qor-aigerim-seo", "qor-nurlan-market-research"),
     "content": ("qor-aruzhan-content", "qor-aigerim-seo"),
 }
@@ -475,7 +475,7 @@ TOOL_DESCRIPTIONS = {
     "get_finance_summary": "Read authoritative P&L, Cash Flow and B2B receivables for the selected period.",
     "get_inventory_summary": "Read authoritative warehouse value, stock alerts and stock positions.",
     "get_channel_summary": "Read authoritative sales/profit metrics by Kaspi, Wildberries, Ozon, Offline and B2B channels.",
-    "get_product_summary": "Read authoritative product/SKU profitability and stock metrics.",
+    "get_product_summary": "Read product and category sales, SKU units/revenue by channel and store, returns-adjusted product totals, and current stock/velocity metrics for demand and procurement analysis.",
     "get_marketplace_cost_catalog": "Read mapped marketplace products, active store IDs, and effective KZT unit costs to safely prepare a cost update.",
     "get_marketplace_mapping_catalog": "Read-only exact card-to-master-SKU links for each connected Kaspi, Wildberries, and Ozon store, including IDs needed to safely link listings.",
     "get_return_inventory_summary": "Read internal QOR return inspection and stock-restoration statuses. These statuses do not claim to be marketplace refund or return decisions.",
@@ -526,6 +526,7 @@ def _agent_tool_data(snapshot, name):
         return {**common, "products": snapshot["products"],
                 "products_by_channel": snapshot.get("products_by_channel", {}),
                 "products_by_store": snapshot.get("products_by_store", {}),
+                "categories": snapshot.get("categories", []),
                 "stock": snapshot["stock"]}
     raise HTTPException(403, "Инструмент не разрешён")
 
@@ -977,7 +978,9 @@ def assistant(db, user, payload):
             "tools_used": [], "source": "Claude API connection check",
             "period": None, "notice": "Проверка соединения не читает данные ERP.",
         }
-    start = date.fromisoformat(payload.get("start", str(business_today().replace(day=1))))
+    procurement_default = agent_id == "buyer"
+    default_start = business_today() - timedelta(days=89) if procurement_default else business_today().replace(day=1)
+    start = date.fromisoformat(payload.get("start", str(default_start)))
     end = date.fromisoformat(payload.get("end", str(business_today())))
     # Load expensive product, inventory and cash-detail snapshots only when a
     # selected tool needs them. KPI questions use the dashboard cache/headline.
@@ -1002,6 +1005,14 @@ def assistant(db, user, payload):
         "Если пользователь просит изменить себестоимость товара, сначала найди точный товар и магазин через get_marketplace_cost_catalog; если совпадение неоднозначно или товар не сопоставлен, задай уточняющий вопрос и не создавай действие. Для известного совпадения предложи set_marketplace_cost с суммой в KZT за единицу и датой действия; действие всё равно ждёт подтверждения пользователя. "
         + ("Если запрос относится к твоей профессиональной зоне и требует изменения ERP, используй только доступные тебе propose_erp_action/propose_erp_plan. Они создают preview и НИКОГДА не означают, что операция уже выполнена. Любое изменение ждёт подтверждения пользователя. " if AGENT_ACTIONS[agent_id] and not payload.get("read_only") else "Ты работаешь только на чтение и не предлагаешь write-действия. ")
     )
+    if agent_id == "buyer":
+        instructions += (
+            " Для запроса о нише, что выгодно продавать, что закупить или какие товары хорошо продаются, используй период последних 90 дней по умолчанию; если пользователь задал период, используй его. "
+            "Обязательно вызови get_product_summary и get_inventory_summary; для возвратов/рисков вызови get_return_inventory_summary, для себестоимости get_marketplace_cost_catalog, а при неполной синхронизации или данных get_data_quality_summary. "
+            "Ранжируй до 5 кандидатов по чистым проданным единицам, выручке и категории за выбранный период, текущему остатку, скорости продаж и дням покрытия; отдельно укажи возвраты и полноту себестоимости, если эти данные есть. "
+            "Для предложения количества используй скорость продаж из ERP и явно помечай сценарий покрытия 30 дней как предположение; не угадывай сроки поставки и не называй это обязательным заказом. "
+            "Нишу вне текущего каталога называй только гипотезой, пока нет внешних данных по рынку. Отделяй факты, предположения и риски."
+        )
     history = []
     for item in (payload.get("history") or [])[-8:]:
         if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
