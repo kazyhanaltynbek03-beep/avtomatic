@@ -512,7 +512,7 @@ export default function App() {
                     key={v}
                     onClick={() => chooseRange(v)}
                   >
-                    {v}
+                    {v === "Месяц" ? "Текущий месяц" : v}
                   </button>
                 ))}
               </div>
@@ -692,7 +692,19 @@ function PageNavigation({ total = 0, offset = 0, pageSize = 30, onPage, classNam
   </nav>;
 }
 function marketplaceStatusRu(value) {
-  const labels = { COMPLETED: "Завершён", ACCEPTED_BY_MERCHANT: "Принят продавцом", ARRIVED: "Прибыл в пункт выдачи", ASSEMBLE: "Сборка заказа", CANCELLED: "Отменён", CANCELED: "Отменён", RETURNED: "Возвращён", WAITING: "Ожидает обработки", NEW: "Новый" };
+  const labels = {
+    COMPLETED: "Завершён", ACCEPTED_BY_MERCHANT: "Принят продавцом", ARRIVED: "Прибыл в пункт выдачи",
+    ASSEMBLE: "Сборка заказа", CANCELLED: "Отменён", CANCELED: "Отменён", RETURNED: "Возвращён",
+    WAITING: "Ожидает обработки", NEW: "Новый", RECEIVED: "Получен из API",
+    POSTED: "Учтён в ERP", PROJECTED: "Проведён в учёте", MAPPED_PRODUCT: "Связан с товаром",
+    PENDING_MAPPING: "Ожидает привязки товара", PENDING_FIFO: "Ожидает себестоимость",
+    PENDING_FX: "Ожидает курс валюты", IGNORED_NON_FINANCIAL: "Не является финансовой операцией",
+    FAILED: "Ошибка обработки", RUNNING: "Обрабатывается", QUEUED: "В очереди",
+    PAUSED: "Приостановлено", PARTIAL: "Частично загружено", COMPLETE: "Завершено",
+    NOT_FINANCIAL_OR_NOT_CONFIRMED: "Не подтверждена как финансовая операция",
+    DUPLICATE_EVENT: "Повторная запись", COVERED_BY_REALIZATION: "Учтено в отчёте реализации",
+    COGS_PENDING: "Ожидается себестоимость", SOURCE_EVENTS_PENDING: "Ожидается обработка источника",
+  };
   const status = String(value || "");
   return labels[status.toUpperCase()] || status.replaceAll("_", " ");
 }
