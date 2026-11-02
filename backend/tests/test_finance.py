@@ -60,6 +60,32 @@ def test_disconnected_store_remains_in_historical_reports(client):
         assert db.query(Account).filter(Account.id == 4).count() == 1
 
 
+def test_pending_source_scan_projects_only_confirmed_event_dates(client):
+    from datetime import datetime, timezone
+    from app import finance
+    from app.db import SessionLocal
+    from app.models import Account, MarketplaceRecord, User
+
+    epoch_ms = int(datetime(2026, 10, 3, tzinfo=timezone.utc).timestamp() * 1000)
+    with SessionLocal() as db:
+        account = db.get(Account, 1)
+        user = db.get(User, 1)
+        db.add_all([
+            MarketplaceRecord(account_id=1, company_id=account.company_id, source="kaspi",
+                external_id="confirmed-order", payload={"record_type":"order_entry", "order_status":"COMPLETED", "completed_date":"2026-10-02"},
+                status="received", stage_status="pending_mapping"),
+            MarketplaceRecord(account_id=1, company_id=account.company_id, source="wb",
+                external_id="confirmed-sale", payload={"record_type":"sale", "saleDt":epoch_ms},
+                status="received", stage_status="pending_mapping"),
+            MarketplaceRecord(account_id=1, company_id=account.company_id, source="kaspi",
+                external_id="unconfirmed-order", payload={"record_type":"order_entry", "order_status":"NEW", "created_at":"2026-10-04"},
+                status="received", stage_status="pending_mapping"),
+        ])
+        db.commit()
+
+        assert finance.marketplace_source_event_days(db, user) == [date(2026, 10, 2), date(2026, 10, 3)]
+
+
 def test_dashboard_summary_does_not_recompute_default_month(client, monkeypatch):
     from app import main
 

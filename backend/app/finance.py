@@ -736,8 +736,24 @@ def marketplace_source_event_days(db, user, company_id=None, account_ids=None, a
         account_ids = set(account_ids)
     if not account_ids:
         return []
+    payload = MarketplaceRecord.payload
+    # The dashboard worker runs this scan for each prepared date range. Select
+    # only the fields needed to detect a pending sale; decoding every full API
+    # payload (which may contain product images/order details) repeatedly can
+    # push a small single-instance Render process over its memory limit.
     source_query = scope_query(
-        select(MarketplaceRecord.reason_code, MarketplaceRecord.payload),
+        select(
+            MarketplaceRecord.reason_code,
+            payload["record_type"].as_string(),
+            payload["sellerOperName"].as_string(),
+            payload["supplier_oper_name"].as_string(),
+            payload["doc_type_name"].as_string(),
+            payload["status"].as_string(),
+            payload["order_status"].as_string(),
+            payload["saleDt"], payload["sale_dt"], payload["date"],
+            payload["completed_date"], payload["delivered_at"],
+            payload["shipment_date"], payload["created_at"],
+        ),
         MarketplaceRecord,
         user,
     ).where(
@@ -749,25 +765,24 @@ def marketplace_source_event_days(db, user, company_id=None, account_ids=None, a
         source_query = source_query.where(MarketplaceRecord.company_id == company_id)
     from .marketplace_pipeline import _day, Pending
     event_days = []
-    for reason_code, raw_payload in db.execute(source_query).yield_per(1000):
+    for (reason_code, record_type, seller_operation, supplier_operation,
+         document_type, status, order_status, sale_date, sale_dt, record_date,
+         completed_date, delivered_at, shipment_date, created_at) in db.execute(source_query).yield_per(1000):
         if reason_code == "DUPLICATE_EVENT":
             continue
-        payload = raw_payload or {}
-        record_type = payload.get("record_type")
-        operation = str(payload.get("sellerOperName") or payload.get("supplier_oper_name") or payload.get("doc_type_name") or "").lower()
+        operation = str(seller_operation or supplier_operation or document_type or "").lower()
         confirmed = (
             record_type == "sale"
             or (record_type == "realization" and operation in {"продажа", "sale", "возврат", "return"})
-            or (record_type == "posting" and payload.get("status") in {"delivered", "completed"})
-            or (record_type == "order_entry" and payload.get("order_status") == "COMPLETED")
+            or (record_type == "posting" and status in {"delivered", "completed"})
+            or (record_type == "order_entry" and order_status == "COMPLETED")
         )
         if not confirmed:
             continue
         try:
             day = _day(
-                payload.get("saleDt") or payload.get("sale_dt") or payload.get("date")
-                or payload.get("completed_date") or payload.get("delivered_at")
-                or payload.get("shipment_date") or payload.get("created_at"),
+                sale_date or sale_dt or record_date or completed_date or delivered_at
+                or shipment_date or created_at,
                 "Asia/Almaty" if record_type == "order_entry" else None,
             )
         except Pending:

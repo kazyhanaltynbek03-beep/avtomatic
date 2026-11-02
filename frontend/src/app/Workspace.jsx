@@ -2366,13 +2366,20 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
     const lastAttempt = autoSyncRef.current.get(key) || 0;
     const matchesRange = data.start === range.start && data.end === range.end && data.period === period;
     const updatedAt = Date.parse(data.updated_at || "");
+    const attemptAt = Date.parse(data.attempt_at || "");
+    // A process restart can kill the finance sync after it stores "loading".
+    // Do not leave the report stuck in that state forever: requeue it after a
+    // short lease window. The server sync endpoint is idempotent and owns the
+    // longer provider/API retry policy.
+    const stuckLoading = data.status === "загружается" &&
+      (!Number.isFinite(attemptAt) || Date.now() - attemptAt >= 2 * 60 * 1000);
     const refreshAfterMs = data.status === "ожидается" ? 15 * 60 * 1000 : period === "daily" ? 5 * 60 * 1000 : 60 * 60 * 1000;
     const fresh = matchesRange && ["готов", "ожидается", "частично"].includes(data.status) &&
       Number.isFinite(updatedAt) && Date.now() - updatedAt < refreshAfterMs;
-    if (fresh || matchesRange && data.status === "загружается" || Date.now() - lastAttempt < refreshAfterMs) return;
+    if (fresh || matchesRange && data.status === "загружается" && !stuckLoading || Date.now() - lastAttempt < refreshAfterMs) return;
     autoSyncRef.current.set(key, Date.now());
     startReportSync();
-  }, [activeAccountId, period, range.start, range.end, company, data.start, data.end, data.period, data.status, data.updated_at, report.loading, report.error, startReportSync]);
+  }, [activeAccountId, period, range.start, range.end, company, data.start, data.end, data.period, data.status, data.updated_at, data.attempt_at, reportRefresh, report.loading, report.error, startReportSync]);
   const downloadExcel = async () => {
     setExcelError("");
     setDownloadingExcel(true);
