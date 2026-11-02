@@ -13,9 +13,9 @@ def test_product_report_consolidates_sales_stock_and_excel_across_marketplaces(c
         db.flush()
         db.add_all([
             MarketplaceProductMapping(company_id=1, account_id=1, channel="Kaspi",
-                                      external_key="kaspi-card-1", product_id=1),
+                                      external_key="product:kaspi-card-1", product_id=1),
             MarketplaceProductMapping(company_id=1, account_id=4, channel="Wildberries",
-                                      external_key="wb-card-1", product_id=1),
+                                      external_key="product:wb-card-1", product_id=1),
         ])
         db.commit()
 
