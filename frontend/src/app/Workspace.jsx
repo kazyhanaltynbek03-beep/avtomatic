@@ -4906,8 +4906,9 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
   const clearWhatsAppConnection = async () => {
     setIntegrationBusy(true); setError("");
     try {
-      await api("/settings/integrations/whatsapp", {method:"PUT",body:{clear:true}});
-      await refreshSiteIntegrations();
+      const status = await api("/settings/integrations/whatsapp", {method:"PUT",body:{clear:true}});
+      setSiteIntegrations((current) => ({...current, whatsapp:status}));
+      setDailyReport((current) => ({...current, provider:status.provider || status}));
       ctx.notify("Настройки WhatsApp удалены");
     } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
   };
@@ -4970,7 +4971,7 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
           <div className={siteIntegrations.claude?.configured?"success-banner":"info-banner"} role="status">Claude API · {siteIntegrations.claude?.configured?"подключён":"ожидает подключения"}{siteIntegrations.claude?.source==="server"?" · ключ пока задан в окружении сервера":""}</div>
           <label>Ключ Anthropic API<input type="password" autoComplete="new-password" value={claudeKey} onChange={e=>setClaudeKey(e.target.value)} placeholder={siteIntegrations.claude?.configured?"Ключ сохранён — оставьте пустым, чтобы не менять":"Вставьте ключ Claude API"}/></label>
           <div className="button-row"><button className="primary" disabled={integrationBusy||!claudeKey.trim()}>{integrationBusy?"Сохраняем…":"Сохранить ключ Claude"}</button><button className="secondary" type="button" onClick={testClaudeConnection} disabled={integrationBusy||!siteIntegrations.claude?.configured}>Проверить Claude</button></div>
-          {siteIntegrations.claude?.source==="site"&&<button className="danger mt-12" type="button" onClick={async()=>{setIntegrationBusy(true);try{await api("/settings/integrations/claude",{method:"PUT",body:{clear:true}});await refreshSiteIntegrations();ctx.notify("Ключ Claude удалён")}catch(e){setError(e.message)}finally{setIntegrationBusy(false)}}} disabled={integrationBusy}>Удалить ключ Claude</button>}
+          {siteIntegrations.claude?.source==="site"&&<button className="danger mt-12" type="button" onClick={async()=>{setIntegrationBusy(true);try{const status=await api("/settings/integrations/claude",{method:"PUT",body:{clear:true}});setSiteIntegrations((current)=>({...current,claude:status}));ctx.notify("Ключ Claude удалён")}catch(e){setError(e.message)}finally{setIntegrationBusy(false)}}} disabled={integrationBusy}>Удалить ключ Claude</button>}
         </form>
         <form className="panel padded" onSubmit={saveWhatsAppConnection}>
           <h2>WhatsApp Business API</h2>
