@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from .db import SessionLocal
 from .models import Job, User, ProductCardVersion, AIThread, AIMessage, now
 from .security import scope
-from . import ai
+from . import ai, daily_reports
 from .product_studio import assess_performance, next_experiment
 
 logging.basicConfig(level=logging.INFO)
@@ -126,7 +126,14 @@ def run_one(job_id=None):
 
 
 if __name__ == "__main__":
+    last_whatsapp_alert_check = 0.0
     while True:
         schedule_due_card_reviews()
+        if time.monotonic() - last_whatsapp_alert_check >= 60:
+            try:
+                daily_reports.run_due_whatsapp_alerts()
+            except Exception:
+                logging.exception("WhatsApp alert monitor cycle failed")
+            last_whatsapp_alert_check = time.monotonic()
         if not run_one():
             time.sleep(2)

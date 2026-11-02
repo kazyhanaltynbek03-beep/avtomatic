@@ -2,7 +2,9 @@
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -165,8 +167,8 @@ def run_due_daily_reports(at=None):
     """Send at most one digest per company/recipient/report day; retry failures on next run."""
     with SessionLocal() as db:
         settings = db.get(Setting, 1)
-        if not settings or not settings.daily_report_enabled or not settings.daily_report_consent:
-            return {"sent": 0, "skipped": "disabled_or_no_consent"}
+        if not settings or not settings.daily_report_consent:
+            return {"sent": 0, "skipped": "no_recipient_consent"}
         recipient = (settings.daily_report_recipient or "").strip()
         if not recipient or not provider_status(db)["configured"]:
             return {"sent": 0, "skipped": "provider_or_recipient_not_configured"}
@@ -226,6 +228,132 @@ def run_due_daily_reports(at=None):
                 logger.warning("Daily report delivery failed for company %s (%s)", company.id, type(exc).__name__)
             db.commit()
         return {"sent": sent, "report_date": str(report_date)}
+
+
+def run_due_whatsapp_alerts(at=None):
+    """Send changed ERP alerts when WhatsApp, a recipient, and consent are configured."""
+    with SessionLocal() as db:
+        settings = db.scalar(select(Setting).where(Setting.id == 1).with_for_update())
+        if not settings or not settings.daily_report_consent:
+            return {"sent": 0, "skipped": "no_recipient_consent"}
+        recipient = (settings.daily_report_recipient or "").strip()
+        if not recipient or not provider_status(db)["configured"]:
+            return {"sent": 0, "skipped": "provider_or_recipient_not_configured"}
+
+        owner = db.scalar(select(User).where(
+            User.active.is_(True), User.role == "Owner"
+        ).order_by(User.id).limit(1))
+        if not owner:
+            return {"sent": 0, "skipped": "owner_missing"}
+        try:
+            zone = ZoneInfo(settings.timezone or "Asia/Almaty")
+        except (ValueError, KeyError):
+            logger.error("WhatsApp alert monitor has an invalid time zone")
+            return {"sent": 0, "skipped": "invalid_timezone"}
+        current_time = at.astimezone(timezone.utc) if at else datetime.now(timezone.utc)
+        today = current_time.astimezone(zone).date()
+
+        from .main import alerts
+        state = load_config("whatsapp_alert_state", db)
+        companies_state = dict(state.get("companies") or {})
+        companies = db.scalars(select(Company).where(
+            Company.active.is_(True)
+        ).order_by(Company.id)).all()
+        sent = 0
+        checked = 0
+
+        for company in companies:
+            company_state = dict(companies_state.get(str(company.id)) or {})
+            checked_at = company_state.get("checked_at")
+            if checked_at:
+                try:
+                    previous_check = datetime.fromisoformat(checked_at)
+                    if previous_check.tzinfo is None:
+                        previous_check = previous_check.replace(tzinfo=timezone.utc)
+                    if current_time - previous_check < timedelta(minutes=10):
+                        continue
+                except ValueError:
+                    pass
+
+            try:
+                payload = alerts(today, today, company.id, owner, db)
+                items = payload.get("items") or []
+                stable_items = [{
+                    "severity": item.get("severity"),
+                    "type": item.get("type"),
+                    "title": str(item.get("title") or "")[:160],
+                    "product_id": item.get("product_id"),
+                    "return_id": item.get("return_id"),
+                    "account_id": item.get("account_id"),
+                    "count": item.get("count"),
+                } for item in items]
+                stable_items.sort(key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
+                fingerprint = hashlib.sha256(
+                    json.dumps(stable_items, ensure_ascii=False, sort_keys=True).encode()
+                ).hexdigest()
+                old_fingerprint = company_state.get("fingerprint", "")
+                company_state["checked_at"] = current_time.isoformat()
+                checked += 1
+
+                if fingerprint == old_fingerprint:
+                    companies_state[str(company.id)] = company_state
+                    continue
+                if not items and not old_fingerprint:
+                    company_state["fingerprint"] = fingerprint
+                    companies_state[str(company.id)] = company_state
+                    continue
+
+                if not items:
+                    message = f"QOR · {company.name}\nВсе предыдущие уведомления устранены."
+                else:
+                    critical = sum(1 for item in items if item.get("severity") == "critical")
+                    warning = sum(1 for item in items if item.get("severity") == "warning")
+                    lines = [
+                        f"QOR · уведомления · {company.name}",
+                        f"Всего: {len(items)} · критические: {critical} · предупреждения: {warning}",
+                    ]
+                    type_counts = {}
+                    for item in items:
+                        label = str(item.get("type") or "other")
+                        type_counts[label] = type_counts.get(label, 0) + 1
+                    lines.append("Категории: " + ", ".join(
+                        f"{key}: {value}" for key, value in sorted(type_counts.items())
+                    ))
+                    for item in items[:7]:
+                        lines.append("• " + str(item.get("title") or "Требуется проверка")[:120])
+                    if len(items) > 7:
+                        lines.append(f"И ещё {len(items) - 7}. Откройте QOR → Уведомления.")
+                    message = "\n".join(lines)
+
+                try:
+                    provider_id = _send_template(recipient, message[:1000], db)
+                except Exception as exc:
+                    companies_state[str(company.id)] = company_state
+                    save_config(db, "whatsapp_alert_state", {"companies": companies_state})
+                    db.commit()
+                    logger.warning(
+                        "WhatsApp alert delivery failed for company %s (%s)",
+                        company.id, type(exc).__name__,
+                    )
+                    continue
+
+                company_state["fingerprint"] = fingerprint
+                company_state["last_message_id"] = provider_id[:180]
+                company_state["sent_at"] = current_time.isoformat()
+                companies_state[str(company.id)] = company_state
+                save_config(db, "whatsapp_alert_state", {"companies": companies_state})
+                db.commit()
+                sent += 1
+            except Exception as exc:
+                db.rollback()
+                logger.warning(
+                    "WhatsApp alert scan failed for company %s (%s)",
+                    company.id, type(exc).__name__,
+                )
+        if db.in_transaction():
+            save_config(db, "whatsapp_alert_state", {"companies": companies_state})
+            db.commit()
+        return {"sent": sent, "checked": checked}
 
 
 def scheduler_loop():

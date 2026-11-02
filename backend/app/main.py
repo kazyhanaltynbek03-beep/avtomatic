@@ -279,7 +279,9 @@ def run_scheduled_daily_report(request: Request):
     supplied = request.headers.get("authorization", "")
     if not expected or not hmac.compare_digest(supplied, f"Bearer {expected}"):
         raise HTTPException(404, "Not found")
-    return daily_reports.run_due_daily_reports()
+    daily = daily_reports.run_due_daily_reports()
+    alerts = daily_reports.run_due_whatsapp_alerts()
+    return {**daily, "whatsapp_alerts": alerts}
 
 
 @app.middleware("http")

@@ -4983,7 +4983,7 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
           <label>Токен доступа<input type="password" autoComplete="new-password" value={whatsappForm.access_token} onChange={e=>setWhatsappForm({...whatsappForm,access_token:e.target.value})} placeholder={siteIntegrations.whatsapp?.source==="site"?"Токен сохранён — оставьте пустым, чтобы не менять":"Вставьте постоянный токен Meta"} /></label>
           <div className="form-grid">
             <label>ID номера телефона<input value={whatsappForm.phone_number_id} onChange={e=>setWhatsappForm({...whatsappForm,phone_number_id:e.target.value})} placeholder="ID из Meta WhatsApp API Setup"/></label>
-            <label>Имя одобренного шаблона<input value={whatsappForm.template_name} onChange={e=>setWhatsappForm({...whatsappForm,template_name:e.target.value})} placeholder="например qor_daily_report"/></label>
+            <label>Имя одобренного шаблона<input value={whatsappForm.template_name} onChange={e=>setWhatsappForm({...whatsappForm,template_name:e.target.value})} placeholder="Meta шаблон с одной переменной {{1}}"/></label>
             <label>Язык шаблона<input value={whatsappForm.language} onChange={e=>setWhatsappForm({...whatsappForm,language:e.target.value})} placeholder="ru"/></label>
           </div>
           <details className="integration-advanced">
@@ -5004,14 +5004,14 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
       </>}
       <form className="panel padded" onSubmit={saveDailyReport}>
         <h2>Ежедневный отчёт владельцу</h2>
-        <p className="muted">Отчёт за предыдущий день: выручка и прибыль из финансового ядра, каналы продаж, возвраты и низкие остатки. Суммы берутся из ERP; Claude может добавить краткий комментарий.</p>
+        <p className="muted">Новые и изменившиеся уведомления ERP автоматически отправляются в WhatsApp после подключения API, указания номера получателя и сохранения его согласия. Дубли не отправляются. Ежедневный финансовый отчёт можно включить отдельно.</p>
         <div className="form-grid">
           <label>Номер получателя<input type="tel" inputMode="tel" placeholder="+77001234567" value={dailyReport.recipient||""} onChange={e=>setDailyReport({...dailyReport,recipient:e.target.value})}/></label>
           <label>Время отправки · Алматы<input type="time" value={dailyReport.time||"09:00"} onChange={e=>setDailyReport({...dailyReport,time:e.target.value})}/></label>
         </div>
-        <label className="check-row"><input type="checkbox" checked={!!dailyReport.consent} onChange={e=>setDailyReport({...dailyReport,consent:e.target.checked})}/> Получатель согласился получать регулярные отчёты</label>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.consent} onChange={e=>setDailyReport({...dailyReport,consent:e.target.checked})}/> Получатель согласился получать отчёты и системные уведомления в WhatsApp</label>
         <label className="check-row"><input type="checkbox" checked={!!dailyReport.ai_summary} onChange={e=>setDailyReport({...dailyReport,ai_summary:e.target.checked})}/> Добавлять комментарий Claude к показателям</label>
-        <label className="check-row"><input type="checkbox" checked={!!dailyReport.enabled} onChange={e=>setDailyReport({...dailyReport,enabled:e.target.checked})}/> Включить ежедневную отправку</label>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.enabled} onChange={e=>setDailyReport({...dailyReport,enabled:e.target.checked})}/> Включить ежедневный финансовый отчёт</label>
         <div className={dailyReport.provider?.configured?"success-banner":"info-banner"} role="status">
           Канал: WhatsApp Business API · {dailyReport.provider?.configured?"подключён":"ожидает настройки"}. Настройте токен, ID номера и одобренный шаблон в карточке WhatsApp Business API выше.
         </div>
