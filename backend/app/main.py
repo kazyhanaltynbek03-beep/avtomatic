@@ -4254,9 +4254,18 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
                 if len(verify_token) < 16 or len(verify_token) > 256 or any(char.isspace() for char in verify_token):
                     raise HTTPException(422, "Webhook verify token должен содержать от 16 до 256 символов без пробелов")
                 config["webhook_verify_token"] = verify_token
+            inbound_enabled = bool(p.get("inbound_enabled", config.get("inbound_enabled", False)))
+            if inbound_enabled:
+                required = ("access_token", "phone_number_id", "app_secret", "webhook_verify_token")
+                missing = [key for key in required if not (token if key == "access_token" else phone_id if key == "phone_number_id" else config.get(key))]
+                if missing:
+                    raise HTTPException(422, "Для входящего ИИ сохраните токен, ID номера, Meta App Secret и Webhook verify token")
+                settings = db.get(Setting, 1)
+                if not settings or not getattr(settings, "daily_report_recipient", ""):
+                    raise HTTPException(422, "Укажите разрешённый номер клиента в настройке ежедневного отчёта")
             config.update({"phone_number_id": phone_id, "template_name": template,
                            "language": language, "graph_version": version,
-                           "inbound_enabled": bool(p.get("inbound_enabled", config.get("inbound_enabled", False)))})
+                           "inbound_enabled": inbound_enabled})
             save_config(db, "whatsapp_cloud", config)
         db.commit()
         status = daily_reports.provider_status(db)
