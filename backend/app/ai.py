@@ -320,6 +320,47 @@ def _anthropic_content(content):
     return blocks or [{"type": "text", "text": ""}]
 
 
+def _compact_ai_tool_result(result, max_chars=14000):
+    """Keep tool replies small enough that a multi-step chat stays inside Claude TPM limits."""
+    if not isinstance(result, str):
+        result = json.dumps(result, ensure_ascii=False, default=str)
+    if len(result) <= max_chars:
+        return result
+
+    try:
+        value = json.loads(result)
+    except (TypeError, ValueError):
+        return result[:max_chars] + "… [результат сокращён для контекста AI]"
+
+    def compact(value, string_limit, item_limit, omitted):
+        if isinstance(value, str):
+            if len(value) > string_limit:
+                omitted[0] = True
+                return value[:string_limit] + "…"
+            return value
+        if isinstance(value, list):
+            if len(value) > item_limit:
+                omitted[0] = True
+                return [compact(item, string_limit, item_limit, omitted) for item in value[:item_limit]]
+            return [compact(item, string_limit, item_limit, omitted) for item in value]
+        if isinstance(value, dict):
+            return {key: compact(item, string_limit, item_limit, omitted) for key, item in value.items()}
+        return value
+
+    # Preserve summary totals and the first representative rows; trim detail rows
+    # progressively until the complete JSON remains valid and bounded.
+    for string_limit, item_limit in ((1600, 20), (800, 10), (400, 5), (160, 2)):
+        omitted = [False]
+        bounded = compact(value, string_limit, item_limit, omitted)
+        if isinstance(bounded, dict) and omitted[0]:
+            bounded["_ai_context_truncated"] = True
+        encoded = json.dumps(bounded, ensure_ascii=False, default=str)
+        if len(encoded) <= max_chars:
+            return encoded
+    preview = json.dumps(value, ensure_ascii=False, default=str)[: max_chars - 100]
+    return json.dumps({"_ai_context_truncated": True, "preview": preview}, ensure_ascii=False)
+
+
 def _anthropic_messages(items):
     messages = []
 
@@ -358,6 +399,7 @@ def _anthropic_messages(items):
             result = item.get("output", "")
             if not isinstance(result, str):
                 result = json.dumps(result, ensure_ascii=False, default=str)
+            result = _compact_ai_tool_result(result)
             append_message("user", [{
                 "type": "tool_result",
                 "tool_use_id": str(item.get("call_id") or ""),
@@ -412,6 +454,12 @@ def call_response(input, instructions, tools=None, tool_choice=None, text_format
                 provider_error = {}
             error_type = str(provider_error.get("type") or "provider_error")[:80]
             error_message = str(provider_error.get("message") or "неизвестная ошибка")[:300]
+            if response.status_code == 429:
+                raise HTTPException(
+                    503,
+                    "Claude временно ограничил частоту AI-запросов. Данные ERP не изменены; "
+                    "повторите запрос через минуту. Детали лимита: " + error_message,
+                )
             raise HTTPException(
                 502,
                 f"Claude provider error {response.status_code} ({error_type}): {error_message}",

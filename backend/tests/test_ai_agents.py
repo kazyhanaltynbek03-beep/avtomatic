@@ -75,6 +75,7 @@ def test_anthropic_messages_api_attaches_skills_and_keeps_runtime(monkeypatch):
             return Response()
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(ai, "key", lambda: "test-key")
     monkeypatch.setattr(ai.httpx, "Client", Client)
     skill = {"type": "custom", "skill_id": "skill_demo", "version": "skver_demo"}
     result = ai.call_response(
@@ -93,6 +94,57 @@ def test_anthropic_raw_assistant_blocks_survive_tool_roundtrip():
     raw = [{"type": "server_tool_use", "id": "srv-1", "name": "bash_code_execution", "input": {"command": "true"}}]
     messages = _anthropic_messages([{"type": "anthropic_raw_assistant", "content": raw}])
     assert messages == [{"role": "assistant", "content": raw}]
+
+
+def test_anthropic_tool_history_is_bounded_for_provider_token_limits():
+    import json
+    from app.ai import _anthropic_messages
+
+    rows = [{"sku": f"SKU-{index}", "name": "Товар" * 1000} for index in range(120)]
+    messages = _anthropic_messages([{
+        "type": "function_call_output",
+        "call_id": "call-1",
+        "output": json.dumps({"total": 120, "items": rows}, ensure_ascii=False),
+    }])
+
+    tool_result = messages[0]["content"][0]["content"]
+    bounded = json.loads(tool_result)
+    assert len(tool_result) <= 14000
+    assert bounded["total"] == 120
+    assert bounded["_ai_context_truncated"] is True
+    assert len(bounded["items"]) < 120
+
+
+def test_anthropic_rate_limit_has_clear_retry_message(monkeypatch):
+    from fastapi import HTTPException
+    from app import ai
+
+    class Response:
+        status_code = 429
+
+        def json(self):
+            return {"error": {"type": "rate_limit_error", "message": "too many input tokens"}}
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def post(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(ai, "key", lambda: "test-key")
+    monkeypatch.setattr(ai.httpx, "Client", Client)
+    try:
+        ai.call_response([{"role": "user", "content": "Сколько выручка?"}], "инструкции")
+    except HTTPException as error:
+        assert error.status_code == 503
+        assert "повторите запрос через минуту" in error.detail
+    else:
+        raise AssertionError("Claude rate limits should be returned as a clear retryable error")
 
 from app.ai import AGENT_TOOLS, _agent_tool_data
 
