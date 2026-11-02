@@ -974,20 +974,29 @@ function ExpenseOperations({ ctx, channelFilter }) {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
+    const path = buildPath(page * pageSize);
+    const cacheKey = `qor-expenses:v1:${String(ctx.auth?.user?.id || "user")}:${path}`;
+    let cached = null;
+    try {
+      const saved = JSON.parse(window.sessionStorage.getItem(cacheKey) || "null");
+      if (saved?.data && Date.now() - Number(saved.savedAt) < 24 * 60 * 60 * 1000) cached = saved.data;
+    } catch {}
+    setLoading(!cached);
     setError("");
-    setItems([]);
-    api(buildPath(page * pageSize)).then((data) => {
+    setItems(cached?.items || []);
+    setTotal(Number(cached?.total || 0));
+    api(path).then((data) => {
       if (!alive) return;
       setItems(data.items || []);
       setTotal(Number(data.total || 0));
+      try { window.sessionStorage.setItem(cacheKey, JSON.stringify({data, savedAt:Date.now()})); } catch {}
     }).catch((e) => {
-      if (alive) setError(e.message || "Не удалось загрузить список расходов");
+      if (alive && !cached) setError(e.message || "Не удалось загрузить список расходов");
     }).finally(() => {
       if (alive) setLoading(false);
     });
     return () => { alive = false; };
-  }, [buildPath, ctx.refresh, page]);
+  }, [buildPath, ctx.refresh, page, ctx.auth?.user?.id]);
 
   useEffect(() => {
     setPage(0);
