@@ -320,6 +320,7 @@ export const columns = {
     "quantity",
     "cost",
     "reference",
+    "status",
   ],
   sales: [
     "reference",
@@ -345,7 +346,7 @@ export const labels = {
   id: "ID",
   name: "Название",
   bin: "БИН / ИИН",
-  kind: "Тип",
+  kind: "Операция",
   active: "Статус",
   sku: "SKU",
   category: "Категория",

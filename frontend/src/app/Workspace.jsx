@@ -750,6 +750,37 @@ function marketplaceStatusRu(value) {
 function Table({ rows, cols, refs = {}, actions, raw = false, entity = "" }) {
   const fmt = (row, k) => {
     const v = k === "score" ? row.analysis?.score : row[k];
+    if (entity === "movements" && k === "status") {
+      return row.kind === "sale_pending_fifo"
+        ? "Дефицит FIFO · продажа проведена, партии не хватило"
+        : "Проведено";
+    }
+    if (entity === "movements" && k === "kind") {
+      const movementLabels = {
+        sale: "Продажа",
+        sale_pending_fifo: "Продажа · дефицит FIFO",
+        receipt: "Приход",
+        return: "Возврат товара",
+        writeoff: "Списание",
+        adjustment: "Корректировка",
+      };
+      return movementLabels[v] || String(v || "Неизвестный тип").replaceAll("_", " ");
+    }
+    if (entity === "movements" && k === "cost" && row.kind === "sale_pending_fifo") {
+      return <span title="Для недостающего количества нет партии прихода, поэтому себестоимость не рассчитана.">Не рассчитана · нет партии FIFO</span>;
+    }
+    if (entity === "movements" && k === "reference") {
+      const rawReference = String(v ?? "");
+      const source = rawReference.match(/^(Kaspi|Wildberries|Ozon):/i)?.[1];
+      return source ? <span title={rawReference}>{source} · API-операция</span> : (v ?? "—");
+    }
+    if (entity === "sales" && k === "status" && (v == null || v === "")) {
+      return "Учтено в QOR · статус площадки не передан";
+    }
+    if (entity === "sales" && ["commission", "logistics"].includes(k) && Number(v) === 0) {
+      const account = refs.accounts?.find((item) => item.id === row.account_id);
+      if (["Kaspi", "Wildberries", "Ozon"].includes(account?.channel)) return "Нет данных площадки";
+    }
     if (raw) return v == null ? "—" : k === "status" ? marketplaceStatusRu(v) : String(v);
     if (v == null) return "—";
     if (entity === "expenses" && k === "category") {
@@ -1944,6 +1975,7 @@ function Stock({ ctx }) {
       <p className="panel-note">
         Это общий физический остаток компании для всех каналов. При офлайн-продаже внесите товар, количество, цену и дату — проведённая продажа спишет товар со склада и попадёт в канал «Offline». Возврат денег сам по себе склад не пополняет.
         Каждый приход создаёт отдельную партию с датой и количеством. Продажи списываются по FIFO; история партий сохраняется отдельно. Для пересчёта используйте корректировку; списание и брак требуют причины.
+        Отрицательный остаток — дефицит учёта: подтверждённых продаж больше, чем заведённых приходов. Он не означает отрицательную стоимость; добавьте отсутствующие партии и сверьте товар.
       </p>
       {loading ? (
         <Spinner />
@@ -1963,7 +1995,7 @@ function Stock({ ctx }) {
                 return <tr key={row.product_id}>
                   <td><div className="qor-stock-product-cell"><ProductImage product={product}/><span><b>{row.name || product?.name || "Товар"}</b><small>Артикул · {product?.article || "—"} · SKU · {row.sku || "—"} · Штрихкод · {product?.barcode || "—"}</small></span></div></td>
                   <td>{linkLabels.length ? linkLabels.map((label,index)=><small className="qor-stock-link" key={row.product_id + "-" + index}>{label}</small>) : <span className="muted">Карточки не связаны</span>}</td>
-                  <td><b>{row.quantity ?? 0} шт.</b>{Number(row.min_stock || product?.min_stock || 0)>0 && <small className="qor-table-sub">Минимум · {row.min_stock ?? product?.min_stock} шт.</small>}</td>
+                  <td><b>{row.quantity ?? 0} шт.</b>{Number(row.stock_deficit || 0)>0 && <small className="qor-table-sub">Дефицит FIFO · {row.stock_deficit} шт.</small>}{Number(row.min_stock || product?.min_stock || 0)>0 && <small className="qor-table-sub">Минимум · {row.min_stock ?? product?.min_stock} шт.</small>}</td>
                   <td>{row.sold ?? 0} шт.</td>
                   <td>{product?.purchase_cost ? money(product.purchase_cost) : "—"}</td>
                   <td>{row.value == null ? "—" : money(row.value)}</td>
@@ -2065,7 +2097,8 @@ function StockItemCard({row,product,company,ctx}) {
         </div>
         <span className="stock-sold-count">Продано · {row.sold ?? 0} шт.</span>
       </div>
-      {Number(row.min_stock ?? product?.min_stock ?? 0) > 0 && current <= Number(row.min_stock ?? product?.min_stock ?? 0) && <div className="stock-low-warning" role="status">{current <= 0 ? "Остаток закончился" : "Мало остатка"} · {current} шт. при минимуме {Number(row.min_stock ?? product?.min_stock ?? 0)} шт.</div>}
+      {Number(row.stock_deficit || 0) > 0 && <div className="stock-low-warning" role="status">Дефицит склада: {Number(row.stock_deficit)} шт. Продажи уже проведены, но для этого количества нет прихода FIFO. Добавьте остаток и проверьте журнал движений.</div>}
+      {!Number(row.stock_deficit || 0) && Number(row.min_stock ?? product?.min_stock ?? 0) > 0 && current <= Number(row.min_stock ?? product?.min_stock ?? 0) && <div className="stock-low-warning" role="status">{current <= 0 ? "Остаток закончился" : "Мало остатка"} · {current} шт. при минимуме {Number(row.min_stock ?? product?.min_stock ?? 0)} шт.</div>}
       {row.value != null && <div className="qor-item-price">Стоимость · {money(row.value)}</div>}
       {mode&&<form className="stock-inline-entry" onSubmit={submit}>
         <div className="stock-inline-heading"><strong>{receipt?"Новый приход":"Списание со склада"}</strong><span>{receipt?"После прихода будет "+(current+Number(quantity||0))+" шт.":"После списания останется "+Math.max(0,current-Number(quantity||0))+" шт."}</span></div>
