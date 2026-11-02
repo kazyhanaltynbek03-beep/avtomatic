@@ -37,7 +37,18 @@ function announceCachedReport(key, status) {
 }
 
 export function useLoad(path, refresh, options = {}) {
-  const cacheableReport = Boolean(path && (path.startsWith("/report?") || path.startsWith("/dashboard/summary?") || path.startsWith("/marketplace-summary?") || path.startsWith("/marketplace-record-details?")) && options.cacheScope != null);
+  const cacheableReport = Boolean(path && (
+    path.startsWith("/report?") ||
+    path.startsWith("/dashboard/summary?") ||
+    path.startsWith("/marketplace-summary?") ||
+    path.startsWith("/marketplace-record-details?") ||
+    path.startsWith("/marketplace-product-report?") ||
+    path.startsWith("/expenses/summary?") ||
+    path.startsWith("/forecast?") ||
+    path.startsWith("/accounting/summary?") ||
+    path.startsWith("/data/cash?") ||
+    path.startsWith("/data/niches?")
+  ) && options.cacheScope != null);
   const storageKey = cacheableReport
     ? `qor-report:v1:${String(options.cacheScope)}:${path}`
     : null;
