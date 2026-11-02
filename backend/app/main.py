@@ -46,6 +46,8 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
+from .whatsapp_inbound import router as whatsapp_inbound_router
+app.include_router(whatsapp_inbound_router)
 logger = logging.getLogger(__name__)
 SYNC_RUNNING_TIMEOUT_SECONDS = max(60, int(os.getenv("MARKETPLACE_SYNC_TIMEOUT_SECONDS", "1800")))
 KASPI_JOB_RECOVERY_GRACE_SECONDS = min(
@@ -4168,6 +4170,8 @@ def site_integrations_get(u=Depends(current_user), db=Depends(get_db)):
     require(u, "settings")
     try:
         whatsapp = daily_reports.provider_status(db)
+        saved_whatsapp = load_config("whatsapp_cloud", db)
+        whatsapp.update({"inbound_enabled": bool(saved_whatsapp.get("inbound_enabled")), "inbound_ready": all(bool(saved_whatsapp.get(k)) for k in ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))})
         claude = ai.key_status(db)
     except SecretStorageError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -4215,7 +4219,7 @@ def site_claude_connection_test(u=Depends(current_user), db=Depends(get_db)):
 @app.put("/api/settings/integrations/whatsapp")
 def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get_db)):
     require(u, "settings", True)
-    allowed = {"access_token", "phone_number_id", "template_name", "language", "graph_version", "clear"}
+    allowed = {"access_token", "phone_number_id", "template_name", "language", "graph_version", "app_secret", "webhook_verify_token", "inbound_enabled", "clear"}
     if set(p) - allowed:
         raise HTTPException(422, "Недопустимые поля настройки WhatsApp")
     try:
@@ -4240,8 +4244,19 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
                 raise HTTPException(422, "Проверьте код языка шаблона WhatsApp")
             if not re.fullmatch(r"v\d+\.\d+", version):
                 raise HTTPException(422, "Версия Graph API должна выглядеть, например, как v26.0")
+            app_secret = str(p.get("app_secret") or "").strip()
+            verify_token = str(p.get("webhook_verify_token") or "").strip()
+            if app_secret:
+                if len(app_secret) > 512 or any(char.isspace() for char in app_secret):
+                    raise HTTPException(422, "Проверьте Meta App Secret")
+                config["app_secret"] = app_secret
+            if verify_token:
+                if len(verify_token) < 16 or len(verify_token) > 256 or any(char.isspace() for char in verify_token):
+                    raise HTTPException(422, "Webhook verify token должен содержать от 16 до 256 символов без пробелов")
+                config["webhook_verify_token"] = verify_token
             config.update({"phone_number_id": phone_id, "template_name": template,
-                           "language": language, "graph_version": version})
+                           "language": language, "graph_version": version,
+                           "inbound_enabled": bool(p.get("inbound_enabled", config.get("inbound_enabled", False)))})
             save_config(db, "whatsapp_cloud", config)
         db.commit()
         status = daily_reports.provider_status(db)
@@ -4251,7 +4266,7 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
     audit(db, u, "update", "integration_secret", 2,
           {"provider": "whatsapp_cloud", "configured": status["configured"]})
     db.commit()
-    return status
+    return {**status, "inbound_enabled": bool(load_config("whatsapp_cloud", db).get("inbound_enabled")), "inbound_ready": all(bool(load_config("whatsapp_cloud", db).get(k)) for k in ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))}
 
 
 @app.post("/api/settings/integrations/whatsapp/test")
@@ -6023,3 +6038,4 @@ if static.exists() and (static / "assets").exists():
         if path.startswith("public/kaspi-feeds/"):
             raise HTTPException(404, "Прайс-лист не найден")
         return FileResponse(static / "index.html")
+

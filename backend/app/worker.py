@@ -96,6 +96,17 @@ def run_one(job_id=None):
                     "designer": ai.designer,
                 }[job.kind](db, user, job.payload)
             job.result = __import__("fastapi").encoders.jsonable_encoder(result)
+            if job.kind == "assistant" and job.payload.get("whatsapp_sender"):
+                answer = str(result.get("answer") or "Не удалось сформировать ответ по данным ERP.")[:4000]
+                thread_id = int(job.payload.get("thread_id") or 0)
+                if thread_id:
+                    db.add(AIMessage(thread_id=thread_id, role="assistant", content=answer, attachments=[], meta={"channel": "whatsapp"}))
+                db.flush()
+                from .whatsapp_inbound import send_whatsapp_text
+                try:
+                    send_whatsapp_text(db, job.payload["whatsapp_sender"], answer)
+                except Exception as delivery_error:
+                    logging.warning("WhatsApp assistant reply could not be delivered (%s)", type(delivery_error).__name__)
             job.status = "done"
             db.commit()
         except Exception as e:
