@@ -980,7 +980,9 @@ function ExpenseOperations({ ctx, channelFilter }) {
     try {
       const saved = JSON.parse(window.sessionStorage.getItem(cacheKey) || "null");
       if (saved?.data && Date.now() - Number(saved.savedAt) < 24 * 60 * 60 * 1000) cached = saved.data;
-    } catch {}
+    } catch {
+      // Session storage can be disabled by the browser.
+    }
     setLoading(!cached);
     setError("");
     setItems(cached?.items || []);
@@ -989,7 +991,9 @@ function ExpenseOperations({ ctx, channelFilter }) {
       if (!alive) return;
       setItems(data.items || []);
       setTotal(Number(data.total || 0));
-      try { window.sessionStorage.setItem(cacheKey, JSON.stringify({data, savedAt:Date.now()})); } catch {}
+      try { window.sessionStorage.setItem(cacheKey, JSON.stringify({data, savedAt:Date.now()})); } catch {
+        // Session storage can be full or disabled.
+      }
     }).catch((e) => {
       if (alive && !cached) setError(e.message || "Не удалось загрузить список расходов");
     }).finally(() => {
