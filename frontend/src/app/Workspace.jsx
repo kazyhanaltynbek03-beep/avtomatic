@@ -4328,6 +4328,7 @@ function AIPage({ page, ctx, enabled, claudeSkills }) {
               </select>
             </label>
           )}
+          {page === "designer" && <div className="notice">Генерация изображений отключена: сайт использует только Claude API. Чат, анализ и отчёты продолжают работать через Claude.</div>}
           {page === "designer" && (
             <div className="form-grid two">
               <label>Режим<select value={designMode} onChange={(e)=>setDesignMode(e.target.value)}>
@@ -4341,7 +4342,7 @@ function AIPage({ page, ctx, enabled, claudeSkills }) {
           <button
             className="primary"
             disabled={
-              !enabled || busy || (page === "designer" && !doc) || (job && ["queued", "running"].includes(job.status))
+              !enabled || busy || page === "designer" || (page === "designer" && !doc) || (job && ["queued", "running"].includes(job.status))
             }
           >
             <Sparkles size={17} />

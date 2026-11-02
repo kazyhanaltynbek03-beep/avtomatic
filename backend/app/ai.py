@@ -12,7 +12,6 @@ from .models import Document, Product, Account, MarketplaceRecord, MarketplacePr
 from . import action_engine, marketplace_pipeline
 
 ANTHROPIC_MESSAGES_API = "https://api.anthropic.com/v1/messages"
-OPENAI_IMAGES_API = "https://api.openai.com/v1"
 ANTHROPIC_SKILLS_API = "https://api.anthropic.com/v1/skills"
 CLAUDE_SKILL_BUNDLE_DIR = Path(__file__).resolve().parents[1] / "claude_skills"
 
@@ -182,15 +181,6 @@ def key():
     if not api_key:
         raise HTTPException(
             409, "ANTHROPIC_API_KEY не задан. Обычная аналитика доступна без Claude AI."
-        )
-    return api_key
-
-
-def image_key():
-    api_key = os.getenv("OPENAI_IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            409, "Для редактирования изображений нужен OPENAI_IMAGE_API_KEY или legacy OPENAI_API_KEY."
         )
     return api_key
 
@@ -1026,54 +1016,7 @@ def product_draft(payload):
 
 def designer(db, user, payload):
     require(user, "marketing", True)
-    prompt = str(payload.get("prompt", "")).strip()[:3000]
-    did = payload.get("document_id")
-    if not did:
-        raise HTTPException(422, "AI Designer требует исходную фотографию реального товара")
-    d = db.get(Document, int(did))
-    if not d:
-        raise HTTPException(404, "Фото не найдено")
-    scope(user, d.company_id)
-    if d.mime not in ("image/png", "image/jpeg", "image/webp"):
-        raise HTTPException(422, "Нужна фотография PNG/JPEG/WebP")
-    cid = int(payload.get("company_id") or d.company_id)
-    if cid != d.company_id:
-        raise HTTPException(422, "Фото принадлежит другой компании")
-    mode = str(payload.get("mode", "main_photo"))
-    modes = {
-        "background": "Clean or replace only the background while preserving the exact product.",
-        "enhance": "Improve lighting, sharpness and presentation while preserving the exact product.",
-        "main_photo": "Create a premium marketplace main photo while preserving the exact product.",
-        "infographic": "Create marketplace infographic composition; do not add factual claims or specifications not supplied in the prompt.",
-        "banner": "Create a premium advertising banner while preserving the exact product.",
-        "lifestyle": "Place the exact product into a realistic lifestyle scene without changing product identity.",
-        "creative": "Create an advertising creative while preserving the exact product and avoiding unsupported claims.",
-    }
-    if mode not in modes:
-        raise HTTPException(422, "Неизвестный режим дизайна")
-    count = max(1, min(int(payload.get("variants", 1)), 4))
-    instruction = (modes[mode] + " " + prompt +
-        " The uploaded image is the source of truth for product appearance. Do not change logo, shape, color, controls, labels, included accessories or technical characteristics unless explicitly requested. Do not invent text claims.")
-    api_key = image_key()
-    raw_source = Path(d.path).read_bytes()
-    root = Path(os.getenv("UPLOAD_DIR", "./uploads")); root.mkdir(parents=True, exist_ok=True)
-    docs=[]
-    with httpx.Client(timeout=180) as client:
-        for _ in range(count):
-            files={"image": (d.name or "product.png", raw_source, d.mime)}
-            data={"model": os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1"), "prompt": instruction, "size":"1024x1024"}
-            r=client.post(OPENAI_IMAGES_API + "/images/edits", headers={"Authorization":"Bearer "+api_key}, data=data, files=files)
-            if r.status_code >= 400:
-                raise HTTPException(502, f"Image provider error {r.status_code}")
-            item=r.json().get("data", [{}])[0]
-            if not item.get("b64_json"):
-                raise HTTPException(502, "Провайдер не вернул изображение")
-            import uuid
-            raw=base64.b64decode(item["b64_json"]); path=root/(uuid.uuid4().hex+".png"); path.write_bytes(raw)
-            doc=Document(company_id=cid, name=f"AI {mode}.png", kind="ai_design", path=str(path.resolve()), mime="image/png", size=len(raw))
-            db.add(doc); db.flush(); docs.append(doc.id)
-    return {"document_id": docs[0], "document_ids": docs, "mode": mode, "source_document_id": int(did),
-            "status":"draft_requires_review", "notice":"AI-дизайн создан из исходного фото. Проверьте соответствие реальному товару перед публикацией."}
+    raise HTTPException(409, "Генерация и редактирование изображений отключены: QOR работает только через Claude API.")
 
 
 
