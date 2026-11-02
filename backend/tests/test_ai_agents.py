@@ -37,7 +37,8 @@ def test_claude_skill_configuration_is_atomic_and_role_scoped(monkeypatch):
     }
     monkeypatch.setenv("QOR_CLAUDE_SKILLS_JSON", json.dumps(configured))
     assert ai.claude_skills_status() == {"enabled": True, "configured": 11, "required": 11}
-    assert len(ai._agent_skills("rick")) == 11
+    assert len(ai._agent_skills("rick")) == 1
+    assert len(ai._agent_skills("rick", "Сколько заработал за прошлый месяц?")) == 2
     assert len(ai._agent_skills("finance")) == 1
     assert len(ai._agent_skills("analyst")) == 5
 
@@ -98,7 +99,7 @@ from app.ai import AGENT_TOOLS, _agent_tool_data
 
 def test_agents_have_least_privilege_read_tools():
     assert "get_finance_summary" in AGENT_TOOLS["finance"]
-    assert set(AGENT_TOOLS["finance"]) == {"get_finance_summary", "get_marketplace_cost_catalog", "get_data_quality_summary"}
+    assert set(AGENT_TOOLS["finance"]) == {"get_finance_summary", "get_marketplace_cost_catalog", "get_data_quality_summary", "query_marketplace_api_data"}
     assert "get_inventory_summary" in AGENT_TOOLS["buyer"]
     assert "get_marketplace_cost_catalog" in AGENT_TOOLS["buyer"]
     assert "get_data_quality_summary" in AGENT_TOOLS["buyer"]
@@ -106,11 +107,14 @@ def test_agents_have_least_privilege_read_tools():
     assert {"get_marketplace_mapping_catalog", "get_return_inventory_summary"} <= set(AGENT_TOOLS["buyer"])
     assert "get_channel_summary" in AGENT_TOOLS["marketing"]
     assert "get_inventory_summary" not in AGENT_TOOLS["marketing"]
-    assert set(AGENT_TOOLS["content"]) == {"get_product_summary", "get_data_quality_summary"}
+    assert set(AGENT_TOOLS["content"]) == {
+        "get_product_summary", "get_data_quality_summary", "query_marketplace_api_data"
+    }
     assert set(AGENT_TOOLS["rick"]) == {
         "get_executive_summary", "get_finance_summary", "get_inventory_summary",
         "get_channel_summary", "get_product_summary", "get_marketplace_mapping_catalog",
-        "get_return_inventory_summary", "get_marketplace_cost_catalog", "get_data_quality_summary"
+        "get_return_inventory_summary", "get_marketplace_cost_catalog", "get_data_quality_summary",
+        "query_marketplace_api_data"
     }
 
 
@@ -129,14 +133,13 @@ def test_finance_tool_does_not_leak_full_snapshot():
     assert "secret_unrelated" not in data
 
 
-def test_designer_uses_source_image_edit_flow():
+def test_designer_is_disabled_without_an_image_provider():
     import inspect
     from app.ai import designer
-    src=inspect.getsource(designer)
-    assert "document_id" in src
-    assert "/images/edits" in src
-    assert "source of truth" in src
-    assert 'max(1, min(int(payload.get("variants", 1)), 4))' in src
+    src = inspect.getsource(designer)
+    assert "HTTPException(409" in src
+    assert "Claude API" in src
+    assert "отключены" in src
 
 def test_content_can_use_verified_product_fields():
     import inspect
@@ -252,7 +255,15 @@ def test_assistant_recovers_when_claude_tool_turn_has_no_final_text(monkeypatch)
         "returns": 0, "advertising": 0, "expenses": 0, "cash": 9000,
         "stock_value": 0, "b2b_debt": 0,
     })
-    monkeypatch.setattr(ai, "_agent_skills", lambda _: [])
+    monkeypatch.setattr(ai, "_cached_executive_snapshot", lambda *args, **kwargs: {
+        "start": "2026-10-01", "end": "2026-10-29", "currency": "KZT",
+        "money_unit": "tiyn", "method": "FIFO", "profit_complete": True,
+        "pending_cogs_sales": 0, "incomplete_reason": None, "revenue": 12345,
+        "gross_profit": 10000, "net_profit": 9000, "margin": 0.7, "units": 2,
+        "returns": 0, "advertising": 0, "expenses": 0, "cash": 9000,
+        "stock_value": 0, "b2b_debt": 0,
+    })
+    monkeypatch.setattr(ai, "_agent_skills", lambda _agent, _question="": [])
 
     calls = []
 
@@ -279,3 +290,63 @@ def test_assistant_recovers_when_claude_tool_turn_has_no_final_text(monkeypatch)
     assert result["tools_used"] == ["get_executive_summary"]
     assert calls[0]["tools"] and calls[2]["tools"] is None
     assert "12345" in calls[2]["messages"][0]["content"]
+
+
+
+def test_ceo_attaches_only_relevant_claude_skills():
+    from app.ai import _agent_skill_keys_for_question
+
+    assert _agent_skill_keys_for_question("rick", "Сколько заработал за прошлый месяц?") == (
+        "qor-arman-ceo", "qor-daniyar-finance"
+    )
+    assert _agent_skill_keys_for_question("rick", "Kaspi и Wildberries") == (
+        "qor-arman-ceo", "qor-miras-kaspi", "qor-dias-wildberries"
+    )
+    broad = _agent_skill_keys_for_question(
+        "rick", "Kaspi Wildberries Ozon прибыль товар склад карточка рынок"
+    )
+    assert len(broad) <= 3
+
+
+
+def test_ai_executive_snapshot_uses_warm_cache_without_full_report(monkeypatch):
+    from types import SimpleNamespace
+    from app import ai
+
+    cached = {"revenue": 123, "start": "2026-10-01", "end": "2026-10-31"}
+
+    class DB:
+        def scalar(self, query):
+            return None
+
+    monkeypatch.setattr(ai.report_cache, "get", lambda *args: cached)
+    monkeypatch.setattr(ai, "report", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("full report should not run")))
+    result = ai._cached_executive_snapshot(
+        DB(), SimpleNamespace(role="Owner"), "2026-10-01", "2026-10-31"
+    )
+    assert result is cached
+
+
+def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
+    from types import SimpleNamespace
+    from app import ai
+
+    expected = {"revenue": 456}
+    captured = {}
+
+    class DB:
+        def scalar(self, query):
+            return None
+
+    monkeypatch.setattr(ai.report_cache, "get", lambda *args: None)
+
+    def headline(db, user, start, end, company_id, active_only):
+        captured["active_only"] = active_only
+        return expected
+
+    monkeypatch.setattr(ai, "report_headline", headline)
+    result = ai._cached_executive_snapshot(
+        DB(), SimpleNamespace(role="Owner"), "2026-10-01", "2026-10-31"
+    )
+    assert result is expected
+    assert captured["active_only"] is False
