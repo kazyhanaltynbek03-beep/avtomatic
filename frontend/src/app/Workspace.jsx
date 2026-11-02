@@ -4147,7 +4147,7 @@ function AIWorkspace({ ctx, enabled, claudeSkills }) {
   const newChat=async(a="rick")=>{const t=await api("/ai/threads",{method:"POST",body:{agent:a,company_id:ctx.company?Number(ctx.company):null}});setThread(t);setMessages([]);reloadThreads()};
   const chooseAgent=async(a)=>{if(!thread)return newChat(a);const t=await api(`/ai/threads/${thread.id}`,{method:"PATCH",body:{agent:a}});setThread(t);reloadThreads()};
   const uploadFiles=async(list)=>{if(!ctx.company){setError("Сначала выберите компанию");return}setBusy(true);try{const out=[];for(const file of Array.from(list).slice(0,8)){const fd=new FormData();fd.append("company_id",ctx.company);fd.append("file",file);out.push(await api("/documents/upload",{method:"POST",body:fd}))}setFiles(f=>[...f,...out].slice(0,8))}catch(e){setError(e.message)}finally{setBusy(false)}};
-  const send=async(e)=>{e.preventDefault();if((!text.trim()&&!files.length)||busy)return;if(!enabled){setError("Claude API не подключён. Настройте ANTHROPIC_API_KEY на сервере.");return}setError("");setBusy(true);try{let t=thread;if(!t)t=await api("/ai/threads",{method:"POST",body:{agent:"rick",company_id:ctx.company?Number(ctx.company):null}});
+  const send=async(e)=>{e.preventDefault();if((!text.trim()&&!files.length)||busy)return;if(!enabled){setError("Claude API не подключён. Добавьте ключ в разделе «Настройки».");return}setError("");setBusy(true);try{let t=thread;if(!t)t=await api("/ai/threads",{method:"POST",body:{agent:"rick",company_id:ctx.company?Number(ctx.company):null}});
     const attachments=files.map(f=>({document_id:f.id,name:f.name,mime:f.mime}));const userMsg=await api(`/ai/threads/${t.id}/messages`,{method:"POST",body:{role:"user",content:text||"Проанализируй вложения",attachments}});
     setThread(t);setMessages(m=>[...m,userMsg]);const history=[...messages.slice(-12),userMsg].map(m=>({role:m.role,content:m.content}));
     let j=await api("/jobs",{method:"POST",body:{kind:"assistant",payload:{question:text||"Проанализируй приложенные материалы",agent:t.agent,company_id:ctx.company?Number(ctx.company):null,account_id:accountId?Number(accountId):null,start:ctx.start,end:ctx.end,thread_id:t.id,history,document_ids:attachments.map(x=>x.document_id)}}});
@@ -4163,7 +4163,7 @@ function AIWorkspace({ ctx, enabled, claudeSkills }) {
   return <div className="chat-shell">
     <aside className={`chat-sidebar panel ${historyOpen?"history-open":""}`}><button className="chat-history-close" onClick={()=>setHistoryOpen(false)}><X size={16}/> Закрыть историю</button><button className="primary chat-new" onClick={()=>{newChat(agent);setHistoryOpen(false)}}><Plus size={17}/>Новый чат</button><div className="chat-history"><span className="eyebrow">ИСТОРИЯ</span>{threads.map(t=><button key={t.id} className={`chat-thread ${thread?.id===t.id?"active":""}`} onClick={()=>{setThread(t);setHistoryOpen(false)}}><MessageSquare size={15}/><span><b>{t.title}</b><small>{agents.find(a=>a.id===t.agent)?.name||t.agent}</small></span></button>)}</div></aside>
     <section className="chat-main panel"><header className="chat-head"><div className="chat-title"><button className="chat-history-toggle" onClick={()=>setHistoryOpen(v=>!v)} aria-expanded={historyOpen}><MessageSquare size={16}/> История</button><div><span className="eyebrow">QOR AI · КОМАНДА БИЗНЕСА</span><h2>{agents.find(a=>a.id===agent)?.name||"Арман"} · {AI_ROLE_TITLES[agent]||agents.find(a=>a.id===agent)?.title||"AI-руководитель"}</h2></div></div><div className="chat-head-controls"><select aria-label="Магазины для анализа AI" value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Все магазины выбранной компании</option>{aiAccounts.map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select><select aria-label="AI-специалист" value={agent} onChange={e=>chooseAgent(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name} — {AI_ROLE_TITLES[a.id]||a.title}</option>)}</select></div></header>
-      {!enabled&&<div className="info-banner">Для живых ответов подключите ANTHROPIC_API_KEY на сервере.</div>}
+      {!enabled&&<div className="info-banner">Для ответов подключите Claude API в разделе «Настройки».</div>}
       {enabled&&<div className="chat-skill-status">Навыки Claude: {claudeSkills?.enabled?`${claudeSkills.configured}/${claudeSkills.required} подключено`:`не подключены · ${claudeSkills?.configured||0}/${claudeSkills?.required||11}`}</div>}
       {(actions.length>0||plans.length>0)&&<div className="ai-approval-summary"><ShieldCheck size={17}/><span><b>{actions.length+plans.length} ожидают решения</b><small>AI подготовил изменения; проверьте и подтвердите их ниже.</small></span></div>}
       {jobState&&["queued","running"].includes(jobState.status)&&<div className="info-banner">Задание #{jobState.id} выполняется в фоне. Страница остаётся доступной.</div>}<div className="chat-messages">{!messages.length&&<div className="chat-empty ai-control-center"><div className="ai-welcome"><div className="ai-orb"><Sparkles size={28}/></div><div><span className="eyebrow">QOR AI · КОМАНДА БИЗНЕСА</span><h2>Управляйте бизнесом через один чат</h2><p>Финансы, продажи, товары и маркетплейсы. AI готовит анализ и действия на основе данных ERP; изменения проходят проверку и ваше подтверждение.</p></div></div><details className="ai-workflow-details"><summary>Готовые сценарии · открыть при необходимости</summary><div className="ai-workflows"><button className="ai-workflow-card" onClick={()=>setText("Подготовь ежедневный отчёт руководителю: продажи, прибыль, выплаты, изменения по Kaspi и Wildberries, проблемы и что требует моего решения. Используй текущий выбранный период и укажи, если данных не хватает.")}><span className="ai-workflow-icon"><TrendingUp size={19}/></span><b>Отчёт руководителю</b><small>Продажи, прибыль, каналы и важные отклонения</small><em>Подготовить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Проверь товары и остатки: что быстро продаётся, что заканчивается, что продаётся медленно. Дай приоритетный список и объясни выводы только по подтверждённым данным QOR.")}><span className="ai-workflow-icon"><Package size={19}/></span><b>Контроль товаров</b><small>Остатки, темп продаж и товары для внимания</small><em>Проверить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Проанализируй закупки по каждому SKU отдельно для Kaspi и Wildberries: сколько реально продано за выбранный период, какой подтверждённый остаток сейчас, какой темп продаж и стоит ли пополнить. Назови причины рекомендации и отдельно перечисли товары, которые не стоит закупать. Если данные ERP не связывают SKU с конкретным каналом или не подтверждают остаток, напиши «Не подтверждено» и не угадывай количество.")}><span className="ai-workflow-icon"><Package size={19}/></span><b>Что закупить?</b><small>Рекомендации по Kaspi и Wildberries с объяснением</small><em>Получить список →</em></button><button className="ai-workflow-card" onClick={()=>setText("Сверь продажи Kaspi и Wildberries за выбранный период. Покажи показатели каждого канала отдельно, найденные расхождения и ограничения данных. Не меняй отчёты и не пересчитывай финансовые показатели.")}><span className="ai-workflow-icon"><ShieldCheck size={19}/></span><b>Проверка каналов</b><small>Kaspi и Wildberries по данным ERP</small><em>Сверить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Подготовь финансовую сводку за выбранный период для бухгалтера: выручка, расходы, прибыль, деньги и выплаты, расшифровки по каналам и список недостающих данных. Ничего не проводи автоматически.")}><span className="ai-workflow-icon"><FileText size={19}/></span><b>Сводка бухгалтеру</b><small>Проверяемые цифры и пояснения</small><em>Подготовить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Помоги сопоставить товары QOR с карточками Kaspi и Wildberries по артикулу, SKU и штрихкоду. Покажи только точные и неоднозначные совпадения отдельно; не создавай автоматические связи без подтверждения.")}><span className="ai-workflow-icon"><Sparkles size={19}/></span><b>Сопоставить карточки</b><small>Поиск общих SKU между площадками</small><em>Начать →</em></button><button className="ai-workflow-card" onClick={()=>setText("У меня новый товар. Помоги подготовить карточку товара QOR: приложу фото и характеристики. Сначала извлеки только видимые/указанные сведения, отметь неизвестное и подготовь черновик для моей проверки.")}><span className="ai-workflow-icon"><ImageIcon size={19}/></span><b>Новый товар по фото</b><small>Черновик из изображения и характеристик</small><em>Подготовить →</em></button></div></details><div className="ai-control-footer"><span><b>{agents.length||6} AI-специалистов</b><small>Руководитель · финансы · аналитика · товары · маркетинг · контент</small></span><a className="secondary" href={`/api/reports/executive.xlsx?start=${ctx.start}&end=${ctx.end}${ctx.company?`&company_id=${ctx.company}`:""}${accountId?`&account_id=${accountId}`:""}`}><Download size={16}/>Отчёт Excel</a></div></div>}
@@ -4264,7 +4264,7 @@ function AIPage({ page, ctx, enabled, claudeSkills }) {
         </div>
         {!enabled && (
           <div className="info-banner">
-            Claude API пока не подключён. Укажите ANTHROPIC_API_KEY на сервере.
+            Claude API пока не подключён. Добавьте ключ в разделе «Настройки».
             Финансовая аналитика и калькулятор работают без ключа.
           </div>
         )}
@@ -4856,13 +4856,69 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
     [old, setOld] = useState(""),
     [password, setPassword] = useState(""),
     [error, setError] = useState("");
-  const [installingSkills, setInstallingSkills] = useState(false),
-    [skillInstallResult, setSkillInstallResult] = useState(null);
+  const [installingSkills, setInstallingSkills] = useState(false);
   const [dailyReport, setDailyReport] = useState({enabled:false,time:"09:00",recipient:"",consent:false,ai_summary:false,provider:{configured:false,missing:[]},recent:[]});
   const [dailyReportBusy, setDailyReportBusy] = useState(false);
+  const [siteIntegrations, setSiteIntegrations] = useState({claude:{configured:false},whatsapp:{configured:false}});
+  const [claudeKey, setClaudeKey] = useState("");
+  const [whatsappForm, setWhatsappForm] = useState({access_token:"",phone_number_id:"",template_name:"",language:"ru",graph_version:"v26.0"});
+  const [integrationBusy, setIntegrationBusy] = useState(false);
   useEffect(() => {
     api("/automation/daily-report").then(setDailyReport).catch((e) => setError(e.message));
+    api("/settings/integrations").then((data) => {
+      setSiteIntegrations(data);
+      setWhatsappForm((current) => ({...current, phone_number_id:data.whatsapp?.phone_number_id||"", template_name:data.whatsapp?.template_name||"", language:data.whatsapp?.language||"ru", graph_version:data.whatsapp?.graph_version||"v26.0"}));
+    }).catch((e) => setError(e.message));
   }, []);
+  const refreshSiteIntegrations = async () => {
+    const data = await api("/settings/integrations");
+    setSiteIntegrations(data);
+    const current = await api("/automation/daily-report");
+    setDailyReport(current);
+    const updated = await api("/settings");
+    onSkillsUpdated?.(updated);
+    return data;
+  };
+  const saveClaudeConnection = async (e) => {
+    e.preventDefault(); setIntegrationBusy(true); setError("");
+    try {
+      const status = await api("/settings/integrations/claude", {method:"PUT",body:{api_key:claudeKey}});
+      setClaudeKey("");
+      await refreshSiteIntegrations();
+      ctx.notify(status.configured ? "Ключ Claude сохранён на сервере" : "Настройка Claude удалена");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const testClaudeConnection = async () => {
+    setIntegrationBusy(true); setError("");
+    try {
+      const result = await api("/settings/integrations/claude/test", {method:"POST"});
+      ctx.notify(result.message || "Claude API отвечает");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const saveWhatsAppConnection = async (e) => {
+    e.preventDefault(); setIntegrationBusy(true); setError("");
+    try {
+      await api("/settings/integrations/whatsapp", {method:"PUT",body:whatsappForm});
+      setWhatsappForm((current) => ({...current,access_token:""}));
+      await refreshSiteIntegrations();
+      ctx.notify("Настройки WhatsApp сохранены");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const testWhatsAppConnection = async () => {
+    setIntegrationBusy(true); setError("");
+    try {
+      const result = await api("/settings/integrations/whatsapp/test", {method:"POST"});
+      ctx.notify(result.phone ? ("WhatsApp API подключён: " + result.phone) : "WhatsApp API подключён");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const clearWhatsAppConnection = async () => {
+    setIntegrationBusy(true); setError("");
+    try {
+      await api("/settings/integrations/whatsapp", {method:"PUT",body:{clear:true}});
+      await refreshSiteIntegrations();
+      ctx.notify("Настройки WhatsApp удалены");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
   const saveDailyReport = async (e) => {
     e.preventDefault();
     setDailyReportBusy(true);
@@ -4904,10 +4960,9 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
     setError("");
     try {
       const result = await api(updateExisting ? "/ai/skills/update" : "/ai/skills/install", { method: "POST" });
-      setSkillInstallResult(result.skills);
       const updated = await api("/settings");
       onSkillsUpdated?.(updated);
-      ctx.notify(`${updateExisting ? "Опубликованы новые версии" : "Загружены Skills"}: ${result.configured}/${result.required}. Обновите QOR_CLAUDE_SKILLS_JSON в Render, чтобы сайт использовал новые версии.`);
+      ctx.notify(`${updateExisting ? "Опубликованы новые версии" : "Загружены Skills"}: ${result.configured}/${result.required}. Конфигурация сохранена в настройках сайта.`);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -4916,6 +4971,31 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
   };
   return (
     <div className="report-grid">
+      {can(ctx.auth, "settings", true) && <>
+        <form className="panel padded" onSubmit={saveClaudeConnection}>
+          <h2>Claude API</h2>
+          <p className="muted">Ключ Anthropic сохраняется зашифрованно в базе сайта. После переноса на VPS подключение останется, если перенести вместе с базой ключ шифрования сервера.</p>
+          <div className={siteIntegrations.claude?.configured?"success-banner":"info-banner"} role="status">Claude API · {siteIntegrations.claude?.configured?"подключён":"ожидает подключения"}{siteIntegrations.claude?.source==="server"?" · ключ пока задан в окружении сервера":""}</div>
+          <label>Ключ Anthropic API<input type="password" autoComplete="new-password" value={claudeKey} onChange={e=>setClaudeKey(e.target.value)} placeholder={siteIntegrations.claude?.configured?"Ключ сохранён — оставьте пустым, чтобы не менять":"Вставьте ключ Claude API"}/></label>
+          <div className="button-row"><button className="primary" disabled={integrationBusy||!claudeKey.trim()}>{integrationBusy?"Сохраняем…":"Сохранить ключ Claude"}</button><button className="secondary" type="button" onClick={testClaudeConnection} disabled={integrationBusy||!siteIntegrations.claude?.configured}>Проверить Claude</button></div>
+          {siteIntegrations.claude?.source==="site"&&<button className="danger mt-12" type="button" onClick={async()=>{setIntegrationBusy(true);try{await api("/settings/integrations/claude",{method:"PUT",body:{clear:true}});await refreshSiteIntegrations();ctx.notify("Ключ Claude удалён")}catch(e){setError(e.message)}finally{setIntegrationBusy(false)}}} disabled={integrationBusy}>Удалить ключ Claude</button>}
+        </form>
+        <form className="panel padded" onSubmit={saveWhatsAppConnection}>
+          <h2>WhatsApp Business API</h2>
+          <p className="muted">Нужны постоянный токен системного пользователя Meta, ID номера WhatsApp Business и имя одобренного шаблона сообщения.</p>
+          <div className={siteIntegrations.whatsapp?.configured?"success-banner":"info-banner"} role="status">WhatsApp API · {siteIntegrations.whatsapp?.configured?"настроен":"ожидает настройки"}</div>
+          <label>Токен доступа<input type="password" autoComplete="new-password" value={whatsappForm.access_token} onChange={e=>setWhatsappForm({...whatsappForm,access_token:e.target.value})} placeholder={siteIntegrations.whatsapp?.source==="site"?"Токен сохранён — оставьте пустым, чтобы не менять":"Вставьте постоянный токен Meta"} /></label>
+          <div className="form-grid">
+            <label>ID номера телефона<input value={whatsappForm.phone_number_id} onChange={e=>setWhatsappForm({...whatsappForm,phone_number_id:e.target.value})} placeholder="ID из Meta WhatsApp API Setup"/></label>
+            <label>Имя одобренного шаблона<input value={whatsappForm.template_name} onChange={e=>setWhatsappForm({...whatsappForm,template_name:e.target.value})} placeholder="например qor_daily_report"/></label>
+            <label>Язык шаблона<input value={whatsappForm.language} onChange={e=>setWhatsappForm({...whatsappForm,language:e.target.value})} placeholder="ru"/></label>
+            <label>Версия Graph API<input value={whatsappForm.graph_version} onChange={e=>setWhatsappForm({...whatsappForm,graph_version:e.target.value})} placeholder="v26.0"/></label>
+          </div>
+          <div className="button-row"><button className="primary" disabled={integrationBusy}>{integrationBusy?"Сохраняем…":"Сохранить WhatsApp"}</button><button className="secondary" type="button" onClick={testWhatsAppConnection} disabled={integrationBusy||!siteIntegrations.whatsapp?.phone_number_id}>Проверить подключение</button></div>
+          {siteIntegrations.whatsapp?.source==="site"&&<button className="danger mt-12" type="button" onClick={clearWhatsAppConnection} disabled={integrationBusy}>Удалить настройки WhatsApp</button>}
+          <p className="muted">Проверка читает данные подключённого номера и не отправляет сообщение. Для ежедневной рассылки шаблон должен быть одобрен Meta.</p>
+        </form>
+      </>}
       <form className="panel padded" onSubmit={saveDailyReport}>
         <h2>Ежедневный отчёт владельцу</h2>
         <p className="muted">Отчёт за предыдущий день: выручка и прибыль из финансового ядра, каналы продаж, возвраты и низкие остатки. Суммы берутся из ERP; Claude может добавить краткий комментарий.</p>
@@ -4927,9 +5007,9 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
         <label className="check-row"><input type="checkbox" checked={!!dailyReport.ai_summary} onChange={e=>setDailyReport({...dailyReport,ai_summary:e.target.checked})}/> Добавлять комментарий Claude к показателям</label>
         <label className="check-row"><input type="checkbox" checked={!!dailyReport.enabled} onChange={e=>setDailyReport({...dailyReport,enabled:e.target.checked})}/> Включить ежедневную отправку</label>
         <div className={dailyReport.provider?.configured?"success-banner":"info-banner"} role="status">
-          Канал: WhatsApp Business API · {dailyReport.provider?.configured?"подключён":"ожидает настройки"}. Для отправки нужны защищённые параметры API в Render и одобренный шаблон сообщения.
+          Канал: WhatsApp Business API · {dailyReport.provider?.configured?"подключён":"ожидает настройки"}. Настройте токен, ID номера и одобренный шаблон в карточке WhatsApp Business API выше.
         </div>
-        <p className="muted">Обычный WhatsApp Web не используется. Токен и ID номера не вводятся здесь и не хранятся в настройках ERP.</p>
+        <p className="muted">Обычный WhatsApp Web не используется. Токен сохраняется зашифрованно на сервере и никогда не возвращается в браузер.</p>
         <button className="primary" disabled={dailyReportBusy}>{dailyReportBusy?"Сохраняем…":"Сохранить расписание"}</button>
         {dailyReport.recent?.length>0&&<details className="mt-12"><summary>Последние отправки</summary><div className="table-scroll"><table><thead><tr><th>Дата отчёта</th><th>Статус</th><th>Отправлен</th><th>Ошибка</th></tr></thead><tbody>{dailyReport.recent.map((row,i)=><tr key={`${row.date}-${i}`}><td>{row.date}</td><td>{row.status}</td><td>{row.sent_at?new Date(row.sent_at).toLocaleString("ru-RU"):"—"}</td><td>{row.error||"—"}</td></tr>)}</tbody></table></div></details>}
       </form>
@@ -4953,16 +5033,16 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
         </label>
         <button className="primary">Сохранить</button>
         <p className="muted">
-          Claude API: {settings.ai_enabled ? "подключён" : "ожидает ANTHROPIC_API_KEY"}. Skills: {settings.claude_skills?.enabled ? `${settings.claude_skills.configured}/${settings.claude_skills.required} подключены` : `не подключены (${settings.claude_skills?.configured || 0}/${settings.claude_skills?.required || 11})`}.
+          Claude API: {settings.ai_enabled ? "подключён" : "ожидает подключения в настройках выше"}. Skills: {settings.claude_skills?.enabled ? `${settings.claude_skills.configured}/${settings.claude_skills.required} подключены` : `не подключены (${settings.claude_skills?.configured || 0}/${settings.claude_skills?.required || 11})`}.
           Ключи хранятся на сервере, не в браузере.
         </p>
         <ErrorBox error={error} />
       </form>
       {settings.ai_enabled && can(ctx.auth, "settings", true) && <section className="panel padded wide">
         <h2>Claude Skills · команда QOR</h2>
-        <p className="muted">Загружает или обновляет 11 Skills в Anthropic API workspace, к которому подключён серверный ключ. Ключ остаётся на сервере. После обновления сохраните выданный JSON в Render, чтобы подключить новые версии.</p>
+        <p className="muted">Загружает или обновляет все 11 навыков в том же Claude API workspace. Ссылки на Skills сохраняются в базе автоматически.</p>
         <button className="primary" type="button" onClick={() => installSkills(!!settings.claude_skills?.enabled)} disabled={installingSkills}>{installingSkills ? "Отправляем в Anthropic…" : settings.claude_skills?.enabled ? "Обновить все 11 Skills" : "Загрузить 11 Skills в Claude API"}</button>
-        {skillInstallResult && <label>Конфигурация для Render · QOR_CLAUDE_SKILLS_JSON<textarea readOnly rows={10} value={JSON.stringify(skillInstallResult, null, 2)} /></label>}
+        
       </section>}
       <form className="panel padded" onSubmit={change}>
         <h2>Изменить пароль</h2>

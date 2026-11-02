@@ -10,6 +10,7 @@ from .finance import report
 from .security import require, scope
 from .models import Document, Product, Account, MarketplaceRecord, MarketplaceProductMapping, MarketplaceProductCost, Return, Sale, business_today
 from . import action_engine, marketplace_pipeline
+from .system_secrets import load_config
 
 ANTHROPIC_MESSAGES_API = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_SKILLS_API = "https://api.anthropic.com/v1/skills"
@@ -45,15 +46,18 @@ AGENT_SKILL_KEYS = {
 }
 
 
-def configured_claude_skills():
-    """Return the validated Anthropic Skill references configured for this QOR workspace."""
-    raw = os.getenv("QOR_CLAUDE_SKILLS_JSON", "").strip()
-    if not raw:
-        return {}
-    try:
-        configured = json.loads(raw)
-    except (TypeError, ValueError):
-        return {}
+def configured_claude_skills(db=None):
+    """Return validated Claude Skill references saved in site settings or legacy env."""
+    raw = load_config("anthropic", db).get("skills_json")
+    if raw is None:
+        raw = os.getenv("QOR_CLAUDE_SKILLS_JSON", "").strip()
+    if isinstance(raw, str):
+        try:
+            configured = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            return {}
+    else:
+        configured = raw or {}
     if not isinstance(configured, dict):
         return {}
     skills = {}
@@ -65,23 +69,19 @@ def configured_claude_skills():
         version = str(item.get("version") or "").strip()
         if skill_id.startswith("skill_") and (version == "latest" or version.startswith("skver_")):
             skills[key] = {"type": "custom", "skill_id": skill_id, "version": version}
-    # Each exported role package must resolve to its own API Skill; duplicates
-    # would make the UI report a complete team while silently reusing one role.
     if len({item["skill_id"] for item in skills.values()}) != len(skills):
         return {}
     return skills
 
 
-def claude_skills_status():
-    skills = configured_claude_skills()
+def claude_skills_status(db=None):
+    skills = configured_claude_skills(db)
     return {"enabled": len(skills) == len(CLAUDE_SKILL_KEYS), "configured": len(skills), "required": len(CLAUDE_SKILL_KEYS)}
 
 
-def install_claude_skills(update_existing=False):
+def install_claude_skills(update_existing=False, db=None):
     """Create the packaged QOR Skills, or publish a new version of existing Skills."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(409, "Claude API не подключён на сервере")
+    api_key = key(db)
     if not CLAUDE_SKILL_BUNDLE_DIR.is_dir():
         raise HTTPException(500, "Пакет Claude Skills отсутствует в сборке сайта")
 
@@ -176,13 +176,35 @@ def agent_catalog():
     return [{"id": k, **{x: v[x] for x in ("name", "title", "scope")}} for k, v in AI_AGENTS.items()]
 
 
-def key():
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+def configured_key(db=None):
+    saved = load_config("anthropic", db).get("api_key")
+    return str(saved or os.getenv("ANTHROPIC_API_KEY", "")).strip()
+
+
+def key(db=None):
+    api_key = configured_key(db)
     if not api_key:
         raise HTTPException(
-            409, "ANTHROPIC_API_KEY не задан. Обычная аналитика доступна без Claude AI."
+            409, "Claude API не подключён. Добавьте ключ в настройках сайта."
         )
     return api_key
+
+
+def key_status(db=None):
+    return {"configured": bool(configured_key(db)),
+            "source": "site" if load_config("anthropic", db).get("api_key") else
+                      ("server" if os.getenv("ANTHROPIC_API_KEY", "").strip() else "missing")}
+
+
+def test_connection(db=None):
+    response = call_response(
+        [{"role": "user", "content": "Reply exactly: CLAUDE_OK"}],
+        "You are checking Claude API availability only. Do not access ERP data or tools. Reply exactly: CLAUDE_OK.",
+    )
+    answer = output_text(response).strip()
+    if answer != "CLAUDE_OK":
+        raise HTTPException(502, "Claude API подключён, но тестовый ответ не совпал")
+    return {"ok": True, "message": "Claude API отвечает"}
 
 
 def _decode_data_uri(value):

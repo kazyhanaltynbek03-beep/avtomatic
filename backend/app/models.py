@@ -134,6 +134,14 @@ class IntegrationSecret(Record, Base):
     key_hint: Mapped[str] = mapped_column(String(12), default="")
 
 
+class SystemIntegrationSecret(Base):
+    __tablename__ = "system_integration_secrets"
+    provider: Mapped[str] = mapped_column(String(40), primary_key=True)
+    encrypted_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    key_hint: Mapped[str] = mapped_column(String(12), default="", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now, nullable=False)
+
+
 class ExchangeRate(Record, Base):
     __tablename__ = "exchange_rates"
     currency: Mapped[str] = mapped_column(String(3), index=True)
