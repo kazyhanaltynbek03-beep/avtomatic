@@ -4870,21 +4870,12 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
       setWhatsappForm((current) => ({...current, phone_number_id:data.whatsapp?.phone_number_id||"", template_name:data.whatsapp?.template_name||"", language:data.whatsapp?.language||"ru", graph_version:data.whatsapp?.graph_version||"v26.0",inbound_enabled:!!data.whatsapp?.inbound_enabled}));
     }).catch((e) => setError(e.message));
   }, []);
-  const refreshSiteIntegrations = async () => {
-    const data = await api("/settings/integrations");
-    setSiteIntegrations(data);
-    const current = await api("/automation/daily-report");
-    setDailyReport(current);
-    const updated = await api("/settings");
-    onSkillsUpdated?.(updated);
-    return data;
-  };
   const saveClaudeConnection = async (e) => {
     e.preventDefault(); setIntegrationBusy(true); setError("");
     try {
       const status = await api("/settings/integrations/claude", {method:"PUT",body:{api_key:claudeKey}});
+      setSiteIntegrations((current) => ({...current, claude:status}));
       setClaudeKey("");
-      await refreshSiteIntegrations();
       ctx.notify(status.configured ? "Ключ Claude сохранён на сервере" : "Настройка Claude удалена");
     } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
   };
@@ -4898,9 +4889,10 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
   const saveWhatsAppConnection = async (e) => {
     e.preventDefault(); setIntegrationBusy(true); setError("");
     try {
-      await api("/settings/integrations/whatsapp", {method:"PUT",body:whatsappForm});
+      const status = await api("/settings/integrations/whatsapp", {method:"PUT",body:whatsappForm});
+      setSiteIntegrations((current) => ({...current, whatsapp:status}));
+      setDailyReport((current) => ({...current, provider:status.provider || status}));
       setWhatsappForm((current) => ({...current,access_token:"",app_secret:"",webhook_verify_token:""}));
-      await refreshSiteIntegrations();
       ctx.notify("Настройки WhatsApp сохранены");
     } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
   };
@@ -4982,18 +4974,26 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
         </form>
         <form className="panel padded" onSubmit={saveWhatsAppConnection}>
           <h2>WhatsApp Business API</h2>
-          <p className="muted">Нужны постоянный токен системного пользователя Meta, ID номера WhatsApp Business и имя одобренного шаблона сообщения.</p>
+          <p className="muted">Для ежедневных отчётов заполните три поля ниже: постоянный токен Meta, ID номера WhatsApp и одобренный шаблон. Настройки для входящих сообщений ИИ находятся в дополнительном разделе.</p>
           <div className={siteIntegrations.whatsapp?.configured?"success-banner":"info-banner"} role="status">WhatsApp API · {siteIntegrations.whatsapp?.configured?"настроен":"ожидает настройки"} · входящий ИИ {siteIntegrations.whatsapp?.inbound_ready?"готов":"не настроен"}</div>
           <label>Токен доступа<input type="password" autoComplete="new-password" value={whatsappForm.access_token} onChange={e=>setWhatsappForm({...whatsappForm,access_token:e.target.value})} placeholder={siteIntegrations.whatsapp?.source==="site"?"Токен сохранён — оставьте пустым, чтобы не менять":"Вставьте постоянный токен Meta"} /></label>
           <div className="form-grid">
             <label>ID номера телефона<input value={whatsappForm.phone_number_id} onChange={e=>setWhatsappForm({...whatsappForm,phone_number_id:e.target.value})} placeholder="ID из Meta WhatsApp API Setup"/></label>
             <label>Имя одобренного шаблона<input value={whatsappForm.template_name} onChange={e=>setWhatsappForm({...whatsappForm,template_name:e.target.value})} placeholder="например qor_daily_report"/></label>
-            <label>Meta App Secret<input type="password" autoComplete="new-password" value={whatsappForm.app_secret} onChange={e=>setWhatsappForm({...whatsappForm,app_secret:e.target.value})} placeholder="Оставьте пустым, если уже сохранён"/></label>
-            <label>Webhook verify token<input type="password" autoComplete="new-password" value={whatsappForm.webhook_verify_token} onChange={e=>setWhatsappForm({...whatsappForm,webhook_verify_token:e.target.value})} placeholder="16+ символов, сохранённый оставьте пустым"/></label>
+            <label>Имя одобренного шаблона<input value={whatsappForm.template_name} onChange={e=>setWhatsappForm({...whatsappForm,template_name:e.target.value})} placeholder="например qor_daily_report"/></label>
             <label>Язык шаблона<input value={whatsappForm.language} onChange={e=>setWhatsappForm({...whatsappForm,language:e.target.value})} placeholder="ru"/></label>
-            <label className="check-row"><input type="checkbox" checked={!!whatsappForm.inbound_enabled} onChange={e=>setWhatsappForm({...whatsappForm,inbound_enabled:e.target.checked})}/>Включить личного ИИ в WhatsApp</label>
-            <label>Webhook URL<input readOnly value="https://qor-ai-business-erp.onrender.com/api/webhooks/whatsapp"/></label>
-            <label>Версия Graph API<input value={whatsappForm.graph_version} onChange={e=>setWhatsappForm({...whatsappForm,graph_version:e.target.value})} placeholder="v26.0"/></label>
+          </div>
+          <details className="integration-advanced">
+            <summary>Дополнительные настройки · входящий ИИ</summary>
+            <p className="muted">Чтобы клиент мог переписываться с ИИ через WhatsApp, добавьте webhook в Meta и заполните секреты. Вставьте этот адрес в настройках приложения Meta.</p>
+            <div className="form-grid">
+              <label>Meta App Secret<input type="password" autoComplete="new-password" value={whatsappForm.app_secret} onChange={e=>setWhatsappForm({...whatsappForm,app_secret:e.target.value})} placeholder="Оставьте пустым, если уже сохранён"/></label>
+              <label>Webhook verify token<input type="password" autoComplete="new-password" value={whatsappForm.webhook_verify_token} onChange={e=>setWhatsappForm({...whatsappForm,webhook_verify_token:e.target.value})} placeholder="Не менее 16 символов"/></label>
+              <label>Webhook URL<input readOnly value="https://qor-ai-business-erp.onrender.com/api/webhooks/whatsapp"/></label>
+              <label>Версия Graph API<input value={whatsappForm.graph_version} onChange={e=>setWhatsappForm({...whatsappForm,graph_version:e.target.value})} placeholder="v26.0"/></label>
+              <label className="check-row"><input type="checkbox" checked={!!whatsappForm.inbound_enabled} onChange={e=>setWhatsappForm({...whatsappForm,inbound_enabled:e.target.checked})}/>Включить ответы личного ИИ</label>
+            </div>
+          </details>
           </div>
           <div className="button-row"><button className="primary" disabled={integrationBusy}>{integrationBusy?"Сохраняем…":"Сохранить WhatsApp"}</button><button className="secondary" type="button" onClick={testWhatsAppConnection} disabled={integrationBusy||!siteIntegrations.whatsapp?.phone_number_id}>Проверить подключение</button></div>
           {siteIntegrations.whatsapp?.source==="site"&&<button className="danger mt-12" type="button" onClick={clearWhatsAppConnection} disabled={integrationBusy}>Удалить настройки WhatsApp</button>}
