@@ -958,7 +958,8 @@ def assistant(db, user, payload):
         res = fallback
     return {"agent": agent_id, "agent_name": agent["name"], "answer": output_text(res),
             "tools_used": list(dict.fromkeys(used)), "source": "ERP database / restricted read-only tools",
-            "period": [str(start), str(end)], "notice": "Рекомендации AI проверяйте по ERP-расчётам."}
+            "period": [str(start), str(end)], "notice": "Рекомендации AI проверяйте по ERP-расчётам.",
+            **({"report_data": tool_results} if payload.get("include_tool_data") else {})}
 
 
 def content(db, user, payload):
