@@ -315,7 +315,7 @@ main[data-page="accounts"] .info-banner{border:1px solid #e1e9e4;background:#f2f
 .pmr-stat>div{display:grid;gap:3px;min-width:0;}
 .pmr-stat small{display:block;overflow:hidden;color:#78877e;font-size:9px;text-overflow:ellipsis;white-space:nowrap;}
 .pmr-stat strong{display:block;overflow:hidden;color:#213b30;font-size:12px;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums;}
-.pmr-scroll{max-width:100%;max-height:72vh;overflow:auto;border:1px solid #dce6e0;border-radius:10px;background:#fff;}
+.pmr-scroll{max-width:100%;max-height:none;overflow-x:auto;overflow-y:visible;border:1px solid #dce6e0;border-radius:10px;background:#fff;}
 .pmr-table{width:100%;min-width:980px;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:10px;}
 .pmr-table col:nth-child(1){width:22%;}.pmr-table col:nth-child(2){width:10%;}.pmr-table col:nth-child(3){width:10%;}.pmr-table col:nth-child(4){width:12%;}.pmr-table col:nth-child(5){width:12%;}.pmr-table col:nth-child(6){width:11%;}.pmr-table col:nth-child(7){width:15%;}.pmr-table col:nth-child(8){width:8%;}
 .pmr-table th{position:sticky;top:0;z-index:2;padding:10px 8px;border-bottom:1px solid #1d559e;background:#2863b4;color:#fff;text-align:left;font-size:9px;font-weight:750;line-height:1.25;letter-spacing:.025em;white-space:normal;}
@@ -475,8 +475,8 @@ html,body{background:#f5f6f6!important;color:#25292b!important}
 .mobile-dock button.active{background:#fae9eb!important;color:#b92935!important}
 .mobile-dock button:nth-child(3){background:transparent!important;color:#687175!important;box-shadow:none!important}
 .mobile-dock button:nth-child(3).active{background:#fae9eb!important;color:#b92935!important}
-.login-story{background:#26292b!important}
-.login-story .eyebrow{color:#e9878e!important}
+.login-story{background:#fff!important;color:#25292b!important}
+.login-story .eyebrow{color:#c52d39!important}
 @media(max-width:960px){.mobile-dock{grid-template-columns:repeat(4,minmax(0,1fr))!important}}
 
 /* Accessible, single-line accordion headers for the sidebar on Safari/iOS and desktop. */
