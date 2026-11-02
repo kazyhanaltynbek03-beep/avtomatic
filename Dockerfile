@@ -6,7 +6,7 @@ COPY frontend/ ./
 RUN npm run lint
 RUN npm run build
 FROM python:3.12-slim-bookworm
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 FRONTEND_DIST=/srv/frontend UPLOAD_DIR=/srv/uploads
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 FRONTEND_DIST=/srv/frontend UPLOAD_DIR=/srv/uploads REPORT_CACHE_WORKER=1
 WORKDIR /srv/backend
 COPY backend/requirements.lock ./requirements.lock
 RUN pip install --no-cache-dir -r requirements.lock && useradd --create-home --uid 10001 app
