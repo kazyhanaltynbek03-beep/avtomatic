@@ -111,17 +111,17 @@ def install_claude_skills(update_existing=False, db=None):
             raise HTTPException(502, "Claude Skills: слишком много страниц в API каталоге")
 
         result = {}
-        for key in CLAUDE_SKILL_KEYS:
-            display_name = f"QOR ERP Skill · {key}"
-            item = existing.get(key)
-            skill_dir = CLAUDE_SKILL_BUNDLE_DIR / key
+        for skill_key in CLAUDE_SKILL_KEYS:
+            display_name = f"QOR ERP Skill · {skill_key}"
+            item = existing.get(skill_key)
+            skill_dir = CLAUDE_SKILL_BUNDLE_DIR / skill_key
             skill_file = skill_dir / "SKILL.md"
             if not skill_file.is_file():
-                raise HTTPException(500, f"В сборке отсутствует {key}/SKILL.md")
+                raise HTTPException(500, f"В сборке отсутствует {skill_key}/SKILL.md")
             uploads = []
             for file_path in sorted(path for path in skill_dir.rglob("*") if path.is_file()):
                 relative = file_path.relative_to(skill_dir).as_posix()
-                uploads.append(("files[]", (f"{key}/{relative}", file_path.read_bytes(), "text/plain")))
+                uploads.append(("files[]", (f"{skill_key}/{relative}", file_path.read_bytes(), "text/plain")))
             if item is None:
                 response = client.post(
                     ANTHROPIC_SKILLS_API,
@@ -135,7 +135,7 @@ def install_claude_skills(update_existing=False, db=None):
             elif update_existing:
                 skill_id = str(item.get("id") or "")
                 if not skill_id.startswith("skill_"):
-                    raise HTTPException(502, f"Claude API вернул неполный идентификатор для {key}")
+                    raise HTTPException(502, f"Claude API вернул неполный идентификатор для {skill_key}")
                 response = client.post(
                     f"{ANTHROPIC_SKILLS_API}/{skill_id}/versions",
                     headers=headers,
@@ -148,8 +148,8 @@ def install_claude_skills(update_existing=False, db=None):
             skill_id = str(item.get("id") or "")
             version = str(item.get("latest_version_id") or "")
             if not skill_id.startswith("skill_") or not version:
-                raise HTTPException(502, f"Claude API вернул неполную регистрацию для {key}")
-            result[key] = {"skill_id": skill_id, "version": version}
+                raise HTTPException(502, f"Claude API вернул неполную регистрацию для {skill_key}")
+            result[skill_key] = {"skill_id": skill_id, "version": version}
     return result
 
 
