@@ -142,9 +142,17 @@ class KaspiConnector(Connector):
     def test_connection(self):
         if self.connection_status()["missing"]:
             raise AccessRequired("Kaspi credentials отсутствуют: token")
-        # Official Kaspi pagination accepts page 0 and a maximum page size of
-        # 100. One row validates the token without loading the business history.
-        _, payload = _json_request(self.base_url + "?" + urlencode({"page[number]":0,"page[size]":1}), self._headers(), timeout=12, retries=1)
+        # Match the smallest normal order-list request used by fetch(). Kaspi
+        # rejects page sizes below 10 even though a one-row probe looks cheaper.
+        now = datetime.now(timezone.utc)
+        params = {
+            "page[number]": 0,
+            "page[size]": 10,
+            "filter[orders][creationDate][$ge]": int((now - timedelta(days=7)).timestamp() * 1000),
+            "filter[orders][creationDate][$le]": int(now.timestamp() * 1000),
+            "include[orders]": "user",
+        }
+        _, payload = _json_request(self.base_url + "?" + urlencode(params), self._headers(), timeout=12, retries=1)
         return {"message":"Kaspi: подключение подтверждено", "records_checked":len(payload.get("data") or [])}
     def fetch(self, cursor=None):
         if self.connection_status()["missing"]:
