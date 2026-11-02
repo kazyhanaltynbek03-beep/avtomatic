@@ -402,6 +402,9 @@ def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
         def scalar(self, query):
             return None
 
+    monkeypatch.setattr(ai.report_cache, "get_ai_snapshot", lambda *args: None)
+    stored = {}
+    monkeypatch.setattr(ai.report_cache, "store_ai_snapshot", lambda *args: stored.update(payload=args[4]))
     monkeypatch.setattr(ai.report_cache, "get", lambda *args: None)
 
     def headline(db, user, start, end, company_id, active_only):
@@ -419,3 +422,22 @@ def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
     assert result["money_unit"] == "tiyn"
     assert ai._agent_tool_data(result, "get_executive_summary")["revenue"] == 456
     assert captured["active_only"] is False
+    assert stored["payload"]["start"] == "2026-10-01"
+
+
+def test_ai_executive_snapshot_cache_hit_avoids_recomputing_report(monkeypatch):
+    from types import SimpleNamespace
+    from app import ai
+
+    cached = {
+        "start": "2026-10-01", "end": "2026-10-31", "currency": "KZT",
+        "money_unit": "tiyn", "revenue": 456,
+    }
+    monkeypatch.setattr(ai.report_cache, "get_ai_snapshot", lambda *args: cached)
+    monkeypatch.setattr(ai, "report", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("report should not run")))
+    monkeypatch.setattr(ai, "report_headline", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("headline should not run")))
+
+    result = ai._cached_executive_snapshot(
+        object(), SimpleNamespace(role="Owner"), "2026-10-01", "2026-10-31"
+    )
+    assert result is cached

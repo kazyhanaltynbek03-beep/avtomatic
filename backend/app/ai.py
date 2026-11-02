@@ -979,37 +979,51 @@ def _answer_language(text):
 
 
 def _cached_executive_snapshot(db, user, start, end, company_id=None, account_id=None):
-    # Account-specific history is not represented by the shared dashboard cache.
+    cached_ai = report_cache.get_ai_snapshot(db, user, start, end, company_id, account_id)
+    if cached_ai is not None:
+        return cached_ai
+
     if account_id:
-        return report(db, user, start, end, company_id, account_id)
+        snapshot = report(db, user, start, end, company_id, account_id)
+    else:
+        cached = report_cache.get(db, user, start, end, company_id)
+        if user.role == "Owner":
+            # The shared dashboard cache contains active stores only. Reuse it
+            # only when it matches the complete historical report.
+            inactive_query = select(Account.id).where(Account.active.is_(False))
+            if company_id is not None:
+                inactive_query = inactive_query.where(Account.company_id == company_id)
+            has_inactive = db.scalar(inactive_query.limit(1))
+            if cached is not None and not has_inactive:
+                snapshot = cached
+            else:
+                snapshot = report_headline(db, user, start, end, company_id, active_only=False)
+        else:
+            # Headline uses bounded SQL aggregates and preserves finance formulas.
+            snapshot = report_headline(db, user, start, end, company_id, active_only=False)
 
-    cached = report_cache.get(db, user, start, end, company_id)
-    if user.role == "Owner":
-        # The shared dashboard cache contains active stores only. Reuse it only
-        # when that scope exactly matches the complete historical report.
-        inactive_query = select(Account.id).where(Account.active.is_(False))
-        if company_id is not None:
-            inactive_query = inactive_query.where(Account.company_id == company_id)
-        has_inactive = db.scalar(inactive_query.limit(1))
-        if cached is not None and not has_inactive:
-            return cached
-
-    # Headline uses bounded SQL aggregates and preserves the finance formulas;
-    # it avoids loading years of sales for a KPI-only question on a cache miss.
-    headline = report_headline(db, user, start, end, company_id, active_only=False)
     # report_headline is a compact KPI response, while AI tool responses use
-    # the full report contract. Restore the period and money metadata here so
-    # a cold-cache executive question can be answered from the fast query.
-    return {
-        **headline,
-        "start": headline.get("start", str(start)),
-        "end": headline.get("end", str(end)),
-        "currency": headline.get("currency", "KZT"),
-        "money_unit": headline.get("money_unit", "tiyn"),
-        "method": headline.get("method", "FIFO; расходы по начислению; деньги по датам платежей; без автоматического расчёта налогов"),
-        "pending_source_events": headline.get("pending_source_events", 0),
-        "incomplete_reason": headline.get("incomplete_reason"),
+    # the full report contract. Restore period and currency metadata before caching.
+    snapshot = {
+        **snapshot,
+        "start": snapshot.get("start", str(start)),
+        "end": snapshot.get("end", str(end)),
+        "currency": snapshot.get("currency", "KZT"),
+        "money_unit": snapshot.get("money_unit", "tiyn"),
+        "method": snapshot.get("method", "FIFO; расходы по начислению; деньги по датам платежей; без автоматического расчёта налогов"),
+        "pending_source_events": snapshot.get("pending_source_events", 0),
+        "incomplete_reason": snapshot.get("incomplete_reason"),
     }
+    try:
+        report_cache.store_ai_snapshot(
+            db, user, start, end, snapshot, company_id, account_id
+        )
+    except Exception:
+        rollback = getattr(db, "rollback", None)
+        if callable(rollback):
+            rollback()
+        logging.exception("AI executive snapshot cache write failed")
+    return snapshot
 
 
 def _release_db_before_claude(db):

@@ -68,6 +68,58 @@ def get(db, user, start, end, company_id=None):
     return row.payload if row else None
 
 
+def _ai_scope_key(user, company_id=None, account_id=None):
+    if account_id is not None:
+        return f"ai:account:{int(account_id)}"
+    if company_id is not None:
+        return f"ai:company:{int(company_id)}"
+    return "ai:all" if user.role == "Owner" else None
+
+
+def get_ai_snapshot(db, user, start, end, company_id=None, account_id=None):
+    """Read a recent AI snapshot, including historical accounts excluded by dashboard KPIs."""
+    key = _ai_scope_key(user, company_id, account_id)
+    if key is None:
+        return None
+    row = db.scalar(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key == key,
+        DashboardReportCache.start_date == start,
+        DashboardReportCache.end_date == end,
+    ))
+    if row is None:
+        return None
+    refreshed_at = row.refreshed_at
+    current = now()
+    if refreshed_at.tzinfo is None:
+        current = current.replace(tzinfo=None)
+    if refreshed_at < current - timedelta(minutes=5):
+        return None
+    return row.payload
+
+
+def store_ai_snapshot(db, user, start, end, payload, company_id=None, account_id=None):
+    """Persist a bounded-period AI snapshot so follow-up questions reuse the result."""
+    key = _ai_scope_key(user, company_id, account_id)
+    if key is None:
+        return False
+    row = db.scalar(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key == key,
+        DashboardReportCache.start_date == start,
+        DashboardReportCache.end_date == end,
+    ))
+    if row is None:
+        row = DashboardReportCache(
+            scope_key=key, start_date=start, end_date=end,
+            payload=payload, refreshed_at=now(),
+        )
+        db.add(row)
+    else:
+        row.payload = payload
+        row.refreshed_at = now()
+    db.commit()
+    return True
+
+
 def refresh_one(db):
     """Refresh one missing/stale standard range per worker turn."""
     owner = db.scalar(select(User).where(
