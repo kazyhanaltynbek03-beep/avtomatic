@@ -1502,3 +1502,12 @@ def report_details(db, user, start, end, metric, company_id=None, account_id=Non
             for c in cash_all:
                 if c.sale_id: paid[c.sale_id] += c.amount
             for s in all_sales.values():
+                if account_id and s.account_id != account_id: continue
+                amount = max(0, paid[s.id] - (s.revenue - returned[s.id]))
+                if amount: rows.append(item(end, "К возврату", s.reference, "Получено больше чистой суммы продажи", amount, s.id, s.product_id, s.account_id))
+
+    expected = summary[metric]
+    if metric in {"cogs", "commission", "logistics", "advertising", "expenses"}:
+        expected = -expected
+    actual = sum(x["amount"] for x in rows)
+    return {"metric": metric, "start": str(start), "end": str(end), "expected": expected, "explained": actual, "difference": expected - actual, "rows": sorted(rows, key=lambda x: (x["date"] or "", x["reference"]))}
