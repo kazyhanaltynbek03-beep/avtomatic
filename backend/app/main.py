@@ -3761,6 +3761,12 @@ def dashboard_summary(
         pending_source_days = f.marketplace_source_event_days(db, u, company_id)
     if selected is None:
         selected = f.report_headline(db, u, start, end, company_id, pending_source_days)
+    # On a cache miss, selected is computed after the initial cache lookups.
+    # Reuse it when the selected dates already equal the month or today range.
+    if (start, end) == (month_start, today):
+        month_report = selected
+    if (start, end) == (today, today):
+        today_report = selected
     if month_report is None:
         month_report = f.report_headline(db, u, month_start, today, company_id, pending_source_days, include_balances=False)
     if today_report is None:
