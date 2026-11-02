@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from .db import SessionLocal
 from .models import Job, User, ProductCardVersion, AIThread, AIMessage, now
 from .security import scope
-from . import ai, report_cache
+from . import ai
 from .product_studio import assess_performance, next_experiment
 
 logging.basicConfig(level=logging.INFO)
@@ -112,9 +112,4 @@ if __name__ == "__main__":
     while True:
         schedule_due_card_reviews()
         if not run_one():
-            try:
-                with SessionLocal() as db:
-                    report_cache.refresh_one(db)
-            except Exception:
-                logging.exception("Dashboard report cache refresh failed")
             time.sleep(2)
