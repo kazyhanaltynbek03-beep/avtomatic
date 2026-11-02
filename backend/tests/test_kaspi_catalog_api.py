@@ -188,6 +188,8 @@ def test_kaspi_unmapped_order_items_appear_in_catalog(client):
     assert body["items"][0]["sold_units"] == 2
     assert body["items"][0]["source"] == "Kaspi order items"
     assert body["items"][0]["image_url"] == "https://cdn.example.kz/kaspi-sample.jpg"
+    # Order history is not rendered on cards; keep responses bounded for large accounts.
+    assert "orders" not in body["items"][0]
 
 
 def test_kaspi_images_nested_in_merchant_attributes_are_imported_to_product_media():
