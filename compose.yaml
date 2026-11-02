@@ -40,6 +40,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      report-cache-warmup:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 30s
@@ -51,6 +53,20 @@ services:
     command: ["python", "-m", "app.worker"]
     depends_on:
       migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  report-cache-warmup:
+    <<: *app
+    command: ["python", "-m", "app.report_cache", "--warm"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: 'no'
+  report-cache-worker:
+    <<: *app
+    command: ["python", "-m", "app.report_cache"]
+    depends_on:
+      report-cache-warmup:
         condition: service_completed_successfully
     restart: unless-stopped
 volumes:
