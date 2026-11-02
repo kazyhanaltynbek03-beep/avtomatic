@@ -98,7 +98,7 @@ from app.ai import AGENT_TOOLS, _agent_tool_data
 
 def test_agents_have_least_privilege_read_tools():
     assert "get_finance_summary" in AGENT_TOOLS["finance"]
-    assert set(AGENT_TOOLS["finance"]) == {"get_finance_summary", "get_marketplace_cost_catalog", "get_data_quality_summary"}
+    assert set(AGENT_TOOLS["finance"]) == {"get_finance_summary", "get_marketplace_cost_catalog", "get_data_quality_summary", "query_marketplace_api_data"}
     assert "get_inventory_summary" in AGENT_TOOLS["buyer"]
     assert "get_marketplace_cost_catalog" in AGENT_TOOLS["buyer"]
     assert "get_data_quality_summary" in AGENT_TOOLS["buyer"]
@@ -106,11 +106,11 @@ def test_agents_have_least_privilege_read_tools():
     assert {"get_marketplace_mapping_catalog", "get_return_inventory_summary"} <= set(AGENT_TOOLS["buyer"])
     assert "get_channel_summary" in AGENT_TOOLS["marketing"]
     assert "get_inventory_summary" not in AGENT_TOOLS["marketing"]
-    assert set(AGENT_TOOLS["content"]) == {"get_product_summary", "get_data_quality_summary"}
+    assert set(AGENT_TOOLS["content"]) == {"get_product_summary", "get_data_quality_summary", "query_marketplace_api_data"}
     assert set(AGENT_TOOLS["rick"]) == {
         "get_executive_summary", "get_finance_summary", "get_inventory_summary",
         "get_channel_summary", "get_product_summary", "get_marketplace_mapping_catalog",
-        "get_return_inventory_summary", "get_marketplace_cost_catalog", "get_data_quality_summary"
+        "get_return_inventory_summary", "get_marketplace_cost_catalog", "get_data_quality_summary", "query_marketplace_api_data"
     }
 
 
