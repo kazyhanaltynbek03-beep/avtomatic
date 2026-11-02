@@ -74,7 +74,9 @@ def test_connection_checks_are_lightweight_and_do_not_run_history_sync(monkeypat
     assert KaspiConnector(acc("Kaspi"),{"token":"x"}).test_connection()["records_checked"]==0
     assert OzonConnector(acc("Ozon"),{"client_id":"id","api_key":"key"}).test_connection()["records_checked"]==0
     assert len(calls)==2
-    assert "page%5Bsize%5D=1" in calls[0][0]
+    assert "page%5Bsize%5D=10" in calls[0][0]
+    assert "filter%5Borders%5D%5BcreationDate%5D%5B%24ge%5D=" in calls[0][0]
+    assert "include%5Borders%5D=user" in calls[0][0]
     assert calls[1][1]["limit"]==1 and calls[1][1]["cursor"]==""
 
 def test_kaspi_sync_starts_with_latest_week_then_walks_back(monkeypatch):
