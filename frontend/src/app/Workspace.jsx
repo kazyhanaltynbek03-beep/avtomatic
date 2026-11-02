@@ -4090,3 +4090,1035 @@ function EditModal({ kind, item, ctx, close }) {
                     type="number"
                     min="1"
                     value={l.quantity}
+                    onChange={(e) =>
+                      setLines(
+                        lines.map((x, j) =>
+                          j === i ? { ...x, quantity: e.target.value } : x,
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  Цена закупки
+                  <input
+                    required
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={l.unit_cost}
+                    onChange={(e) =>
+                      setLines(
+                        lines.map((x, j) =>
+                          j === i ? { ...x, unit_cost: e.target.value } : x,
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  Валюта
+                  <select value={l.currency} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, currency: e.target.value } : x))}>
+                    <option value="KZT">KZT</option>
+                    <option value="CNY">CNY</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </label>
+                <label>
+                  Курс к ₸
+                  <input required type="number" min="0.0001" step="0.0001" value={l.fx_rate} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, fx_rate: e.target.value } : x))} />
+                </label>
+                <button
+                  type="button"
+                  className="icon-button danger"
+                  disabled={lines.length === 1}
+                  onClick={() => setLines(lines.filter((_, j) => j !== i))}
+                  title="Убрать строку"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                setLines([
+                  ...lines,
+                  { product_id: "", quantity: 1, unit_cost: "", currency: "KZT", fx_rate: "1" },
+                ])
+              }
+            >
+              <Plus size={16} />
+              Добавить товар
+            </button>
+            <p className="muted">
+              Дополнительные затраты распределяются пропорционально стоимости
+              товаров. Цена каждой строки пересчитывается в тенге по указанному курсу.
+            </p>
+          </div>
+        )}
+        <ErrorBox error={error} />
+        {dirty && <p className="panel-note">Есть несохранённые изменения</p>}
+        <div className="modal-footer">
+          <button type="button" className="secondary" onClick={close}>
+            Отмена
+          </button>
+          {productWizard && !productQuickMode && productWizardStep > 0 && <button type="button" className="secondary" disabled={busy} onClick={()=>{setError("");setProductWizardStep(step=>Math.max(0,step-1));}}>Назад</button>}
+          {productWizard && !productQuickMode && productWizardStep < productWizardSections.length - 1
+            ? <button type="button" className="primary" disabled={busy} onClick={advanceProductWizard}>Далее <span aria-hidden="true">→</span></button>
+            : <button className="primary" disabled={busy}>{busy ? "Сохраняем…" : productWizard ? "Сохранить товар" : editing ? "Сохранить" : creatingOfflineChannel ? "Создать канал" : "Провести"}</button>}
+        </div>
+      </form>
+    </div>
+  );
+}
+const AI_ROLE_TITLES={rick:"AI-руководитель",finance:"Финансовый директор",analyst:"Аналитик маркетплейсов",buyer:"Склад и закупки",marketing:"Маркетинг",content:"Карточки и контент"};
+function formatAIInline(line){return String(line).split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).map((part,i)=>part.startsWith("**")&&part.endsWith("**")?<strong key={i}>{part.slice(2,-2)}</strong>:part.startsWith("*")&&part.endsWith("*")?<em key={i}>{part.slice(1,-1)}</em>:part);}
+function formatAIMessage(value){const lines=String(value||"").split(/\r?\n/);const out=[];let bullets=[];const flush=()=>{if(bullets.length){out.push(<ul key={"list-"+out.length}>{bullets.map((line,i)=><li key={i}>{formatAIInline(line)}</li>)}</ul>);bullets=[]}};lines.forEach((line,i)=>{const bullet=line.match(/^\s*[-*]\s+(.+)/);if(bullet){bullets.push(bullet[1]);return}flush();if(!line.trim())return;const heading=line.match(/^#{1,3}\s+(.+)/);out.push(heading?<h3 key={i}>{formatAIInline(heading[1])}</h3>:<p key={i}>{formatAIInline(line)}</p>)});flush();return <div className="chat-markdown">{out}</div>}
+function AIWorkspace({ ctx, enabled, claudeSkills }) {
+  const [agents,setAgents]=useState([]),[threads,setThreads]=useState([]),[thread,setThread]=useState(null),[messages,setMessages]=useState([]);
+  const [text,setText]=useState(""),[files,setFiles]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(""),[actions,setActions]=useState([]),[plans,setPlans]=useState([]),[jobState,setJobState]=useState(null),[accountId,setAccountId]=useState("");
+  const [templateBusy,setTemplateBusy]=useState(false);
+  const agent=thread?.agent||"rick";
+  const [historyOpen,setHistoryOpen]=useState(false);
+  const messagesEndRef=useRef(null);
+  useEffect(()=>{messagesEndRef.current?.scrollIntoView({block:"end",behavior:"smooth"})},[messages,busy,thread]);
+  const aiAccounts=(ctx.refs.accounts||[]).filter(a=>a.active!==false&&["Kaspi","Wildberries","Ozon","Offline","B2B"].includes(a.channel)&&(!ctx.company||String(a.company_id)===String(ctx.company)));
+  useEffect(()=>{if(accountId&&!(ctx.refs.accounts||[]).some(a=>String(a.id)===String(accountId)&&a.active!==false&&["Kaspi","Wildberries","Ozon","Offline","B2B"].includes(a.channel)&&(!ctx.company||String(a.company_id)===String(ctx.company))))setAccountId("");},[accountId,ctx.company,ctx.refs.accounts]);
+  const reloadThreads=()=>api("/ai/threads").then(d=>setThreads(d.items||[]));
+  const reloadActions=()=>api("/ai/actions?status=pending").then(d=>setActions(d.items||[]));
+  const reloadPlans=()=>api("/ai/plans?status=pending").then(d=>setPlans(d.items||[]));
+  useEffect(()=>{api("/ai/agents").then(d=>setAgents(d.items||[])).catch(()=>{});reloadThreads().catch(()=>{});reloadActions().catch(()=>{});reloadPlans().catch(()=>{});},[ctx.refresh]);
+  useEffect(()=>{if(!thread)return;api(`/ai/threads/${thread.id}/messages`).then(d=>setMessages(d.items||[])).catch(e=>setError(e.message));},[thread]);
+  const newChat=async(a="rick")=>{const t=await api("/ai/threads",{method:"POST",body:{agent:a,company_id:ctx.company?Number(ctx.company):null}});setThread(t);setMessages([]);reloadThreads()};
+  const chooseAgent=async(a)=>{if(!thread)return newChat(a);const t=await api(`/ai/threads/${thread.id}`,{method:"PATCH",body:{agent:a}});setThread(t);reloadThreads()};
+  const uploadFiles=async(list)=>{if(!ctx.company){setError("Сначала выберите компанию");return}setBusy(true);try{const out=[];for(const file of Array.from(list).slice(0,8)){const fd=new FormData();fd.append("company_id",ctx.company);fd.append("file",file);out.push(await api("/documents/upload",{method:"POST",body:fd}))}setFiles(f=>[...f,...out].slice(0,8))}catch(e){setError(e.message)}finally{setBusy(false)}};
+  const send=async(e)=>{e.preventDefault();if((!text.trim()&&!files.length)||busy)return;if(!enabled){setError("Claude API не подключён. Добавьте ключ в разделе «Настройки».");return}setError("");setBusy(true);try{let t=thread;if(!t)t=await api("/ai/threads",{method:"POST",body:{agent:"rick",company_id:ctx.company?Number(ctx.company):null}});
+    const attachments=files.map(f=>({document_id:f.id,name:f.name,mime:f.mime}));const userMsg=await api(`/ai/threads/${t.id}/messages`,{method:"POST",body:{role:"user",content:text||"Проанализируй вложения",attachments}});
+    setThread(t);setMessages(m=>[...m,userMsg]);const history=[...messages.slice(-12),userMsg].map(m=>({role:m.role,content:m.content}));
+    let j=await api("/jobs",{method:"POST",body:{kind:"assistant",payload:{question:text||"Проанализируй приложенные материалы",agent:t.agent,company_id:ctx.company?Number(ctx.company):null,account_id:accountId?Number(accountId):null,start:ctx.start,end:ctx.end,thread_id:t.id,history,document_ids:attachments.map(x=>x.document_id)}}});
+    setJobState(j);setText("");setFiles([]);
+    if(["queued","running"].includes(j.status)) j=await waitForAIJob(j.id,setJobState);
+    if(j.status!=="done") throw new Error(j.error||"AI-задание завершилось с ошибкой");
+    const answer=j.result?.answer||j.result?.text||j.result?.notice||"Готово";
+    const assistantMsg=await api(`/ai/threads/${t.id}/messages`,{method:"POST",body:{role:"assistant",content:answer,meta:{job_id:j.id,agent:j.result?.agent||agent,tools_used:j.result?.tools_used||[]}}});
+    setMessages(m=>[...m,assistantMsg]);setJobState(null);reloadThreads();reloadActions();reloadPlans();}catch(e){setError(e.message)}finally{setBusy(false)}};
+  const copy=(v)=>navigator.clipboard?.writeText(v);
+  const act=async(id,verb)=>{setError("");try{await api(`/ai/actions/${id}/${verb}`,{method:"POST"});await reloadActions();ctx.bump?.()}catch(e){setError(e.message)}};
+  const planAct=async(id,verb)=>{setError("");try{await api(`/ai/plans/${id}/${verb}`,{method:"POST"});await Promise.all([reloadPlans(),reloadActions()]);ctx.bump?.()}catch(e){setError(e.message)}};
+  return <div className="chat-shell">
+    <aside className={`chat-sidebar panel ${historyOpen?"history-open":""}`}><button className="chat-history-close" onClick={()=>setHistoryOpen(false)}><X size={16}/> Закрыть историю</button><button className="primary chat-new" onClick={()=>{newChat(agent);setHistoryOpen(false)}}><Plus size={17}/>Новый чат</button><div className="chat-history"><span className="eyebrow">ИСТОРИЯ</span>{threads.map(t=><button key={t.id} className={`chat-thread ${thread?.id===t.id?"active":""}`} onClick={()=>{setThread(t);setHistoryOpen(false)}}><MessageSquare size={15}/><span><b>{t.title}</b><small>{agents.find(a=>a.id===t.agent)?.name||t.agent}</small></span></button>)}</div></aside>
+    <section className="chat-main panel"><header className="chat-head"><div className="chat-title"><button className="chat-history-toggle" onClick={()=>setHistoryOpen(v=>!v)} aria-expanded={historyOpen}><MessageSquare size={16}/> История</button><div><span className="eyebrow">QOR AI · КОМАНДА БИЗНЕСА</span><h2>{agents.find(a=>a.id===agent)?.name||"Арман"} · {AI_ROLE_TITLES[agent]||agents.find(a=>a.id===agent)?.title||"AI-руководитель"}</h2></div></div><div className="chat-head-controls"><select aria-label="Магазины для анализа AI" value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Все магазины выбранной компании</option>{aiAccounts.map(a=><option key={a.id} value={a.id}>{a.channel} · {a.name}</option>)}</select><select aria-label="AI-специалист" value={agent} onChange={e=>chooseAgent(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name} — {AI_ROLE_TITLES[a.id]||a.title}</option>)}</select></div></header>
+      {!enabled&&<div className="info-banner">Для ответов подключите Claude API в разделе «Настройки».</div>}
+      {enabled&&<div className="chat-skill-status">Навыки Claude: {claudeSkills?.enabled?`${claudeSkills.configured}/${claudeSkills.required} подключено`:`не подключены · ${claudeSkills?.configured||0}/${claudeSkills?.required||11}`}</div>}
+      {(actions.length>0||plans.length>0)&&<div className="ai-approval-summary"><ShieldCheck size={17}/><span><b>{actions.length+plans.length} ожидают решения</b><small>AI подготовил изменения; проверьте и подтвердите их ниже.</small></span></div>}
+      {jobState&&["queued","running"].includes(jobState.status)&&<div className="info-banner">Задание #{jobState.id} выполняется в фоне. Страница остаётся доступной.</div>}<div className="chat-messages">{!messages.length&&<div className="chat-empty ai-control-center"><div className="ai-welcome"><div className="ai-orb"><Sparkles size={28}/></div><div><span className="eyebrow">QOR AI · КОМАНДА БИЗНЕСА</span><h2>Управляйте бизнесом через один чат</h2><p>Финансы, продажи, товары и маркетплейсы. AI готовит анализ и действия на основе данных ERP; изменения проходят проверку и ваше подтверждение.</p></div></div><details className="ai-workflow-details"><summary>Готовые сценарии · открыть при необходимости</summary><div className="ai-workflows"><button className="ai-workflow-card" onClick={()=>setText("Подготовь ежедневный отчёт руководителю: продажи, прибыль, выплаты, изменения по Kaspi и Wildberries, проблемы и что требует моего решения. Используй текущий выбранный период и укажи, если данных не хватает.")}><span className="ai-workflow-icon"><TrendingUp size={19}/></span><b>Отчёт руководителю</b><small>Продажи, прибыль, каналы и важные отклонения</small><em>Подготовить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Проверь товары и остатки: что быстро продаётся, что заканчивается, что продаётся медленно. Дай приоритетный список и объясни выводы только по подтверждённым данным QOR.")}><span className="ai-workflow-icon"><Package size={19}/></span><b>Контроль товаров</b><small>Остатки, темп продаж и товары для внимания</small><em>Проверить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Проанализируй закупки по каждому SKU отдельно для Kaspi и Wildberries: сколько реально продано за выбранный период, какой подтверждённый остаток сейчас, какой темп продаж и стоит ли пополнить. Назови причины рекомендации и отдельно перечисли товары, которые не стоит закупать. Если данные ERP не связывают SKU с конкретным каналом или не подтверждают остаток, напиши «Не подтверждено» и не угадывай количество.")}><span className="ai-workflow-icon"><Package size={19}/></span><b>Что закупить?</b><small>Рекомендации по Kaspi и Wildberries с объяснением</small><em>Получить список →</em></button><button className="ai-workflow-card" onClick={()=>setText("Сверь продажи Kaspi и Wildberries за выбранный период. Покажи показатели каждого канала отдельно, найденные расхождения и ограничения данных. Не меняй отчёты и не пересчитывай финансовые показатели.")}><span className="ai-workflow-icon"><ShieldCheck size={19}/></span><b>Проверка каналов</b><small>Kaspi и Wildberries по данным ERP</small><em>Сверить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Подготовь финансовую сводку за выбранный период для бухгалтера: выручка, расходы, прибыль, деньги и выплаты, расшифровки по каналам и список недостающих данных. Ничего не проводи автоматически.")}><span className="ai-workflow-icon"><FileText size={19}/></span><b>Сводка бухгалтеру</b><small>Проверяемые цифры и пояснения</small><em>Подготовить →</em></button><button className="ai-workflow-card" onClick={()=>setText("Помоги сопоставить товары QOR с карточками Kaspi и Wildberries по артикулу, SKU и штрихкоду. Покажи только точные и неоднозначные совпадения отдельно; не создавай автоматические связи без подтверждения.")}><span className="ai-workflow-icon"><Sparkles size={19}/></span><b>Сопоставить карточки</b><small>Поиск общих SKU между площадками</small><em>Начать →</em></button><button className="ai-workflow-card" onClick={()=>setText("У меня новый товар. Помоги подготовить карточку товара QOR: приложу фото и характеристики. Сначала извлеки только видимые/указанные сведения, отметь неизвестное и подготовь черновик для моей проверки.")}><span className="ai-workflow-icon"><ImageIcon size={19}/></span><b>Новый товар по фото</b><small>Черновик из изображения и характеристик</small><em>Подготовить →</em></button></div></details><div className="ai-control-footer"><span><b>{agents.length||6} AI-специалистов</b><small>Руководитель · финансы · аналитика · товары · маркетинг · контент</small></span><a className="secondary" href={`/api/reports/executive.xlsx?start=${ctx.start}&end=${ctx.end}${ctx.company?`&company_id=${ctx.company}`:""}${accountId?`&account_id=${accountId}`:""}`}><Download size={16}/>Отчёт Excel</a></div></div>}
+        {messages.map(m=><div key={m.id} className={`chat-row ${m.role}`}><div className="chat-bubble"><div className="chat-role">{m.role==="user"?"Вы":agents.find(a=>a.id===(m.meta?.agent||agent))?.name||"QOR AI"}</div><div className="chat-text">{m.role==="assistant"?formatAIMessage(m.content):m.content}</div>{m.attachments?.length>0&&<div className="chat-attachments">{m.attachments.map((a,i)=><a key={i} href={`/api/documents/${a.document_id}/download`} target="_blank" rel="noreferrer"><ImageIcon size={15}/>{a.name}</a>)}</div>}{m.role==="assistant"&&<div className="chat-actions"><button onClick={()=>copy(m.content)}><Copy size={14}/>Копировать</button><button onClick={()=>setText("Переделай предыдущий ответ. ")}><RotateCcw size={14}/>Переделать</button></div>}</div></div>)}
+        {plans.filter(p=>!thread||!p.thread_id||p.thread_id===thread.id).map(p=><div key={`plan-${p.id}`} className="chat-row assistant"><div className="chat-bubble ai-approval ai-plan"><div className="chat-role">ПЛАН РИКА · НУЖНО ПОДТВЕРЖДЕНИЕ</div><b>{p.title}</b><div className="chat-text">{p.goal}</div><div className="plan-steps">{(p.steps||[]).map((x,i)=><div key={i}><span>{i+1}</span><div><b>{x.title||x.action_type}</b><small>{x.action_type}</small></div></div>)}</div><div className="chat-actions"><button className="primary" onClick={()=>planAct(p.id,"confirm")}>Подтвердить весь план</button><button onClick={()=>planAct(p.id,"cancel")}>Отмена</button></div><small>Каждый шаг повторно проверяет права и записывается в Audit Log. При ошибке выполнение останавливается.</small></div></div>)}
+        {actions.filter(a=>!thread||!a.thread_id||a.thread_id===thread.id).map(a=><div key={`action-${a.id}`} className="chat-row assistant"><div className="chat-bubble ai-approval"><div className="chat-role">Требуется подтверждение</div><b>{a.preview?.title||a.action_type}</b><div className="chat-text">{a.preview?.warning}</div><pre>{JSON.stringify(a.preview?.payload||{},null,2)}</pre><div className="chat-actions"><button className="primary" onClick={()=>act(a.id,"confirm")}>Подтвердить</button><button onClick={()=>act(a.id,"cancel")}>Отмена</button></div></div></div>)}
+        {busy&&<div className="chat-row assistant"><div className="chat-bubble typing"><Spinner/><span>{agents.find(a=>a.id===agent)?.name||"AI"} работает…</span></div></div>}<div ref={messagesEndRef}/></div>
+      <ErrorBox error={error}/><form className="chat-composer" onSubmit={send}>{files.length>0&&<div className="composer-files">{files.map(f=><span key={f.id}>{f.name}<button type="button" onClick={()=>setFiles(x=>x.filter(y=>y.id!==f.id))}>×</button></span>)}</div>}{files.some(f=>f.name?.toLowerCase().endsWith(".xlsx")||["image/png","image/jpeg","image/webp"].includes(f.mime))&&<button type="button" className="secondary" disabled={templateBusy||busy} onClick={async()=>{setError("");setTemplateBusy(true);try{const sample=files.find(f=>f.name?.toLowerCase().endsWith(".xlsx"))||files.find(f=>["image/png","image/jpeg","image/webp"].includes(f.mime));const params=new URLSearchParams({document_id:String(sample.id),start:ctx.start,end:ctx.end,...(accountId?{account_id:accountId}:{})});await downloadApiFile(`/reports/template.xlsx?${params.toString()}`,"QOR-отчет-по-образцу.xlsx")}catch(e){setError(e.message)}finally{setTemplateBusy(false)}}}><FileText size={16}/>{templateBusy?"Формируем Excel…":"Сформировать Excel по образцу"}</button>}<div className="composer-row"><label className="attach-btn" title="Фото или файл"><Paperclip size={20}/><input type="file" multiple accept="image/*,.pdf,.csv,.xlsx" onChange={e=>uploadFiles(e.target.files)}/></label><textarea rows="1" value={text} onChange={e=>setText(e.target.value)} placeholder="Сообщение QOR AI…" onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send(e)}}}/><button className="send-btn" disabled={!enabled||busy||(!text.trim()&&!files.length)}><Send size={19}/></button></div><small>AI использует только разрешённые данные ERP. Финансовые цифры рассчитывает backend.</small></form>
+    </section>
+    <aside className="chat-agents panel"><span className="eyebrow">AI-КОМАНДА</span>{agents.map(a=><button key={a.id} className={`agent-mini ${agent===a.id?"active":""}`} onClick={()=>chooseAgent(a.id)}><span>{a.name.slice(0,1)}</span><div><b>{a.name}</b><small>{AI_ROLE_TITLES[a.id]||a.title}</small></div></button>)}</aside>
+  </div>
+}
+
+function AIPage({ page, ctx, enabled, claudeSkills }) {
+  const [text, setText] = useState(""),
+    [doc, setDoc] = useState(""),
+    [job, setJob] = useState(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [docs, setDocs] = useState([]),
+    [agents, setAgents] = useState([]),
+    [agent, setAgent] = useState("rick"),
+    [designMode, setDesignMode] = useState("main_photo"),
+    [variants, setVariants] = useState(1),
+    [products, setProducts] = useState([]),
+    [productId, setProductId] = useState(""),
+    [studioCard, setStudioCard] = useState(null);
+  useEffect(() => {
+    if (page === "assistant") api("/ai/agents").then((d) => setAgents(d.items || [])).catch(() => {});
+    api("/data/documents?limit=100").then((d) => setDocs(d.items)).catch(() => {});
+    if (["content","designer"].includes(page)) api("/data/products?limit=200").then((d)=>setProducts(d.items||[])).catch(()=>{});
+  }, [page, ctx.refresh]);
+  // Hooks must be called in the same order when the user switches between
+  // Assistant, Content and Designer. This return is intentionally after all
+  // hooks, fixing the former production-only conditional-Hooks crash.
+  if (page === "assistant") return <AIWorkspace ctx={ctx} enabled={enabled} claudeSkills={claudeSkills}/>;
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      let j = await api("/jobs", {
+        method: "POST",
+        body: {
+          kind: page,
+          payload: {
+            question: text,
+            agent: page === "assistant" ? agent : undefined,
+            facts: text,
+            prompt: text,
+            document_id: doc ? Number(doc) : null,
+            product_id: productId ? Number(productId) : null,
+            company_id: ctx.company
+              ? Number(ctx.company)
+              : page === "assistant"
+                ? null
+                : ctx.refs.companies?.[0]?.id,
+            start: ctx.start,
+            end: ctx.end,
+            mode: page === "designer" ? designMode : undefined,
+            variants: page === "designer" ? Number(variants) : undefined,
+          },
+        },
+      });
+      setJob(j);
+      if (["queued", "running"].includes(j.status)) j = await waitForAIJob(j.id, setJob);
+      setJob(j);
+      if (j.status === "failed") throw new Error(j.error || "AI-задача завершилась с ошибкой");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ai-layout">
+      <div className="panel ai-main">
+        <div className="ai-title">
+          <div className="ai-orb">
+            <Sparkles size={25} />
+          </div>
+          <div>
+            <h2>
+              {page === "assistant"
+                ? (agents.find((a) => a.id === agent)?.name || "Арман") + " · " + (agents.find((a) => a.id === agent)?.title || "AI-руководитель")
+                : page === "content"
+                  ? "Карточка из фактов о товаре"
+                  : "Новая визуальная идея"}
+            </h2>
+            <p>
+              {page === "assistant"
+                ? (agent === "rick" ? "Главная точка общения: Арман помогает владельцу увидеть картину бизнеса и выбрать действие." : "Специализированный AI работает только в своей зоне и использует проверенные данные ERP.")
+                : page === "content"
+                  ? "Укажите характеристики поставщика и выберите загруженное фото."
+                  : "Опишите композицию, фон и настроение изображения."}
+            </p>
+          </div>
+        </div>
+        {!enabled && (
+          <div className="info-banner">
+            Claude API пока не подключён. Добавьте ключ в разделе «Настройки».
+            Финансовая аналитика и калькулятор работают без ключа.
+          </div>
+        )}
+        {page === "assistant" && (
+          <div className="ai-team">
+            <div className="ai-team-head"><span className="eyebrow">AI-КОМАНДА</span><strong>Выберите специалиста или пишите Арману</strong></div>
+            <div className="agent-strip">
+              {agents.map((a) => (
+                <button type="button" key={a.id} className={`agent-card ${agent === a.id ? "active" : ""}`} onClick={() => setAgent(a.id)}>
+                  <span className="agent-avatar">{a.name.slice(0,1)}</span>
+                  <span><b>{a.name}</b><small>{a.title}</small><em>{a.scope}</em></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {page === "assistant" && (
+          <div className="prompt-chips">
+            {[
+              "Сколько мы заработали в этом месяце?",
+              "Какой канал самый прибыльный?",
+              "Какие товары скоро закончатся?",
+              "Какие товары плохо продаются?",
+            ].map((p) => (
+              <button className="secondary" key={p} onClick={() => setText(p)}>
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
+        <form onSubmit={submit}>
+          <label>
+            {page === "assistant"
+              ? "Ваш вопрос"
+              : page === "content"
+                ? "Характеристики поставщика"
+                : "Задание для дизайнера"}
+            <textarea
+              rows={page === "assistant" ? 4 : 7}
+              required
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={
+                page === "content"
+                  ? "Укажите только известные свойства: название, размер, цвет, материал…"
+                  : "Напишите здесь…"
+              }
+            />
+          </label>
+          {["content", "designer"].includes(page) && (<label>Товар из ERP<select value={productId} onChange={(e)=>setProductId(e.target.value)}><option value="">Выберите товар</option>{products.map(p=><option key={p.id} value={p.id}>{p.sku} · {p.name}</option>)}</select></label>)}
+          {["content", "designer"].includes(page) && (
+            <label>
+              {page === "designer" ? "Исходная фотография товара (обязательно)" : "Фотография товара"}
+              <select value={doc} onChange={(e) => setDoc(e.target.value)}>
+                <option value="">Без фотографии</option>
+                {docs
+                  .filter((d) => d.mime.startsWith("image/"))
+                  .map((d) => (
+                    <option value={d.id} key={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
+          {page === "designer" && <div className="notice">Генерация изображений отключена: сайт использует только Claude API. Чат, анализ и отчёты продолжают работать через Claude.</div>}
+          {page === "designer" && (
+            <div className="form-grid two">
+              <label>Режим<select value={designMode} onChange={(e)=>setDesignMode(e.target.value)}>
+                <option value="main_photo">Marketplace main photo</option><option value="background">Замена/очистка фона</option>
+                <option value="enhance">Улучшение качества</option><option value="infographic">Инфографика</option>
+                <option value="banner">Баннер</option><option value="lifestyle">Lifestyle</option><option value="creative">Рекламный креатив</option>
+              </select></label>
+              <label>Вариантов<select value={variants} onChange={(e)=>setVariants(e.target.value)}><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+            </div>
+          )}
+          <button
+            className="primary"
+            disabled={
+              !enabled || busy || page === "designer" || (page === "designer" && !doc) || (job && ["queued", "running"].includes(job.status))
+            }
+          >
+            <Sparkles size={17} />
+            {page === "assistant" ? "Получить анализ" : "Создать"}
+          </button>
+        </form>
+        <ErrorBox error={error} />
+        {job && (
+          <div className="ai-result">
+            <span className="badge gray">
+              Задание #{job.id} · {job.status}
+            </span>
+            {["queued", "running"].includes(job.status) && <Spinner />}
+            <ErrorBox error={job.error} />
+            {job.status === "failed" && job.attempts < 3 && (
+              <button
+                className="secondary"
+                onClick={() =>
+                  api("/jobs/" + job.id + "/retry", { method: "POST" })
+                    .then(setJob)
+                    .catch((e) => setError(e.message))
+                }
+              >
+                Повторить
+              </button>
+            )}
+            {job.status === "done" && (
+              <>
+                <div className="ai-answer">
+                  {job.result.answer || job.result.text || job.result.notice}
+                </div>
+                {job.result.document_ids?.length > 1 && <div className="studio-variants"><h3>AI-варианты</h3><div className="variant-grid">{job.result.document_ids.map((id,i)=><button type="button" key={id} className="variant-card" onClick={()=>setDoc(String(id))}><img src={`/api/documents/${id}/download`}/><b>Вариант {i+1}</b><small>{String(doc)===String(id)?"Выбран":"Выбрать"}</small></button>)}</div></div>}
+                {job.result.document_id && (
+                  <a
+                    className="secondary"
+                    href={
+                      "/api/documents/" + job.result.document_id + "/download"
+                    }
+                  >
+                    <Download size={16} />
+                    Скачать изображение
+                  </a>
+                )}
+                {page === "designer" && job.result.document_id && productId && <div className="studio-actions"><button type="button" className="primary" onClick={async()=>{try{const card=await api("/product-studio/cards",{method:"POST",body:{product_id:Number(productId),company_id:ctx.company?Number(ctx.company):undefined,marketplace:"kaspi",image_document_ids:[Number(doc||job.result.document_id)],title:products.find(p=>String(p.id)===String(productId))?.name||"",description:text,characteristics:{}}});setStudioCard(card)}catch(e){setError(e.message)}}}>Проверить карточку Kaspi</button>{studioCard&&<div className={`validation-box ${studioCard.validation?.passed?"ok":"bad"}`}><b>{studioCard.validation?.passed?"QOR Validator: пройден":"Нужно исправить"}</b>{studioCard.validation?.errors?.map(x=><small key={x}>{x}</small>)}{studioCard.validation?.passed&&<button type="button" className="secondary" onClick={()=>api(`/product-studio/cards/${studioCard.id}/publish`,{method:"POST",body:{review_days:7,auto_optimize:true,auto_publish:false,rollback:true,max_generations:3}}).then(setStudioCard).catch(e=>setError(e.message))}>Запустить · контроль через 7 дней</button>}</div>}</div>}
+                {job.result.data && (
+                  <>
+                    <h3>Проверенные показатели</h3>
+                    <div className="secondary-kpis">
+                      {[
+                        ["Выручка", job.result.data.revenue],
+                        ["Чистая прибыль", job.result.data.net_profit],
+                        ["Деньги", job.result.data.cash],
+                      ].map(([k, v]) => (
+                        <div key={k}>
+                          <span>{k}</span>
+                          <strong>{money(v)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="muted">
+                      Источник: {job.result.source}. Период:{" "}
+                      {job.result.period?.join(" — ")}
+                    </p>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="panel ai-side">
+        <span className="eyebrow">КОНТРОЛЬ ДАННЫХ</span>
+        <h3>
+          {page === "assistant"
+            ? "Цифры из системы"
+            : "Только подтверждённые факты"}
+        </h3>
+        <p>
+          {page === "assistant"
+            ? "Выручку, себестоимость, прибыль и остатки рассчитывает финансовое ядро. AI получает готовый отчёт в пределах ваших прав."
+            : "Неизвестные характеристики требуют уточнения. Проверьте текст и изображение перед публикацией на маркетплейсе."}
+        </p>
+        <div className="rule">
+          <ShieldCheck size={18} />
+          <span>AI не изменяет финансовые записи</span>
+        </div>
+        <div className="rule">
+          <FileText size={18} />
+          <span>
+            Данные отправляются в настроенный AI API только по запросу
+          </span>
+        </div>
+        {page === "content" && (
+          <button
+            className="secondary"
+            onClick={() => ctx.navigate("documents")}
+          >
+            Загрузить фото товара
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+function Calculator() {
+  const [v, setV] = useState({
+      quantity: 5000, purchase_price: 20, fx_rate: 70, price: 3990,
+      delivery: 350000, customs: 120000, broker: 50000, certification: 40000,
+      packaging: 100000, other_import: 30000, commission_percent: 12,
+      marketplace_logistics_unit: 180, advertising_percent: 5, advertising: 0,
+      return_percent: 5, target_margin_percent: 20,
+    }), [result, setResult] = useState(null), [error, setError] = useState("");
+  const fields = {
+    quantity:"Количество, шт", purchase_price:"Закупочная цена, валюта", fx_rate:"Курс к ₸",
+    price:"Плановая цена продажи, ₸", delivery:"Китай → Казахстан, ₸", customs:"Таможня, ₸",
+    broker:"Брокер, ₸", certification:"Сертификат, ₸", packaging:"Упаковка, ₸",
+    other_import:"Прочие импортные расходы, ₸", commission_percent:"Комиссия marketplace, %",
+    marketplace_logistics_unit:"Логистика marketplace / шт, ₸", advertising_percent:"Реклама, % от выручки",
+    advertising:"Фиксированная реклама, ₸", return_percent:"Возвраты, %", target_margin_percent:"Целевая чистая маржа, %",
+  };
+  const submit=async(e)=>{e.preventDefault();try{setResult(await api("/calculator",{method:"POST",body:v}));setError("")}catch(e){setError(e.message)}};
+  const rows = result ? [
+    ["full_cost_total","Полный Full Cost партии"],["full_cost_unit","Full Cost / шт"],["capital_required","Необходимый капитал"],
+    ["revenue","Ожидаемая выручка"],["cogs","COGS"],["gross_profit","Валовая прибыль"],["commission","Комиссия"],
+    ["marketplace_logistics","Логистика marketplace"],["advertising","Реклама"],["net_profit","Чистая прибыль"],
+    ["minimum_price","Минимальная цена"],["recommended_price","Рекомендованная цена"],
+  ] : [];
+  return <div className="report-grid">
+    <form className="panel padded" onSubmit={submit}><h2>AI Product Calculator</h2><p className="muted">Финансовое ядро считает детерминированно — AI не придумывает цифры.</p>
+      <div className="form-grid">{Object.entries(fields).map(([k,l])=><label key={k}>{l}<input required type="number" min={k==="quantity"?1:0} step="any" value={v[k]} onChange={e=>setV({...v,[k]:e.target.value})}/></label>)}</div>
+      <ErrorBox error={error}/><button className="primary">Рассчитать экономику</button></form>
+    <div className="panel padded"><h2>Результат сценария</h2>{result?<><div className="calc-profit"><span>{result.decision}</span><strong>{decimal(result.net_profit)} ₸</strong></div>
+      {rows.map(([k,l])=><div className="statement-line" key={k}><span>{l}</span><strong>{decimal(result[k])} ₸</strong></div>)}
+      <div className="statement-line"><span>Маржа</span><strong>{decimal(result.margin_percent)}%</strong></div><div className="statement-line"><span>ROI</span><strong>{decimal(result.roi_percent)}%</strong></div>
+      <div className="statement-line"><span>Break-even</span><strong>{result.break_even_units ?? "—"} шт</strong></div><p className="muted">{result.turnover_notice}</p><p className="muted">{result.method}</p></>:<Empty text="Введите параметры и нажмите «Рассчитать экономику»"/>}</div>
+  </div>;
+}
+const IMPORT_ALIASES = {
+  reference:["reference","номер","номер заказа","заказ","order id","order_id","id заказа","документ"],
+  external_id:["external_id","номер заказа","код заказа","id заказа","order id","order_id","номер документа"],
+  event_type:["event_type","тип операции","операция"],
+
+  date:["date","дата","дата продажи","дата заказа","күн","сату күні"],
+  company_id:["company_id","компания id","id компании"], account_id:["account_id","аккаунт id","канал id"],
+  product_id:["product_id","товар id","id товара"], customer_id:["customer_id","клиент id","id клиента"],
+  sku:["sku","артикул","артикул продавца","vendor code","код товара"], name:["name","товар","наименование","название товара","өнім"],
+  category:["category","категория","санат"], quantity:["quantity","количество","кол-во","qty","штук","саны"],
+  unit_price:["unit_price","цена продажи","цена","стоимость","price","сумма за единицу","сумма продажи","сумма заказа","сумма"],
+ price:["price","цена","розничная цена"],
+  unit_cost:["unit_cost","себестоимость","закупочная цена","цена закупки","cost"], commission:["commission","комиссия","комиссия маркетплейса","комиссия kaspi","комиссия банка"],
+
+  logistics:["logistics","логистика","доставка","логистика kaspi","доставка kaspi","стоимость доставки для продавца","доставка за счет продавца","доставка за счёт продавца","расходы на доставку"],
+ advertising:["advertising","реклама","рекламные расходы"], paid:["paid","оплачено","оплата"],
+  amount:["amount","сумма","расход","сумма расхода"], description:["description","описание","назначение"], category_expense:["категория расхода"],
+  supplier:["supplier","поставщик"], extra_cost:["extra_cost","доп расходы","дополнительные расходы"], currency:["currency","валюта"], fx_rate:["fx_rate","курс"],
+  min_stock:["min_stock","минимальный остаток"], reason:["reason","причина"], project:["project","проект"], payment_method:["payment_method","способ оплаты"]
+};
+function normHeader(v){return String(v||"").trim().toLowerCase().replace(/[._-]+/g," ").replace(/\s+/g," ")}
+function autoImportMapping(fields, headers){
+  const normalized=headers.map(h=>[h,normHeader(h)]); const out={};
+  for(const f of fields){ const aliases=[f,...(IMPORT_ALIASES[f]||[])].map(normHeader); const hits=normalized.filter(([,h])=>aliases.includes(h)); if(hits.length===1) out[f]=hits[0][0]; }
+  return out;
+}
+function prepareKaspiReportRows(rows, headers, accountId) {
+  const norm = (v) => normHeader(v).replace(/ё/g,"е");
+  const find = (aliases) => {
+    for (const alias of aliases) {
+      const hit = headers.find((h) => norm(h) === alias);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const orderCol = find(["номер заказа","№ заказа","код заказа","id заказа","order id","order_id","заказ"]);
+  const statusCol = find(["статус заказа","статус","состояние заказа","order status"]);
+  const operationCol = find(["тип операции","операция","вид операции","тип транзакции","operation","transaction type"]);
+  const skuCol = find(["артикул продавца","артикул","sku","vendor code","код товара"]);
+  const lineCol = find(["id позиции","код позиции","номер позиции","order entry id","entry id","line id"]);
+  const returnDateCol = find(["дата возврата","дата возврата средств","дата возврата товара","return date","refund date"]);
+  const dateCol = find(["дата выдачи","дата продажи","дата завершения заказа","дата завершения","дата операции","sale date","completion date","дата заказа","дата","order date"]);
+  const qtyCol = find(["количество","кол во","qty","quantity","саны"]);
+  const totalSaleCol = find(["сумма продажи","сумма товара","стоимость товара","сумма по позиции","итого по товару","line total","total price","totalprice","сумма заказа","сумма"]);
+  const unitSaleCol = find(["цена за единицу","цена товара","цена продажи","unit price","unit_price","price"]);
+  const saleCol = totalSaleCol || unitSaleCol;
+  const commissionCol = find(["комиссия kaspi","комиссия банка","комиссия маркетплейса","комиссия"]);
+  const orderCommissionCol = find(["комиссия за заказ","order commission"]);
+  const sellerDeliveryCol = find(["стоимость доставки для продавца","доставка за счет продавца","доставка за счёт продавца","логистика kaspi","логистика","расходы на доставку"]);
+  const buyerDeliveryCol = find(["стоимость доставки для покупателя","доставка за счет покупателя","доставка за счёт покупателя","стоимость доставки"]);
+  const discountCol = find(["скидка","скидка на товар","discount"]);
+  const refundCol = find(["сумма возврата","возврат средств","сумма возврата покупателю","refund","refund amount"]);
+  if (!orderCol || !skuCol || !dateCol || !saleCol) return null;
+  const numeric = (v) => Number(String(v ?? "").replace(/[\s\u00a0\u202f]/g,"").replace(",", ".")) || 0;
+  const out = [];
+  const seenOrderCharges = new Set();
+  for (const row of rows) {
+    const id = String(row[orderCol] || "").trim();
+    if (!id) continue;
+    const status = norm((statusCol && row[statusCol]) || (operationCol && row[operationCol]) || "");
+    const sku = String(row[skuCol] || "").trim();
+    const lineId = lineCol && row[lineCol] ? id + ":" + String(row[lineCol]).trim() : (sku ? id + ":" + sku : id);
+    const quantity = Math.max(1, Math.abs(numeric(qtyCol ? row[qtyCol] : 1) || 1));
+    const amount = Math.abs(numeric(row[saleCol]));
+    const unitPrice = totalSaleCol
+      ? Math.ceil(amount * 100 / quantity) / 100
+      : amount;
+    const discount = totalSaleCol
+      ? Math.max(0, Math.round((unitPrice * quantity - amount) * 100) / 100)
+      : Math.abs(numeric(discountCol ? row[discountCol] : 0));
+    const base = {
+      ...row,
+      __qor_order_id: id,
+      __qor_date: row[dateCol] || "",
+      __qor_sku: row[skuCol] || "",
+      __qor_quantity: quantity,
+      __qor_unit_price: unitPrice,
+      __qor_discount: discount,
+      __qor_refund: refundCol ? Math.abs(numeric(row[refundCol])) : null,
+      __qor_sale_reference: "Kaspi:" + accountId + ":" + lineId,
+    };
+    const cancelled = /(отмен|cancel|cancell)/.test(status);
+    const returned = /(возврат|вернул|return|refund)/.test(status);
+    const completed = /(выдан|заверш|получен|completed|delivered|продаж|sale)/.test(status);
+    const isSaleReportRow = !statusCol && !operationCol;
+    if (cancelled) {
+      out.push({...base,__qor_event_type:"order",__qor_external_id:lineId});
+    } else if (returned) {
+      out.push({...base,__qor_date:returnDateCol ? (row[returnDateCol] || "") : "",__qor_event_type:"return",__qor_external_id:lineId+":return"});
+    } else if (completed || isSaleReportRow) {
+      out.push({...base,__qor_event_type:"sale",__qor_external_id:lineId});
+    } else {
+      out.push({...base,__qor_event_type:"order",__qor_external_id:lineId});
+    }
+    const commission = commissionCol ? Math.abs(numeric(row[commissionCol])) : 0;
+    const commissionIdentity = orderCommissionCol === commissionCol ? id : lineId;
+    const commissionKey = commissionIdentity + ":commission:" + commission;
+    if (commission > 0 && !seenOrderCharges.has(commissionKey)) {
+      seenOrderCharges.add(commissionKey);
+      out.push({...base,__qor_event_type:"commission",__qor_external_id:commissionIdentity+":commission",__qor_amount:commission});
+    }
+    const sellerDelivery = sellerDeliveryCol ? Math.abs(numeric(row[sellerDeliveryCol])) : 0;
+    const deliveryKey = id + ":logistics:" + sellerDelivery;
+    if (sellerDelivery > 0 && !seenOrderCharges.has(deliveryKey)) {
+      seenOrderCharges.add(deliveryKey);
+      out.push({...base,__qor_event_type:returned?"return_logistics":"logistics",__qor_external_id:(returned?"return-delivery:":"delivery:")+id,__qor_amount:sellerDelivery});
+    }
+    if (buyerDeliveryCol) base.__qor_buyer_delivery = row[buyerDeliveryCol];
+  }
+  return out;
+}
+function Imports({ ctx }) {
+  const [kind, setKind] = useState("products"),
+    [sourceFile,setSourceFile] = useState(null),
+    [sheet,setSheet] = useState(""), [headerRow,setHeaderRow] = useState(""),
+    [parsed, setParsed] = useState(null),
+    [mapping, setMapping] = useState({}),
+    [fields, setFields] = useState([]),
+    [preview, setPreview] = useState(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const kinds = {
+    opening: "Начальные остатки / историческая себестоимость",
+    products: "Товары",
+    sales: "Продажи",
+    returns: "Возвраты",
+    stock: "Остатки (изменения)",
+    purchases: "Закупки",
+    expenses: "Расходы",
+    b2b: "B2B продажи",
+    reports: "Продажи из отчёта",
+    marketplace_reports: "Отчёт маркетплейса (продажи / возвраты / остатки)",
+    bank: "Банк / деньги",
+  };
+  useEffect(() => {
+    api("/import/fields/" + kind)
+      .then((d) => setFields(d.fields))
+      .catch((e) => setError(e.message));
+    setParsed(null);
+    setSourceFile(null);setSheet("");setHeaderRow("");
+    setPreview(null);
+    setMapping({});
+  }, [kind]);
+  const parse = async (e) => {
+    const file = e?.target?.files?.[0] || sourceFile;
+    if (!file) return;
+    setError("");
+    setBusy(true);
+    setPreview(null);
+    try {
+      const f = new FormData();
+      f.append("file", file);
+      if (!e && sheet) f.append("sheet",sheet);
+      if (!e && headerRow) f.append("header_row",headerRow);
+      const definitions = await api("/import/fields/" + kind);
+      const d = await api("/import/parse", { method: "POST", body: f });
+      setSourceFile(file);setSheet(d.selected_sheet || "");setHeaderRow(String(d.header_row || 1));
+      const defaultAccount = ctx.refs.accounts?.find((x) => x.channel === "Kaspi" && (!ctx.company || x.company_id == ctx.company));
+      const kaspiRows = kind === "marketplace_reports" && defaultAccount
+        ? prepareKaspiReportRows(d.rows, d.headers, defaultAccount.id) : null;
+      if (kaspiRows) {
+        const synthetic = {...d, rows: kaspiRows};
+        setParsed(synthetic);
+        setMapping({
+          event_type:"__qor_event_type", external_id:"__qor_external_id", date:"__qor_date",
+          order_id:"__qor_order_id", sku:"__qor_sku", quantity:"__qor_quantity", unit_price:"__qor_unit_price",
+          discount:"__qor_discount", refund:"__qor_refund", sale_reference:"__qor_sale_reference", amount:"__qor_amount",
+        });
+      } else {
+        setParsed(d);
+        setMapping(autoImportMapping(definitions.fields, d.headers));
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+      if (e) e.target.value = "";
+    }
+  };
+  const validate = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      setPreview(
+        await api("/import/preview", {
+          method: "POST",
+          body: { kind, rows: parsed.rows, mapping, defaults: {
+            company_id: ctx.company || ctx.refs.companies?.[0]?.id || null,
+            account_id: kind === "marketplace_reports"
+              ? (ctx.refs.accounts?.find(a => a.channel === "Kaspi" && (!ctx.company || a.company_id == ctx.company))?.id || null)
+              : ((kind === "sales" || kind === "reports")
+                ? (ctx.refs.accounts?.find(a => a.channel === "Offline" && (!ctx.company || a.company_id == ctx.company))?.id || null)
+                : (kind === "b2b" ? (ctx.refs.accounts?.find(a => a.channel === "B2B" && (!ctx.company || a.company_id == ctx.company))?.id || null) : null))
+          } },
+        }),
+      );
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const commit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const d = await api("/import/" + preview.id + "/confirm", {
+        method: "POST",
+      });
+      ctx.notify("Импортировано строк: " + d.count);
+      setParsed(null);
+      setPreview(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className="panel padded">
+        <div className="import-steps">
+          <span className="selected">01 Файл</span>
+          <span className={parsed ? "selected" : ""}>02 Сопоставление</span>
+          <span className={preview ? "selected" : ""}>
+            03 Проверка и импорт
+          </span>
+        </div>
+        <div className="import-top">
+          <label>
+            Что импортируем
+            <select value={kind} onChange={(e) => setKind(e.target.value)}>
+              {Object.entries(kinds).map(([k, l]) => (
+                <option value={k} key={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <a
+            className="secondary"
+            href={"/api/templates/" + kind + "?format=xlsx"}
+          >
+            <Download size={16} />
+            Шаблон XLSX
+          </a>
+          <a
+            className="secondary"
+            href={"/api/export/" + kind + "?format=xlsx"}
+          >
+            <Download size={16} />
+            Экспорт
+          </a>
+        </div>
+        <label className="dropzone">
+          <Upload size={28} />
+          <strong>{busy ? "Обрабатываем…" : "Выбрать CSV или Excel"}</strong>
+          <span>UTF-8 CSV / XLSX · до 5 МБ · до 5000 строк</span>
+          <input
+            type="file"
+            accept=".csv,.xlsx"
+            onChange={parse}
+            disabled={busy}
+          />
+        </label>
+        <p className="muted">
+          {kind === "opening"
+            ? "Для прибыли Wildberries загрузите Excel поставщика: Артикул/SKU, Количество, Себестоимость, Дата, Валюта и Номер. Артикул WB сопоставляется с товаром из API автоматически. Дата себестоимости должна быть не позже продажи — после импорта система пересчитает COGS и прибыль, не создавая повторных продаж."
+            : "QOR автоматически распознаёт распространённые названия колонок на русском/казахском/английском. Для продаж товар можно указать по SKU/артикулу — ID товара подставится автоматически; выбранная компания и Offline/B2B канал также подставляются автоматически. Перед записью всегда показывается проверка. Остатки задаются изменением, финансовые строки требуют уникального номера/reference."}
+        </p>
+        <ErrorBox error={error} />
+        {parsed && (
+          <>
+            <h3>Сопоставление колонок · {parsed.count} строк</h3>
+            <div className="row-actions">{parsed.sheets && <label>Лист<select value={sheet} onChange={e=>setSheet(e.target.value)}>{parsed.sheets.map(name=><option key={name}>{name}</option>)}</select></label>}<label>Строка заголовков<input type="number" min="1" max="20" value={headerRow} onChange={e=>setHeaderRow(e.target.value)}/></label><button disabled={busy} onClick={()=>parse()}>Перечитать файл</button></div>
+            <div className="mapping-grid">
+              {fields.map((f) => (
+                <label key={f}>
+                  {labels[f] || f}
+                  <small>{f}</small>
+                  <select
+                    value={mapping[f] || ""}
+                    onChange={(e) => {
+                      const m = { ...mapping };
+                      if (e.target.value) m[f] = e.target.value;
+                      else delete m[f];
+                      setMapping(m);
+                      setPreview(null);
+                    }}
+                  >
+                    <option value="">Не импортировать</option>
+                    {parsed.headers.map((h) => (
+                      <option key={h}>{h}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <h3>Первые строки файла</h3>
+            <Table raw
+                rows={parsed.rows.slice(0, 5)} cols={parsed.headers} />
+            <button className="primary" disabled={busy} onClick={validate}>
+              Проверить перед импортом
+            </button>
+          </>
+        )}
+        {preview && (
+          <div className="preview">
+            <h3>
+              {preview.errors.length
+                ? "Найдены ошибки: " + preview.errors.length
+                : "Проверка пройдена"}
+            </h3>
+            {preview.errors.length ? (
+              <>
+                <Table rows={preview.errors} cols={["row", "error"]} />
+                <a
+                  className="secondary"
+                  href={"/api/import/" + preview.id + "/errors"}
+                >
+                  Скачать отчёт ошибок
+                </a>
+              </>
+            ) : (
+              <>
+                <p>
+                  Будут проведены все {preview.count} строк одной транзакцией.
+                  При конфликте ни одна строка не будет сохранена.
+                </p>
+                <button className="primary" disabled={busy} onClick={commit}>
+                  Подтвердить импорт {preview.count} строк
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+function Roles() {
+  const { data, error, loading } = useLoad("/roles", 0);
+  return loading ? (
+    <Spinner />
+  ) : error ? (
+    <ErrorBox error={error} />
+  ) : (
+    <div className="role-grid">
+      {Object.entries(data).map(([role, permissions]) => (
+        <div className="panel padded" key={role}>
+          <ShieldCheck size={25} />
+          <h2>{role}</h2>
+          <div className="permission-list">
+            {permissions.map((p) => (
+              <span className="badge gray" key={p}>
+                {p === "*" ? "Полный доступ" : p}
+              </span>
+            ))}
+          </div>
+          <p className="muted">
+            {role === "Owner"
+              ? "Видит все компании и управляет пользователями."
+              : "Доступ только к назначенным компаниям. :read — только чтение."}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
+  const [name, setName] = useState(settings.business_name || ""),
+    [old, setOld] = useState(""),
+    [password, setPassword] = useState(""),
+    [error, setError] = useState("");
+  const [installingSkills, setInstallingSkills] = useState(false);
+  const [dailyReport, setDailyReport] = useState({enabled:false,time:"09:00",recipient:"",consent:false,ai_summary:false,provider:{configured:false,missing:[]},recent:[]});
+  const [dailyReportBusy, setDailyReportBusy] = useState(false);
+  const [siteIntegrations, setSiteIntegrations] = useState({claude:{configured:false},whatsapp:{configured:false,inbound_enabled:false,inbound_ready:false}});
+  const [claudeKey, setClaudeKey] = useState("");
+  const [whatsappForm, setWhatsappForm] = useState({access_token:"",phone_number_id:"",template_name:"",language:"ru",graph_version:"v26.0",app_secret:"",webhook_verify_token:"",inbound_enabled:false});
+  const [integrationBusy, setIntegrationBusy] = useState(false);
+  useEffect(() => {
+    api("/automation/daily-report").then(setDailyReport).catch((e) => setError(e.message));
+    api("/settings/integrations").then((data) => {
+      setSiteIntegrations(data);
+      setWhatsappForm((current) => ({...current, phone_number_id:data.whatsapp?.phone_number_id||"", template_name:data.whatsapp?.template_name||"", language:data.whatsapp?.language||"ru", graph_version:data.whatsapp?.graph_version||"v26.0",inbound_enabled:!!data.whatsapp?.inbound_enabled}));
+    }).catch((e) => setError(e.message));
+  }, []);
+  const saveClaudeConnection = async (e) => {
+    e.preventDefault(); setIntegrationBusy(true); setError("");
+    try {
+      const status = await api("/settings/integrations/claude", {method:"PUT",body:{api_key:claudeKey}});
+      setSiteIntegrations((current) => ({...current, claude:status}));
+      setClaudeKey("");
+      ctx.notify(status.configured ? "Ключ Claude сохранён на сервере" : "Настройка Claude удалена");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const testClaudeConnection = async () => {
+    setIntegrationBusy(true); setError("");
+    try {
+      const result = await api("/settings/integrations/claude/test", {method:"POST"});
+      ctx.notify(result.message || "Claude API отвечает");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const saveWhatsAppConnection = async (e) => {
+    e.preventDefault(); setIntegrationBusy(true); setError("");
+    try {
+      const status = await api("/settings/integrations/whatsapp", {method:"PUT",body:whatsappForm});
+      setSiteIntegrations((current) => ({...current, whatsapp:status}));
+      setDailyReport((current) => ({...current, provider:status.provider || status}));
+      setWhatsappForm((current) => ({...current,access_token:"",app_secret:"",webhook_verify_token:""}));
+      ctx.notify("Настройки WhatsApp сохранены");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const testWhatsAppConnection = async () => {
+    setIntegrationBusy(true); setError("");
+    try {
+      const result = await api("/settings/integrations/whatsapp/test", {method:"POST"});
+      ctx.notify(result.phone ? ("WhatsApp API подключён: " + result.phone) : "WhatsApp API подключён");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const clearWhatsAppConnection = async () => {
+    setIntegrationBusy(true); setError("");
+    try {
+      const status = await api("/settings/integrations/whatsapp", {method:"PUT",body:{clear:true}});
+      setSiteIntegrations((current) => ({...current, whatsapp:status}));
+      setDailyReport((current) => ({...current, provider:status.provider || status}));
+      ctx.notify("Настройки WhatsApp удалены");
+    } catch (e) { setError(e.message); } finally { setIntegrationBusy(false); }
+  };
+  const saveDailyReport = async (e) => {
+    e.preventDefault();
+    setDailyReportBusy(true);
+    setError("");
+    try {
+      const saved = await api("/automation/daily-report", {method:"PUT", body:{enabled:dailyReport.enabled,time:dailyReport.time,recipient:dailyReport.recipient,consent:dailyReport.consent,ai_summary:dailyReport.ai_summary}});
+      const current = await api("/automation/daily-report");
+      setDailyReport(current);
+      ctx.notify(saved.enabled ? "Ежедневный отчёт включён" : "Настройки ежедневного отчёта сохранены");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDailyReportBusy(false);
+    }
+  };
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/settings", { method: "PUT", body: { business_name: name } });
+      ctx.notify("Настройки сохранены");
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  const change = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/auth/password", {
+        method: "POST",
+        body: { old, new: password },
+      });
+      onLogout();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  const installSkills = async (updateExisting = false) => {
+    setInstallingSkills(true);
+    setError("");
+    try {
+      const result = await api(updateExisting ? "/ai/skills/update" : "/ai/skills/install", { method: "POST" });
+      const updated = await api("/settings");
+      onSkillsUpdated?.(updated);
+      ctx.notify(`${updateExisting ? "Опубликованы новые версии" : "Загружены Skills"}: ${result.configured}/${result.required}. Конфигурация сохранена в настройках сайта.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setInstallingSkills(false);
+    }
+  };
+  return (
+    <div className="report-grid">
+      {can(ctx.auth, "settings", true) && <>
+        <form className="panel padded" onSubmit={saveClaudeConnection}>
+          <h2>Claude API</h2>
+          <p className="muted">Ключ Anthropic сохраняется зашифрованно в базе сайта. После переноса на VPS подключение останется, если перенести вместе с базой ключ шифрования сервера.</p>
+          <div className={siteIntegrations.claude?.configured?"success-banner":"info-banner"} role="status">Claude API · {siteIntegrations.claude?.configured?"подключён":"ожидает подключения"}{siteIntegrations.claude?.source==="server"?" · ключ пока задан в окружении сервера":""}</div>
+          <label>Ключ Anthropic API<input type="password" autoComplete="new-password" value={claudeKey} onChange={e=>setClaudeKey(e.target.value)} placeholder={siteIntegrations.claude?.configured?"Ключ сохранён — оставьте пустым, чтобы не менять":"Вставьте ключ Claude API"}/></label>
+          <div className="button-row"><button className="primary" disabled={integrationBusy||!claudeKey.trim()}>{integrationBusy?"Сохраняем…":"Сохранить ключ Claude"}</button><button className="secondary" type="button" onClick={testClaudeConnection} disabled={integrationBusy||!siteIntegrations.claude?.configured}>Проверить Claude</button></div>
+          {siteIntegrations.claude?.source==="site"&&<button className="danger mt-12" type="button" onClick={async()=>{setIntegrationBusy(true);try{const status=await api("/settings/integrations/claude",{method:"PUT",body:{clear:true}});setSiteIntegrations((current)=>({...current,claude:status}));ctx.notify("Ключ Claude удалён")}catch(e){setError(e.message)}finally{setIntegrationBusy(false)}}} disabled={integrationBusy}>Удалить ключ Claude</button>}
+        </form>
+        <form className="panel padded" onSubmit={saveWhatsAppConnection}>
+          <h2>WhatsApp Business API</h2>
+          <p className="muted">Для ежедневных отчётов заполните три поля ниже: постоянный токен Meta, ID номера WhatsApp и одобренный шаблон. Настройки для входящих сообщений ИИ находятся в дополнительном разделе.</p>
+          <div className={siteIntegrations.whatsapp?.configured?"success-banner":"info-banner"} role="status">WhatsApp API · {siteIntegrations.whatsapp?.configured?"настроен":"ожидает настройки"} · входящий ИИ {siteIntegrations.whatsapp?.inbound_ready?"готов":"не настроен"}</div>
+          <label>Токен доступа<input type="password" autoComplete="new-password" value={whatsappForm.access_token} onChange={e=>setWhatsappForm({...whatsappForm,access_token:e.target.value})} placeholder={siteIntegrations.whatsapp?.source==="site"?"Токен сохранён — оставьте пустым, чтобы не менять":"Вставьте постоянный токен Meta"} /></label>
+          <div className="form-grid">
+            <label>ID номера телефона<input value={whatsappForm.phone_number_id} onChange={e=>setWhatsappForm({...whatsappForm,phone_number_id:e.target.value})} placeholder="ID из Meta WhatsApp API Setup"/></label>
+            <label>Имя одобренного шаблона<input value={whatsappForm.template_name} onChange={e=>setWhatsappForm({...whatsappForm,template_name:e.target.value})} placeholder="Meta шаблон с одной переменной {{1}}"/></label>
+            <label>Язык шаблона<input value={whatsappForm.language} onChange={e=>setWhatsappForm({...whatsappForm,language:e.target.value})} placeholder="ru"/></label>
+          </div>
+          <details className="integration-advanced">
+            <summary>Дополнительные настройки · входящий ИИ</summary>
+            <p className="muted">Чтобы клиент мог переписываться с ИИ через WhatsApp, добавьте webhook в Meta и заполните секреты. Вставьте этот адрес в настройках приложения Meta.</p>
+            <div className="form-grid">
+              <label>Meta App Secret<input type="password" autoComplete="new-password" value={whatsappForm.app_secret} onChange={e=>setWhatsappForm({...whatsappForm,app_secret:e.target.value})} placeholder="Оставьте пустым, если уже сохранён"/></label>
+              <label>Webhook verify token<input type="password" autoComplete="new-password" value={whatsappForm.webhook_verify_token} onChange={e=>setWhatsappForm({...whatsappForm,webhook_verify_token:e.target.value})} placeholder="Не менее 16 символов"/></label>
+              <label>Webhook URL<input readOnly value="https://qor-ai-business-erp.onrender.com/api/webhooks/whatsapp"/></label>
+              <label>Версия Graph API<input value={whatsappForm.graph_version} onChange={e=>setWhatsappForm({...whatsappForm,graph_version:e.target.value})} placeholder="v26.0"/></label>
+              <label className="check-row"><input type="checkbox" checked={!!whatsappForm.inbound_enabled} onChange={e=>setWhatsappForm({...whatsappForm,inbound_enabled:e.target.checked})}/>Включить ответы личного ИИ</label>
+            </div>
+          </details>
+          <div className="button-row"><button className="primary" disabled={integrationBusy}>{integrationBusy?"Сохраняем…":"Сохранить WhatsApp"}</button><button className="secondary" type="button" onClick={testWhatsAppConnection} disabled={integrationBusy||!siteIntegrations.whatsapp?.phone_number_id}>Проверить подключение</button></div>
+          {siteIntegrations.whatsapp?.source==="site"&&<button className="danger mt-12" type="button" onClick={clearWhatsAppConnection} disabled={integrationBusy}>Удалить настройки WhatsApp</button>}
+          <p className="muted">Проверка читает данные подключённого номера и не отправляет сообщение. Для ежедневной рассылки шаблон должен быть одобрен Meta.</p>
+        </form>
+      </>}
+      <form className="panel padded" onSubmit={saveDailyReport}>
+        <h2>Ежедневный отчёт владельцу</h2>
+        <p className="muted">Новые и изменившиеся уведомления ERP автоматически отправляются в WhatsApp после подключения API, указания номера получателя и сохранения его согласия. Дубли не отправляются. Ежедневный финансовый отчёт можно включить отдельно.</p>
+        <div className="form-grid">
+          <label>Номер получателя<input type="tel" inputMode="tel" placeholder="+77001234567" value={dailyReport.recipient||""} onChange={e=>setDailyReport({...dailyReport,recipient:e.target.value})}/></label>
+          <label>Время отправки · Алматы<input type="time" value={dailyReport.time||"09:00"} onChange={e=>setDailyReport({...dailyReport,time:e.target.value})}/></label>
+        </div>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.consent} onChange={e=>setDailyReport({...dailyReport,consent:e.target.checked})}/> Получатель согласился получать отчёты и системные уведомления в WhatsApp</label>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.ai_summary} onChange={e=>setDailyReport({...dailyReport,ai_summary:e.target.checked})}/> Добавлять комментарий Claude к показателям</label>
+        <label className="check-row"><input type="checkbox" checked={!!dailyReport.enabled} onChange={e=>setDailyReport({...dailyReport,enabled:e.target.checked})}/> Включить ежедневный финансовый отчёт</label>
+        <div className={dailyReport.provider?.configured?"success-banner":"info-banner"} role="status">
+          Канал: WhatsApp Business API · {dailyReport.provider?.configured?"подключён":"ожидает настройки"}. Настройте токен, ID номера и одобренный шаблон в карточке WhatsApp Business API выше.
+        </div>
+        <p className="muted">Обычный WhatsApp Web не используется. Токен сохраняется зашифрованно на сервере и никогда не возвращается в браузер.</p>
+        <button className="primary" disabled={dailyReportBusy}>{dailyReportBusy?"Сохраняем…":"Сохранить расписание"}</button>
+        {dailyReport.recent?.length>0&&<details className="mt-12"><summary>Последние отправки</summary><div className="table-scroll"><table><thead><tr><th>Дата отчёта</th><th>Статус</th><th>Отправлен</th><th>Ошибка</th></tr></thead><tbody>{dailyReport.recent.map((row,i)=><tr key={`${row.date}-${i}`}><td>{row.date}</td><td>{row.status}</td><td>{row.sent_at?new Date(row.sent_at).toLocaleString("ru-RU"):"—"}</td><td>{row.error||"—"}</td></tr>)}</tbody></table></div></details>}
+      </form>
+      <form className="panel padded" onSubmit={save}>
+        <h2>Рабочее пространство</h2>
+        <label>
+          Название
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Валюта
+          <input value="KZT · Казахстанский тенге" readOnly />
+        </label>
+        <label>
+          Часовой пояс
+          <input value="Asia/Almaty" readOnly />
+        </label>
+        <button className="primary">Сохранить</button>
+        <p className="muted">
+          Claude API: {settings.ai_enabled ? "подключён" : "ожидает подключения в настройках выше"}. Skills: {settings.claude_skills?.enabled ? `${settings.claude_skills.configured}/${settings.claude_skills.required} подключены` : `не подключены (${settings.claude_skills?.configured || 0}/${settings.claude_skills?.required || 11})`}.
+          Ключи хранятся на сервере, не в браузере.
+        </p>
+        <ErrorBox error={error} />
+      </form>
+      {settings.ai_enabled && can(ctx.auth, "settings", true) && <section className="panel padded wide">
+        <h2>Claude Skills · команда QOR</h2>
+        <p className="muted">Загружает или обновляет все 11 навыков в том же Claude API workspace. Ссылки на Skills сохраняются в базе автоматически.</p>
+        <button className="primary" type="button" onClick={() => installSkills(!!settings.claude_skills?.enabled)} disabled={installingSkills}>{installingSkills ? "Отправляем в Anthropic…" : settings.claude_skills?.enabled ? "Обновить все 11 Skills" : "Загрузить 11 Skills в Claude API"}</button>
+        
+      </section>}
+      <form className="panel padded" onSubmit={change}>
+        <h2>Изменить пароль</h2>
+        <label>
+          Текущий пароль
+          <input
+            type="password"
+            value={old}
+            onChange={(e) => setOld(e.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Новый пароль
+          <input
+            type="password"
+            minLength={12}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </label>
+        <button className="secondary">
+          Обновить пароль и завершить сессии
+        </button>
+      </form>
+    </div>
+  );
+}
