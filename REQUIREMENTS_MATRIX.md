@@ -28,7 +28,7 @@ This file is the release-control matrix for the client's 33-section specificatio
 | 22 | AI Forecast | PARTIAL | Screen/foundation; deterministic features + confidence/backtesting pending |
 | 23 | AI Alerts | PARTIAL | Alerts surface exists; scheduled rule engine pending |
 | 24 | Android+iOS app | NOT STARTED (Stage 3) | Responsive web is foundation; native/PWA decision after MVP acceptance |
-| 25 | One AI Assistant | PARTIAL | Rick + 5 specialists, server-side Claude Messages API with scoped ERP snapshot and marketplace database tools; requires ANTHROPIC_API_KEY |
+| 25 | One AI Assistant | PARTIAL | Rick + 5 specialists, server-side OpenAI Responses integration and forced ERP snapshot grounding; production API runtime requires OPENAI_API_KEY |
 | 26 | WhatsApp Owner AI only | NOT STARTED (Stage 3) | Explicitly not client CRM; provider integration later |
 | 27 | Multiple companies + consolidated | PARTIAL | Company scoping + Owner consolidated reporting; extend all modules consistently |
 | 28 | RBAC | DONE/PARTIAL | Owner/Admin/Accountant/Manager/Warehouse/Marketing implemented; continue endpoint-by-endpoint QA |
