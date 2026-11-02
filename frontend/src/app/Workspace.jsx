@@ -311,6 +311,7 @@ export default function App() {
       b.setUTCDate(0);
     }
     if (v === "Квартал") a.setUTCMonth(Math.floor(a.getUTCMonth() / 3) * 3, 1);
+    if (v === "Полгода") { a.setUTCDate(1); a.setUTCMonth(a.getUTCMonth() - 5); }
     if (v === "Год") a.setUTCMonth(0, 1);
     if (v === "Прошлый год") {
       a.setUTCMonth(0, 1);
@@ -540,6 +541,7 @@ export default function App() {
                   "Месяц",
                   "Прошлый месяц",
                   "Квартал",
+                  ...(page === "dashboard" ? ["Полгода"] : []),
                   "Год",
                   "Прошлый год",
                   "Период",
