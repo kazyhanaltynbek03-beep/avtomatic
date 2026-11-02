@@ -11,6 +11,7 @@ from sqlalchemy import select
 from . import ai, finance
 from .db import SessionLocal
 from .models import Company, DailyReportDelivery, Setting, User, now
+from .system_secrets import load_config
 from .security import scope
 
 logger = logging.getLogger(__name__)
@@ -18,13 +19,30 @@ PROVIDER = "whatsapp_cloud"
 PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
 
-def provider_status():
-    missing = [key for key in (
-        "QOR_WHATSAPP_ACCESS_TOKEN",
-        "QOR_WHATSAPP_PHONE_NUMBER_ID",
-        "QOR_WHATSAPP_TEMPLATE_NAME",
-    ) if not os.getenv(key, "").strip()]
-    return {"provider": PROVIDER, "configured": not missing, "missing": missing}
+def _whatsapp_config(db=None):
+    saved = load_config("whatsapp_cloud", db)
+    return {
+        "access_token": str(saved.get("access_token") or os.getenv("QOR_WHATSAPP_ACCESS_TOKEN", "")).strip(),
+        "phone_number_id": str(saved.get("phone_number_id") or os.getenv("QOR_WHATSAPP_PHONE_NUMBER_ID", "")).strip(),
+        "template_name": str(saved.get("template_name") or os.getenv("QOR_WHATSAPP_TEMPLATE_NAME", "")).strip(),
+        "language": str(saved.get("language") or os.getenv("QOR_WHATSAPP_TEMPLATE_LANGUAGE", "ru")).strip(),
+        "graph_version": str(saved.get("graph_version") or os.getenv("QOR_WHATSAPP_GRAPH_VERSION", "v26.0")).strip(),
+        "source": "site" if saved else ("server" if any(os.getenv(x, "").strip() for x in (
+            "QOR_WHATSAPP_ACCESS_TOKEN", "QOR_WHATSAPP_PHONE_NUMBER_ID", "QOR_WHATSAPP_TEMPLATE_NAME")) else "missing"),
+    }
+
+
+def provider_status(db=None):
+    config = _whatsapp_config(db)
+    missing = [name for name, value in (
+        ("access_token", config["access_token"]),
+        ("phone_number_id", config["phone_number_id"]),
+        ("template_name", config["template_name"]),
+    ) if not value]
+    return {"provider": PROVIDER, "configured": not missing, "missing": missing,
+            "source": config["source"], "phone_number_id": config["phone_number_id"],
+            "template_name": config["template_name"], "language": config["language"],
+            "graph_version": config["graph_version"]}
 
 
 def _money(value):
@@ -73,7 +91,7 @@ def _build_digest(db, user, company_id, report_date, include_ai):
     incomplete = data.get("pending_source_events")
     if incomplete:
         lines.append(f"Важно: есть {incomplete} ожидающих проверки источника операций.")
-    if include_ai and os.getenv("ANTHROPIC_API_KEY"):
+    if include_ai and ai.key_status()["configured"]:
         try:
             result = ai.assistant(db, user, {
                 "agent": "analyst",
@@ -91,29 +109,29 @@ def _build_digest(db, user, company_id, report_date, include_ai):
     return "\n".join(lines)
 
 
-def _send_template(recipient, message):
+def _send_template(recipient, message, db=None):
     if not PHONE_RE.fullmatch(recipient):
         raise ValueError("Номер получателя должен быть в международном формате +XXXXXXXX")
-    config = provider_status()
-    if not config["configured"]:
+    config = _whatsapp_config(db)
+    if not provider_status(db)["configured"]:
         raise RuntimeError("WhatsApp Business Cloud API не настроен")
-    version = os.getenv("QOR_WHATSAPP_GRAPH_VERSION", "v26.0").strip()
+    version = config["graph_version"]
     if not re.fullmatch(r"v\d+\.\d+", version):
         raise RuntimeError("Некорректная версия WhatsApp Graph API")
-    url = f"https://graph.facebook.com/{version}/{os.environ['QOR_WHATSAPP_PHONE_NUMBER_ID']}/messages"
+    url = f"https://graph.facebook.com/{version}/{config['phone_number_id']}/messages"
     payload = {
         "messaging_product": "whatsapp",
         "to": recipient.lstrip("+"),
         "type": "template",
         "template": {
-            "name": os.environ["QOR_WHATSAPP_TEMPLATE_NAME"],
-            "language": {"code": os.getenv("QOR_WHATSAPP_TEMPLATE_LANGUAGE", "ru")},
+            "name": config["template_name"],
+            "language": {"code": config["language"]},
             "components": [{"type": "body", "parameters": [{"type": "text", "text": message[:1000]}]}],
         },
     }
     response = httpx.post(
         url,
-        headers={"Authorization": f"Bearer {os.environ['QOR_WHATSAPP_ACCESS_TOKEN']}"},
+        headers={"Authorization": f"Bearer {config['access_token']}"},
         json=payload,
         timeout=20,
     )
@@ -124,6 +142,25 @@ def _send_template(recipient, message):
     return str(((body.get("messages") or [{}])[0]).get("id") or "")
 
 
+def test_whatsapp_connection(db=None):
+    config = _whatsapp_config(db)
+    if not config["access_token"] or not config["phone_number_id"]:
+        raise RuntimeError("Укажите токен доступа и ID номера WhatsApp")
+    if not re.fullmatch(r"v\d+\.\d+", config["graph_version"]):
+        raise RuntimeError("Некорректная версия WhatsApp Graph API")
+    response = httpx.get(
+        f"https://graph.facebook.com/{config['graph_version']}/{config['phone_number_id']}",
+        params={"fields": "display_phone_number,verified_name"},
+        headers={"Authorization": f"Bearer {config['access_token']}"},
+        timeout=15,
+    )
+    if response.is_error:
+        raise RuntimeError(f"WhatsApp API ответил HTTP {response.status_code}")
+    body = response.json()
+    return {"ok": True, "phone": str(body.get("display_phone_number") or ""),
+            "verified_name": str(body.get("verified_name") or "")}
+
+
 def run_due_daily_reports(at=None):
     """Send at most one digest per company/recipient/report day; retry failures on next run."""
     with SessionLocal() as db:
@@ -131,7 +168,7 @@ def run_due_daily_reports(at=None):
         if not settings or not settings.daily_report_enabled or not settings.daily_report_consent:
             return {"sent": 0, "skipped": "disabled_or_no_consent"}
         recipient = (settings.daily_report_recipient or "").strip()
-        if not recipient or not provider_status()["configured"]:
+        if not recipient or not provider_status(db)["configured"]:
             return {"sent": 0, "skipped": "provider_or_recipient_not_configured"}
         try:
             zone = ZoneInfo(settings.timezone or "Asia/Almaty")
@@ -177,7 +214,7 @@ def run_due_daily_reports(at=None):
             db.commit()
             try:
                 message = _build_digest(db, owner, company.id, report_date, settings.daily_report_ai_summary)
-                provider_id = _send_template(recipient, message)
+                provider_id = _send_template(recipient, message, db)
                 delivery.status = "sent"
                 delivery.provider_message_id = provider_id[:180]
                 delivery.error = ""
