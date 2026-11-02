@@ -1022,6 +1022,22 @@ textarea {
 .form-grid .wide {
   grid-column: 1/-1;
 }
+.whatsapp-integration-card { grid-column: 1 / -1; }
+.whatsapp-connection-status { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.whatsapp-connection-status .success-banner,.whatsapp-connection-status .info-banner { margin: 0; }
+.whatsapp-setup-section { display: grid; gap: 12px; margin: 16px 0; padding: 16px; border: 1px solid #dce8e1; border-radius: 14px; background: #f8fbf9; }
+.whatsapp-setup-section h3 { margin: 0; color: #234a39; font-size: 16px; }
+.whatsapp-setup-section p { margin: 0; }
+.whatsapp-setup-steps { display: grid; gap: 7px; margin: 0; padding-left: 22px; color: #50655a; font-size: 13px; line-height: 1.5; }
+.whatsapp-inbound-setup > summary { cursor: pointer; color: #234a39; font-weight: 700; }
+.whatsapp-callback-field { grid-column: 1 / -1; }
+.whatsapp-ai-toggle { flex-direction: row !important; align-items: center; align-self: end; min-height: 44px; }
+@media (max-width: 700px) {
+  .whatsapp-integration-card { grid-column: 1; }
+  .whatsapp-connection-status { grid-template-columns: 1fr; }
+  .whatsapp-setup-section { padding: 13px; }
+  .whatsapp-callback-field { grid-column: 1; }
+}
 .form-grid .check-label {
   flex-direction: row;
   align-items: center;
