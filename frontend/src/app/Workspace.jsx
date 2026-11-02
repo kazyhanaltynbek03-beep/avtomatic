@@ -959,11 +959,11 @@ function ExpenseOperations({ ctx, channelFilter }) {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(0);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
-  const pageSize = 200;
+  const pageSize = 100;
 
   const buildPath = useCallback((offset = 0) => {
     const params = new URLSearchParams({start:ctx.start, end:ctx.end, limit:String(pageSize), offset:String(offset)});
@@ -977,8 +977,7 @@ function ExpenseOperations({ ctx, channelFilter }) {
     setLoading(true);
     setError("");
     setItems([]);
-    setTotal(0);
-    api(buildPath(0)).then((data) => {
+    api(buildPath(page * pageSize)).then((data) => {
       if (!alive) return;
       setItems(data.items || []);
       setTotal(Number(data.total || 0));
@@ -988,21 +987,11 @@ function ExpenseOperations({ ctx, channelFilter }) {
       if (alive) setLoading(false);
     });
     return () => { alive = false; };
-  }, [buildPath, ctx.refresh]);
+  }, [buildPath, ctx.refresh, page]);
 
-  const loadMore = async () => {
-    if (loadingMore || items.length >= total) return;
-    setLoadingMore(true);
-    setError("");
-    try {
-      const data = await api(buildPath(items.length));
-      setItems((current) => [...current, ...(data.items || [])]);
-    } catch (e) {
-      setError(e.message || "Не удалось загрузить следующие расходы");
-    } finally {
-      setLoadingMore(false);
-    }
-  };
+  useEffect(() => {
+    setPage(0);
+  }, [buildPath, ctx.refresh]);
   const categories = [...new Set(items.map((row) => row.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ru"));
   const normalizedSearch = search.trim().toLocaleLowerCase("ru");
   const visible = items.filter((row) => {
@@ -1015,7 +1004,7 @@ function ExpenseOperations({ ctx, channelFilter }) {
   return <section className="panel expense-operations" aria-label="Отдельные операции расходов">
     <div className="panel-heading expense-operations-heading">
       <div><h2>Список расходов</h2><p className="muted">Отдельные проведённые операции · {channelLabel} · {ctx.start} — {ctx.end}</p></div>
-      <strong className="expense-operation-count">{items.length} из {total}</strong>
+      <strong className="expense-operation-count">Страница {total ? page + 1 : 0} из {Math.ceil(total / pageSize)} · {total} записей</strong>
     </div>
     <div className="expense-operation-filters">
       <label className="expense-operation-search"><Search size={16}/><input aria-label="Поиск по расходам" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Поиск: дата, товар, SKU, ID, документ"/></label>
@@ -1045,7 +1034,11 @@ function ExpenseOperations({ ctx, channelFilter }) {
         </article>)}
       </div>
     </> : <Empty text={items.length ? "По этому поиску расходов нет." : "За выбранный период проведённых расходов нет."}/>}
-    {!loading && items.length < total && <button className="secondary expense-load-more" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? "Загружаем…" : `Показать ещё · осталось ${total - items.length}`}</button>}
+    {!loading && total > pageSize && <nav className="expense-pagination" aria-label="Страницы расходов">
+      <button className="secondary" type="button" disabled={page === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}>Назад</button>
+      <span>Страница {page + 1} из {Math.ceil(total / pageSize)}</span>
+      <button className="secondary" type="button" disabled={(page + 1) * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Далее</button>
+    </nav>}
     <p className="panel-note">В списке показаны фактические расходы и суммы комиссии, логистики и рекламы, записанные в продажах. Расчётная комиссия Kaspi отображается отдельно выше: у дневной оценки нет отдельного ID операции или товара.</p>
   </section>;
 }
