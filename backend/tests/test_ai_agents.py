@@ -129,14 +129,16 @@ def test_finance_tool_does_not_leak_full_snapshot():
     assert "secret_unrelated" not in data
 
 
-def test_designer_uses_source_image_edit_flow():
-    import inspect
+def test_designer_reports_unavailable_image_provider_clearly():
+    from types import SimpleNamespace
+    import pytest
+    from fastapi import HTTPException
     from app.ai import designer
-    src=inspect.getsource(designer)
-    assert "document_id" in src
-    assert "/images/edits" in src
-    assert "source of truth" in src
-    assert 'max(1, min(int(payload.get("variants", 1)), 4))' in src
+
+    with pytest.raises(HTTPException) as exc:
+        designer(None, SimpleNamespace(role="Marketing"), {})
+    assert exc.value.status_code == 409
+    assert "Claude API" in exc.value.detail
 
 def test_content_can_use_verified_product_fields():
     import inspect
