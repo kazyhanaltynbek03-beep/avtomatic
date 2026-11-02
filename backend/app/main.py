@@ -263,7 +263,11 @@ def _dashboard_report_cache_loop():
 
 @app.on_event("startup")
 def start_dashboard_report_cache():
-    if not os.getenv("PYTEST_CURRENT_TEST"):
+    # Docker Compose runs a dedicated persistent report-cache-worker. Keep the
+    # in-process loop for single-service hosts such as Render, but avoid running
+    # two refreshers against the same database on VPS deployments.
+    enabled = os.getenv("QOR_INPROCESS_REPORT_CACHE", "1").strip().lower() not in {"0", "false", "no"}
+    if enabled and not os.getenv("PYTEST_CURRENT_TEST"):
         threading.Thread(target=_dashboard_report_cache_loop,
                          name="dashboard-report-cache", daemon=True).start()
 
@@ -3951,11 +3955,17 @@ def alerts(
     # Alert comparisons need only financial headline fields. The full report also
     # materializes all historical cash, sales, returns, movements and products;
     # building it twice here blocked the single web worker for every alert refresh.
-    current = f.report_headline(db, u, start, end, company_id)
     days = (end - start).days + 1
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=days - 1)
-    previous = f.report_headline(db, u, prev_start, prev_end, company_id)
+    # Use the same warmed, deterministic snapshots as the dashboard. This avoids
+    # recalculating the two financial summaries on every notification-page visit.
+    current = report_cache.get(db, u, start, end, company_id)
+    if current is None:
+        current = f.report_headline(db, u, start, end, company_id)
+    previous = report_cache.get(db, u, prev_start, prev_end, company_id)
+    if previous is None:
+        previous = f.report_headline(db, u, prev_start, prev_end, company_id)
 
     account_query = scope_query(select(Account), Account, u)
     if company_id is not None:
@@ -4026,11 +4036,11 @@ def alerts(
         if getattr(product, "catalog_kind", "master") != "master":
             continue
         minimum = int(product.min_stock or 0)
-        # A zero threshold means the owner has not configured a low-stock alert.
-        # Avoid treating every imported marketplace product with stock 0 as a warning.
-        if minimum <= 0:
-            continue
         stock = stock_by_product.get(product.id, {"quantity": 0, "value": 0})
+        # A zero threshold disables low-stock alerts, but negative inventory is
+        # always an error and must remain visible even without a configured limit.
+        if minimum <= 0 and stock["quantity"] >= 0:
+            continue
         sold = sold_by_product.get(product.id, 0)
         quantity = stock["quantity"]
         stockrows.append({
@@ -4108,11 +4118,41 @@ def alerts(
 
     items = []
     for x in current["stock"]:
+        if x["quantity"] < 0:
+            items.append({"severity":"critical", "type":"negative_stock",
+                "title":f"{x['name']}: отрицательный остаток {x['quantity']} шт.",
+                "product_id":x.get("product_id"), "action":"Проверьте продажи, возвраты и движения склада."})
+        elif x["quantity"] <= x["min_stock"]:
+            items.append({"severity":"critical" if x["quantity"] == 0 else "warning",
+                "type":"low_stock", "title":f"{x['name']}: осталось {x['quantity']} шт. (минимум {x['min_stock']})",
+                "product_id":x.get("product_id"), "action":"Пополните остаток или обновите минимальный порог."})
         dl = x.get("days_of_stock")
         if dl is not None and dl <= 7:
             items.append({"severity":"critical", "type":"stockout", "title":f"{x['name']}: запас примерно на {dl} дн.", "product_id":x.get("product_id")})
         if x.get("stale"):
             items.append({"severity":"warning", "type":"stale_stock", "title":f"{x['name']}: товар залежался на складе", "product_id":x.get("product_id")})
+
+    # Marketplace observations are separate from booked returns. Surface newly
+    # discovered returns for review without changing stock or financial totals.
+    new_returns_query = scope_query(select(MarketplaceReturn), MarketplaceReturn, u).where(
+        MarketplaceReturn.detected_date >= start,
+        MarketplaceReturn.detected_date <= end,
+    )
+    if company_id is not None:
+        new_returns_query = new_returns_query.where(MarketplaceReturn.company_id == company_id)
+    new_returns = db.scalars(new_returns_query.order_by(
+        MarketplaceReturn.detected_date.desc(), MarketplaceReturn.id.desc()
+    ).limit(50)).all()
+    for returned in new_returns:
+        product_label = returned.product_name or returned.sku or returned.external_return_id
+        items.append({
+            "severity":"warning", "type":"new_return",
+            "title":f"Новый возврат {returned.marketplace}: {product_label}",
+            "return_id":returned.id, "account_id":returned.account_id,
+            "channel":returned.marketplace, "quantity":returned.quantity,
+            "return_status":returned.return_status,
+            "action":"Проверьте состояние товара и обработайте возврат на странице «Возвраты».",
+        })
     if current["revenue"] and current["margin"] is not None and current["margin"] < 0:
         items.append({"severity":"critical", "type":"negative_margin", "title":"За период чистая маржа отрицательная"})
     def pct(cur, prev):
