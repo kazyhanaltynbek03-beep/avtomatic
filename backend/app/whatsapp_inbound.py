@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import logging
+import re
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -85,8 +86,13 @@ async def receive_whatsapp_webhook(request: Request, background: BackgroundTasks
                     continue
                 history = [{"role": row.role, "content": row.content} for row in reversed(recent) if row.role in ("user", "assistant")][-10:]
                 db.add(AIMessage(thread_id=thread.id, role="user", content=text, attachments=[], meta={"channel": "whatsapp", "whatsapp_message_id": message_id}))
+                buyer_request = re.search(
+                    r"(закуп|закупить|закупка|покупать|что купить|что закуп|что продавать|хорошо прода|лучше прода|бестсел|лидер продаж|топ продаж|перспектив.*товар|ниша|сатып ал|тауар.*сат|сұраныс|қай тауар|жақсы сат|сатылымы жақсы|what to buy|best.?selling|procure|niche)",
+                    text.casefold(),
+                )
+                agent_id = "buyer" if buyer_request else "rick"
                 job = Job(company_id=None, user_id=owner.id, kind="assistant", status="queued",
-                          payload={"question": text, "agent": "rick", "history": history,
+                          payload={"question": text, "agent": agent_id, "history": history,
                                    "read_only": True, "include_tool_data": True, "thread_id": thread.id, "whatsapp_sender": sender})
                 db.add(job)
                 db.commit()
