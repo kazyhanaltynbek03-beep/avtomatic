@@ -4257,7 +4257,7 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
             inbound_enabled = bool(p.get("inbound_enabled", config.get("inbound_enabled", False)))
             if inbound_enabled:
                 required = ("access_token", "phone_number_id", "app_secret", "webhook_verify_token")
-                missing = [key for key in required if not (token if key == "access_token" else phone_id if key == "phone_number_id" else config.get(key))]
+                missing = [key for key in required if not ((token or config.get(key)) if key == "access_token" else phone_id if key == "phone_number_id" else config.get(key))]
                 if missing:
                     raise HTTPException(422, "Для входящего ИИ сохраните токен, ID номера, Meta App Secret и Webhook verify token")
                 settings = db.get(Setting, 1)
