@@ -3709,6 +3709,9 @@ def marketplace_product_report_xlsx(
 
 def _full_finance_report(db, user, start, end, company_id=None, account_id=None,
                         active_only=False):
+    # Check tenant access before reading a shared company snapshot.
+    if company_id is not None:
+        scope(user, company_id)
     cache_enabled = os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
     if cache_enabled:
         cached = report_cache.get_full_report(
@@ -4050,6 +4053,8 @@ def alerts(
     require(u, "analytics")
     if end < start:
         raise HTTPException(422, "Конец периода раньше начала")
+    if company_id is not None:
+        scope(u, company_id)
 
     # Alert comparisons need only financial headline fields. The full report also
     # materializes all historical cash, sales, returns, movements and products;
