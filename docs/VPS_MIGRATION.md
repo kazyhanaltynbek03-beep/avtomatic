@@ -6,6 +6,15 @@ Use this checklist when the VPS is ready. Keep the current Render service availa
 
 The existing `compose.yaml` runs PostgreSQL, a one-time Alembic migration, the web app, the marketplace worker, and report-cache warmup/worker. Start them with the Compose file so the migration completes before the web and workers start. Before the VPS web service becomes healthy, the warmup prepares dashboard cards and full finance snapshots for Owner, Admin, and Accountant users, for each permitted company scope, and for the standard periods plus a rolling 370-day period. Snapshots include sales, returns, balances, and stock/cost detail. The API serves prepared reports immediately; the always-on report-cache worker refreshes them in the background. A custom date range is saved after its first calculation. Keep both workers running; do not run a second copy of either during cutover. The first VPS startup can take longer while the initial reports are prepared, so keep Render available and do not switch the domain until the VPS health check and report comparison pass.
 
+After starting the stack, verify the first-pass warmup before moving traffic:
+
+```sh
+docker compose ps web report-cache-warmup report-cache-worker
+docker compose logs report-cache-warmup
+```
+
+The warmup container must exit successfully, the web container must be healthy, and the report-cache worker must remain running. The worker logs each full snapshot it prepares, including the 370-day date range.
+
 ## Values to preserve
 
 - Use the same `CREDENTIAL_ENCRYPTION_KEY` value as the current environment. Site-entered Claude and WhatsApp credentials, plus marketplace tokens, are encrypted with this key. If it changes, the database will not be able to decrypt those values.
