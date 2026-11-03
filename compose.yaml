@@ -8,6 +8,7 @@ x-app: &app
     UPLOAD_DIR: /srv/uploads
     FRONTEND_DIST: /srv/frontend
     QOR_INPROCESS_REPORT_CACHE: "0"
+    QOR_FULL_REPORT_CACHE: "1"
   volumes:
     - uploads:/srv/uploads
   depends_on:
@@ -58,6 +59,9 @@ services:
     restart: unless-stopped
   report-cache-warmup:
     <<: *app
+    environment:
+      <<: *app-env
+      QOR_FULL_REPORT_CACHE: "0"
     command: ["python", "-m", "app.report_cache", "--warm"]
     depends_on:
       migrate:
