@@ -3709,17 +3709,20 @@ def marketplace_product_report_xlsx(
 
 def _full_finance_report(db, user, start, end, company_id=None, account_id=None,
                         active_only=False):
-    cached = report_cache.get_full_report(
-        db, user, start, end, company_id, account_id, active_only
-    )
-    if cached is not None:
-        return cached
+    cache_enabled = os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
+    if cache_enabled:
+        cached = report_cache.get_full_report(
+            db, user, start, end, company_id, account_id, active_only
+        )
+        if cached is not None:
+            return cached
     payload = f.report(db, user, start, end, company_id, account_id, active_only)
-    # Save the cold calculation so the next page visit and exports are instant;
-    # the VPS report-cache worker refreshes standard periods in the background.
-    report_cache.store_full_report(
-        db, user, start, end, jsonable_encoder(payload), company_id, account_id, active_only
-    )
+    # VPS Compose enables this on the web and cache-worker services. The cache
+    # worker refreshes standard ranges; request-time writes seed custom periods.
+    if cache_enabled:
+        report_cache.store_full_report(
+            db, user, start, end, jsonable_encoder(payload), company_id, account_id, active_only
+        )
     return payload
 
 
