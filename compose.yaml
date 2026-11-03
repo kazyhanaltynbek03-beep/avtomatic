@@ -61,7 +61,7 @@ services:
     <<: *app
     environment:
       <<: *app-env
-      QOR_FULL_REPORT_CACHE: "0"
+      QOR_FULL_REPORT_CACHE: "1"
     command: ["python", "-m", "app.report_cache", "--warm"]
     depends_on:
       migrate:
