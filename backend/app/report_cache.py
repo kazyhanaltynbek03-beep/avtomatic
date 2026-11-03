@@ -31,6 +31,10 @@ def _shift_month(day, offset):
     return day.replace(year=year, month=month, day=1)
 
 
+def _full_cache_enabled():
+    return os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
+
+
 def standard_ranges(today=None):
     today = today or business_today()
     yesterday = today - timedelta(days=1)
@@ -51,8 +55,9 @@ def standard_ranges(today=None):
         (previous_month_start, previous_month_end), (quarter_start, today),
         (six_month_start, today), (year_start, today),
         (previous_year_start, previous_year_end),
-        (today - timedelta(days=369), today),  # rolling 370-day window
     ]
+    if _full_cache_enabled():
+        windows.append((today - timedelta(days=369), today))  # rolling 370-day window
     unique = {}
     for start, end in windows:
         unique[(start, end)] = (start, end)
@@ -60,10 +65,14 @@ def standard_ranges(today=None):
 
 
 def _scope_key(user, company_id):
-    # Cache entries are isolated per user. Company scopes are user-scoped too,
-    # so a missed route-level authorization check cannot expose another tenant.
-    scope = f"company:{int(company_id)}" if company_id is not None else "all"
-    return scope if user.role == "Owner" else f"user:{int(user.id)}:{scope}"
+    if company_id is not None:
+        if _full_cache_enabled() and user.role != "Owner":
+            return f"user:{int(user.id)}:company:{int(company_id)}"
+        return f"company:{int(company_id)}"
+    if user.role == "Owner":
+        return "all"
+    return f"user:{int(user.id)}:all" if _full_cache_enabled() else None
+
 
 
 def _analytics_users(db):
@@ -71,7 +80,10 @@ def _analytics_users(db):
     users = db.scalars(select(User).where(
         User.active.is_(True)
     ).order_by(User.id)).all()
-    return [user for user in users if allowed(user, "analytics")]
+    allowed_users = [user for user in users if allowed(user, "analytics")]
+    if not _full_cache_enabled():
+        return [user for user in allowed_users if user.role == "Owner"][:1]
+    return allowed_users
 
 
 def _scopes_for(user, active_company_ids):
@@ -79,6 +91,8 @@ def _scopes_for(user, active_company_ids):
         return [("all", None)] + [
             (f"company:{company_id}", company_id) for company_id in active_company_ids
         ]
+    if not _full_cache_enabled():
+        return []
     allowed_ids = set()
     for value in (user.company_ids or []):
         try:
