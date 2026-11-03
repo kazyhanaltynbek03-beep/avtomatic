@@ -10,19 +10,15 @@
 cp .env.example .env
 # Задайте POSTGRES_PASSWORD и OWNER_PASSWORD в .env.
 docker compose up --build -d
-# Пустая рабочая база + Owner:
-docker compose run --rm web python -m app.seed
 ```
+
+Compose последовательно выполняет миграции, создаёт Owner из `.env`, прогревает краткие и полные отчёты стандартных периодов и только затем открывает веб-сервис. `report-cache-worker` продолжает пересчёт в фоне. Полный прогрев включён в Compose для VPS и отключён по умолчанию на других хостингах.
 
 Открыть **http://localhost:8000**. Логин из OWNER_EMAIL, пароль из OWNER_PASSWORD. API-документация: **http://localhost:8000/api/docs**.
 
 Для демонстрационной базы вместо обычного seed на **пустой базе**:
 
-```bash
-docker compose run --rm -e OWNER_EMAIL=owner@qor.local -e 'OWNER_PASSWORD=Qor-Demo-2026!' web python -m app.seed --demo
-```
-
-В `.env` выставьте `DEMO_MODE=true`, затем `docker compose up -d`. Demo создаёт 2 компании, 10 каналов/аккаунтов, 7 SKU, закупочные партии, продажи за 38 дней, расходы, платежи, B2B-клиентов и пользователей склада. Все бизнес-операции в demo синтетические.
+В `.env` установите `DEMO_MODE=true` до `docker compose up -d`. На пустой базе bootstrap создаст demo-данные до прогрева отчётов. Demo создаёт 2 компании, 10 каналов/аккаунтов, 7 SKU, закупочные партии, продажи за 38 дней, расходы, платежи, B2B-клиентов и пользователей склада. Все бизнес-операции в demo синтетические.
 
 **Тестовый Owner:** `owner@qor.local` / `Qor-Demo-2026!`.
 Тест склада: `warehouse1@qor.local` / `Qor-Demo-2026!` — доступ только к первой компании, без финансовой аналитики.
