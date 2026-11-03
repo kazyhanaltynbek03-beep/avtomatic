@@ -8,6 +8,7 @@ import threading
 import os
 from time import monotonic
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from .models import Account, Company, DashboardReportCache, User, business_today, now
 from . import finance
 
@@ -122,7 +123,22 @@ def store_full_report(db, user, start, end, payload, company_id=None,
     else:
         row.payload = payload
         row.refreshed_at = now()
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A web request and the warmup worker can finish the same cold snapshot
+        # together. Reload the unique row and update it instead of failing the job.
+        db.rollback()
+        row = db.scalar(select(DashboardReportCache).where(
+            DashboardReportCache.scope_key == key,
+            DashboardReportCache.start_date == start,
+            DashboardReportCache.end_date == end,
+        ))
+        if row is None:
+            raise
+        row.payload = payload
+        row.refreshed_at = now()
+        db.commit()
     return True
 
 
@@ -265,9 +281,6 @@ def refresh_full_one(db):
     current = now()
     # Refresh recent operational periods frequently; older snapshots are still
     # rebuilt regularly so late marketplace backfills are reflected.
-    recent_cutoff = current - timedelta(minutes=10)
-    historical_cutoff = current - timedelta(hours=2)
-
     for scope_key, company_id in scopes:
         for start, end in ranges:
             for active_only in (True, False):
@@ -290,16 +303,9 @@ def refresh_full_one(db):
                 payload = jsonable_encoder(finance.report(
                     db, owner, start, end, company_id, active_only=active_only
                 ))
-                if row is None:
-                    row = DashboardReportCache(
-                        scope_key=key, start_date=start, end_date=end,
-                        payload=payload, refreshed_at=current,
-                    )
-                    db.add(row)
-                else:
-                    row.payload = payload
-                    row.refreshed_at = current
-                db.commit()
+                store_full_report(
+                    db, owner, start, end, payload, company_id, active_only=active_only
+                )
                 return True
     return False
 
