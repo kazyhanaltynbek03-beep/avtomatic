@@ -4,7 +4,7 @@ Use this checklist when the VPS is ready. Keep the current Render service availa
 
 ## Services
 
-The existing `compose.yaml` runs PostgreSQL, a one-time Alembic migration, the web app, the marketplace worker, and report-cache warmup/worker. Start them with the Compose file so the migration completes before the web and workers start. Before the VPS web service becomes healthy, the warmup prepares complete finance snapshots for the standard periods (day, week, month, quarter and year) and for each company, including return totals, return balances and stock/cost detail. The API then reads saved snapshots instead of recalculating a full report on each visit. The report-cache worker keeps the snapshots refreshed and prepares custom ranges after their first calculation. Keep both workers running; do not run a second copy of either during cutover. The first VPS startup can take longer while the initial reports are prepared, so keep Render available and do not switch the domain until the VPS health check and report comparison pass.
+The existing `compose.yaml` runs PostgreSQL, a one-time Alembic migration, the web app, the marketplace worker, and report-cache warmup/worker. Start them with the Compose file so the migration completes before the web and workers start. Before the VPS web service becomes healthy, the warmup prepares dashboard cards and full finance snapshots for Owner, Admin, and Accountant users, for each permitted company scope, and for the standard periods plus a rolling 370-day period. Snapshots include sales, returns, balances, and stock/cost detail. The API serves prepared reports immediately; the always-on report-cache worker refreshes them in the background. A custom date range is saved after its first calculation. Keep both workers running; do not run a second copy of either during cutover. The first VPS startup can take longer while the initial reports are prepared, so keep Render available and do not switch the domain until the VPS health check and report comparison pass.
 
 ## Values to preserve
 
@@ -19,7 +19,7 @@ The existing `compose.yaml` runs PostgreSQL, a one-time Alembic migration, the w
 3. Copy the repository's deployed `main` commit and production environment values to the VPS.
 4. Restore the PostgreSQL backup and uploads before starting the new workers.
 5. Start the Compose stack and confirm Alembic migrations and health checks complete.
-6. Verify sign-in, companies, marketplace connections, Claude API test, WhatsApp connection test, and that the marketplace worker resumes its saved cursors.
+6. Verify sign-in, companies, marketplace connections, Claude API test, WhatsApp connection test, and the marketplace account sync status. The 370-day report uses data already present in the restored database; Kaspi and Wildberries API history limits and saved sync cursors remain the source of any backfill. Confirm the required history is present before switching traffic.
 7. Check a dashboard period and an Excel export against the current service.
 8. Switch the domain only after these checks pass. Keep Render available for rollback until the VPS is stable.
 
