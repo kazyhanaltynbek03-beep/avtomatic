@@ -44,6 +44,7 @@ export function useLoad(path, refresh, options = {}) {
     path.startsWith("/marketplace-record-details?") ||
     path.startsWith("/marketplace-product-report?") ||
     path.startsWith("/expenses/summary?") ||
+    path.startsWith("/marketplace-returns?") ||
     path.startsWith("/forecast?") ||
     path.startsWith("/accounting/summary?") ||
     path === "/stock" ||
