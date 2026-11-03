@@ -315,6 +315,9 @@ def refresh_full_one(db):
                 store_full_report(
                     db, owner, start, end, payload, company_id, active_only=active_only
                 )
+                logging.getLogger(__name__).info(
+                    "Prepared full report cache %s for %s..%s", key, start, end
+                )
                 return True
     return False
 
@@ -333,7 +336,31 @@ def cache_ready(db):
         DashboardReportCache.scope_key.in_(keys),
     )).all()
     ready = {(row.scope_key, row.start_date, row.end_date) for row in rows}
-    return all((key, start, end) in ready for key in keys for start, end in ranges)
+    if not all((key, start, end) in ready for key in keys for start, end in ranges):
+        return False
+    if os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() not in {"1", "true", "yes"}:
+        return True
+    full_keys = [f"full:{key}:{variant}" for key in keys for variant in ("active", "all")]
+    full_rows = db.scalars(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key.in_(full_keys),
+    )).all()
+    current = now()
+    full_ready = {(row.scope_key, row.start_date, row.end_date): row.refreshed_at
+                  for row in full_rows}
+    for key in full_keys:
+        for start, end in ranges:
+            refreshed_at = full_ready.get((key, start, end))
+            if refreshed_at is None:
+                return False
+            compare_now = current
+            if refreshed_at.tzinfo is None and compare_now.tzinfo is not None:
+                compare_now = compare_now.replace(tzinfo=None)
+            elif refreshed_at.tzinfo is not None and compare_now.tzinfo is None:
+                refreshed_at = refreshed_at.replace(tzinfo=None)
+            max_age = timedelta(minutes=10) if end >= today - timedelta(days=1) else timedelta(hours=2)
+            if refreshed_at < compare_now - max_age:
+                return False
+    return True
 
 
 if __name__ == "__main__":
