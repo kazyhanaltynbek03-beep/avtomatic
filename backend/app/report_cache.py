@@ -4,12 +4,12 @@ The snapshots use the existing deterministic finance engine. They are a read-thr
 performance layer only; financial formulas and the ERP ledger remain authoritative.
 """
 from datetime import timedelta
-import threading
-import os
 import logging
+import os
+import threading
 from time import monotonic
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from .models import Account, Company, DashboardReportCache, User, business_today, now
 from . import finance
 
@@ -18,6 +18,11 @@ _PENDING_SOURCE_DAYS_TTL_SECONDS = 30
 _PENDING_SOURCE_DAYS_CACHE = {}
 _PENDING_SOURCE_DAYS_LOCKS = {}
 _PENDING_SOURCE_DAYS_GUARD = threading.Lock()
+logger = logging.getLogger(__name__)
+
+
+def full_report_cache_enabled():
+    return os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
 
 
 def _month_start(day):
@@ -29,10 +34,6 @@ def _shift_month(day, offset):
     year = day.year + month // 12
     month = month % 12 + 1
     return day.replace(year=year, month=month, day=1)
-
-
-def _full_cache_enabled():
-    return os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
 
 
 def standard_ranges(today=None):
@@ -49,15 +50,14 @@ def standard_ranges(today=None):
     previous_year_start = year_start.replace(year=year_start.year - 1)
     previous_year_end = year_start - timedelta(days=1)
     six_month_start = _shift_month(current_month, -5)
+    rolling_370_start = today - timedelta(days=369)
     windows = [
         (today, today), (yesterday, yesterday), (monday, today),
         (previous_week_start, previous_week_end), (current_month, today),
         (previous_month_start, previous_month_end), (quarter_start, today),
         (six_month_start, today), (year_start, today),
-        (previous_year_start, previous_year_end),
+        (previous_year_start, previous_year_end), (rolling_370_start, today),
     ]
-    if _full_cache_enabled():
-        windows.append((today - timedelta(days=369), today))  # rolling 370-day window
     unique = {}
     for start, end in windows:
         unique[(start, end)] = (start, end)
@@ -66,43 +66,12 @@ def standard_ranges(today=None):
 
 def _scope_key(user, company_id):
     if company_id is not None:
-        if _full_cache_enabled() and user.role != "Owner":
-            return f"user:{int(user.id)}:company:{int(company_id)}"
         return f"company:{int(company_id)}"
     if user.role == "Owner":
         return "all"
-    return f"user:{int(user.id)}:all" if _full_cache_enabled() else None
+    # Multi-company non-owners retain the normal authorization-filtered calculation.
+    return None
 
-
-
-def _analytics_users(db):
-    from .security import allowed
-    users = db.scalars(select(User).where(
-        User.active.is_(True)
-    ).order_by(User.id)).all()
-    allowed_users = [user for user in users if allowed(user, "analytics")]
-    if not _full_cache_enabled():
-        return [user for user in allowed_users if user.role == "Owner"][:1]
-    return allowed_users
-
-
-def _scopes_for(user, active_company_ids):
-    if user.role == "Owner":
-        return [("all", None)] + [
-            (f"company:{company_id}", company_id) for company_id in active_company_ids
-        ]
-    if not _full_cache_enabled():
-        return []
-    allowed_ids = set()
-    for value in (user.company_ids or []):
-        try:
-            allowed_ids.add(int(value))
-        except (TypeError, ValueError):
-            continue
-    return [(f"user:{int(user.id)}:all", None)] + [
-        (f"user:{int(user.id)}:company:{company_id}", company_id)
-        for company_id in active_company_ids if company_id in allowed_ids
-    ]
 
 def get(db, user, start, end, company_id=None):
     key = _scope_key(user, company_id)
@@ -116,17 +85,19 @@ def get(db, user, start, end, company_id=None):
     return row.payload if row else None
 
 
-def _full_scope_key(user, company_id=None, active_only=False):
-    scope = f"company:{int(company_id)}" if company_id is not None else "all"
-    if user.role == "Owner":
-        return f"full:{scope}:{'active' if active_only else 'all'}"
-    return f"full:user:{int(user.id)}:{scope}:{'active' if active_only else 'all'}"
-
-def get_full_report(db, user, start, end, company_id=None, account_id=None, active_only=False):
-    """Return a prepared report immediately; the worker refreshes it in the background."""
+def _full_scope_key(user, company_id=None, active_only=True, account_id=None):
     if account_id is not None:
         return None
-    key = _full_scope_key(user, company_id, active_only)
+    if company_id is not None:
+        return f"full:{'active' if active_only else 'all'}:company:{int(company_id)}"
+    return f"full:{'active' if active_only else 'all'}:all" if user.role == "Owner" else None
+
+
+def get_full_report(db, user, start, end, company_id=None, active_only=True, account_id=None):
+    """Read a persisted full report snapshot for common and repeated periods."""
+    key = _full_scope_key(user, company_id, active_only, account_id)
+    if key is None:
+        return None
     row = db.scalar(select(DashboardReportCache).where(
         DashboardReportCache.scope_key == key,
         DashboardReportCache.start_date == start,
@@ -134,13 +105,13 @@ def get_full_report(db, user, start, end, company_id=None, account_id=None, acti
     ))
     return row.payload if row else None
 
-def store_full_report(db, user, start, end, payload, company_id=None,
-                      account_id=None, active_only=False):
-    if account_id is not None:
-        return False
-    key = _full_scope_key(user, company_id, active_only)
+
+def store_full_report(db, user, start, end, payload, company_id=None, active_only=True, account_id=None):
+    """Persist a deterministic full report so repeat visits never recalculate it."""
+    key = _full_scope_key(user, company_id, active_only, account_id)
     if key is None:
         return False
+    payload = jsonable_encoder(payload)
     row = db.scalar(select(DashboardReportCache).where(
         DashboardReportCache.scope_key == key,
         DashboardReportCache.start_date == start,
@@ -155,22 +126,7 @@ def store_full_report(db, user, start, end, payload, company_id=None,
     else:
         row.payload = payload
         row.refreshed_at = now()
-    try:
-        db.commit()
-    except IntegrityError:
-        # A web request and the warmup worker can finish the same cold snapshot
-        # together. Reload the unique row and update it instead of failing the job.
-        db.rollback()
-        row = db.scalar(select(DashboardReportCache).where(
-            DashboardReportCache.scope_key == key,
-            DashboardReportCache.start_date == start,
-            DashboardReportCache.end_date == end,
-        ))
-        if row is None:
-            raise
-        row.payload = payload
-        row.refreshed_at = now()
-        db.commit()
+    db.commit()
     return True
 
 
@@ -253,33 +209,45 @@ def get_pending_source_days(db, user, company_id=None, active_only=True):
 
 
 def refresh_one(db):
-    """Refresh one missing/stale dashboard period for every analytics user."""
-    users = _analytics_users(db)
-    if not users:
+    """Refresh one missing/stale standard range per worker turn."""
+    owner = db.scalar(select(User).where(
+        User.active.is_(True), User.role == "Owner"
+    ).order_by(User.id).limit(1))
+    if owner is None:
         return False
+
     today = business_today()
     ranges = standard_ranges(today)
-    company_ids = list(db.scalars(select(Company.id).where(
-        Company.active.is_(True)
-    ).order_by(Company.id)))
+    company_ids = list(db.scalars(select(Company.id).where(Company.active.is_(True)).order_by(Company.id)))
+    scopes = [("all", None)] + [(f"company:{company_id}", company_id) for company_id in company_ids]
     current = now()
-    for user in users:
-        for key, company_id in _scopes_for(user, company_ids):
-            for start, end in ranges:
+    refresh_interval = timedelta(minutes=5)
+
+    for key, company_id in scopes:
+        for start, end in ranges:
+            full_key = _full_scope_key(owner, company_id, active_only=True)
+            cache_steps = [(key, False)]
+            if full_report_cache_enabled():
+                cache_steps.append((full_key, True))
+            for cache_key, full_report in cache_steps:
                 row = db.scalar(select(DashboardReportCache).where(
-                    DashboardReportCache.scope_key == key,
+                    DashboardReportCache.scope_key == cache_key,
                     DashboardReportCache.start_date == start,
                     DashboardReportCache.end_date == end,
                 ))
-                span_days = (end - start).days
-                refresh_age = timedelta(minutes=60) if span_days <= 7 and end >= today - timedelta(days=1) else timedelta(hours=12)
-                if row and row.refreshed_at and row.refreshed_at > current - refresh_age:
+                if row and row.refreshed_at and row.refreshed_at > current - refresh_interval:
                     continue
-                pending_days = get_pending_source_days(db, user, company_id)
-                payload = finance.report_headline(db, user, start, end, company_id, pending_days)
+                if full_report:
+                    payload = finance.report(
+                        db, owner, start, end, company_id, active_only=True,
+                    )
+                    payload = jsonable_encoder(payload)
+                else:
+                    pending_days = get_pending_source_days(db, owner, company_id)
+                    payload = finance.report_headline(db, owner, start, end, company_id, pending_days)
                 if row is None:
                     row = DashboardReportCache(
-                        scope_key=key, start_date=start, end_date=end,
+                        scope_key=cache_key, start_date=start, end_date=end,
                         payload=payload, refreshed_at=current,
                     )
                     db.add(row)
@@ -287,80 +255,33 @@ def refresh_one(db):
                     row.payload = payload
                     row.refreshed_at = current
                 db.commit()
+                logger.info(
+                    "Refreshed %s report snapshot %s..%s for %s",
+                    "full" if full_report else "headline", start, end, cache_key,
+                )
                 return True
     return False
 
-def refresh_full_one(db):
-    """Prepare one full finance report per turn for every analytics user."""
-    from fastapi.encoders import jsonable_encoder
-
-    users = _analytics_users(db)
-    if not users:
-        return False
-    today = business_today()
-    ranges = standard_ranges(today)
-    company_ids = list(db.scalars(select(Company.id).where(
-        Company.active.is_(True)
-    ).order_by(Company.id)))
-    current = now()
-    for user in users:
-        for scope_key, company_id in _scopes_for(user, company_ids):
-            for start, end in ranges:
-                for active_only in (True, False):
-                    key = _full_scope_key(user, company_id, active_only)
-                    row = db.scalar(select(DashboardReportCache).where(
-                        DashboardReportCache.scope_key == key,
-                        DashboardReportCache.start_date == start,
-                        DashboardReportCache.end_date == end,
-                    ))
-                    span_days = (end - start).days
-                    refresh_age = timedelta(minutes=60) if span_days <= 7 and end >= today - timedelta(days=1) else timedelta(hours=12)
-                    if row and row.refreshed_at and row.refreshed_at > current - refresh_age:
-                        continue
-                    payload = jsonable_encoder(finance.report(
-                        db, user, start, end, company_id, active_only=active_only
-                    ))
-                    store_full_report(
-                        db, user, start, end, payload, company_id, active_only=active_only
-                    )
-                    logging.getLogger(__name__).info(
-                        "Prepared full report cache %s for %s..%s", key, start, end
-                    )
-                    return True
-    return False
 
 def cache_ready(db):
-    """Wait until every standard-period snapshot exists for each analytics scope."""
-    users = _analytics_users(db)
-    if not users:
+    owner = db.scalar(select(User).where(
+        User.active.is_(True), User.role == "Owner"
+    ).order_by(User.id).limit(1))
+    if owner is None:
         return True
     today = business_today()
     ranges = standard_ranges(today)
-    company_ids = list(db.scalars(select(Company.id).where(
-        Company.active.is_(True)
-    ).order_by(Company.id)))
-    expected = []
-    full_expected = []
-    for user in users:
-        for scope_key, _company_id in _scopes_for(user, company_ids):
-            expected.append(scope_key)
-            for variant in (True, False):
-                full_expected.append(_full_scope_key(user, _company_id, variant))
-    expected = list(dict.fromkeys(expected))
-    full_expected = list(dict.fromkeys(full_expected))
+    company_ids = list(db.scalars(select(Company.id).where(Company.active.is_(True)).order_by(Company.id)))
+    keys = ["all"] + [f"company:{company_id}" for company_id in company_ids]
+    if full_report_cache_enabled():
+        keys += ["full:active:all"] + [
+            f"full:active:company:{company_id}" for company_id in company_ids
+        ]
     rows = db.scalars(select(DashboardReportCache).where(
-        DashboardReportCache.scope_key.in_(expected),
+        DashboardReportCache.scope_key.in_(keys),
     )).all()
     ready = {(row.scope_key, row.start_date, row.end_date) for row in rows}
-    if not all((key, start, end) in ready for key in expected for start, end in ranges):
-        return False
-    if os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() not in {"1", "true", "yes"}:
-        return True
-    full_rows = db.scalars(select(DashboardReportCache).where(
-        DashboardReportCache.scope_key.in_(full_expected),
-    )).all()
-    full_ready = {(row.scope_key, row.start_date, row.end_date) for row in full_rows}
-    return all((key, start, end) in full_ready for key in full_expected for start, end in ranges)
+    return all((key, start, end) in ready for key in keys for start, end in ranges)
 
 
 if __name__ == "__main__":
@@ -374,10 +295,9 @@ if __name__ == "__main__":
         try:
             with SessionLocal() as db:
                 if warming and cache_ready(db):
+                    logging.info("Standard report snapshots are ready")
                     break
                 refreshed = refresh_one(db)
-                if os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}:
-                    refreshed = refresh_full_one(db) or refreshed
         except Exception:
             logging.exception("Dashboard report cache refresh failed")
             refreshed = False
