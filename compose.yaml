@@ -3,12 +3,14 @@ x-app: &app
   build: .
   image: qor-business:local
   env_file: .env
-  environment: &app-env
+  environment:
     DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-qor}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-qor}
     UPLOAD_DIR: /srv/uploads
     FRONTEND_DIST: /srv/frontend
     QOR_INPROCESS_REPORT_CACHE: "0"
     QOR_FULL_REPORT_CACHE: "1"
+    DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+    DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
   volumes:
     - uploads:/srv/uploads
   depends_on:
@@ -31,7 +33,7 @@ services:
     restart: unless-stopped
   migrate:
     <<: *app
-    command: ["alembic", "upgrade", "head"]
+    command: ["sh", "-c", "alembic upgrade head && if [ \"$${DEMO_MODE:-false}\" = \"true\" ]; then python -m app.seed --demo; else python -m app.seed; fi"]
     restart: 'no'
   web:
     <<: *app
@@ -59,9 +61,6 @@ services:
     restart: unless-stopped
   report-cache-warmup:
     <<: *app
-    environment:
-      <<: *app-env
-      QOR_FULL_REPORT_CACHE: "1"
     command: ["python", "-m", "app.report_cache", "--warm"]
     depends_on:
       migrate:
@@ -69,9 +68,6 @@ services:
     restart: 'no'
   report-cache-worker:
     <<: *app
-    environment:
-      <<: *app-env
-      QOR_FULL_REPORT_CACHE: "1"
     command: ["python", "-m", "app.report_cache"]
     depends_on:
       report-cache-warmup:
