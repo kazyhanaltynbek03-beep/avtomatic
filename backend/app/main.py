@@ -3707,6 +3707,22 @@ def marketplace_product_report_xlsx(
     )
 
 
+def _full_finance_report(db, user, start, end, company_id=None, account_id=None,
+                        active_only=False):
+    cached = report_cache.get_full_report(
+        db, user, start, end, company_id, account_id, active_only
+    )
+    if cached is not None:
+        return cached
+    payload = f.report(db, user, start, end, company_id, account_id, active_only)
+    # Save the cold calculation so the next page visit and exports are instant;
+    # the VPS report-cache worker refreshes standard periods in the background.
+    report_cache.store_full_report(
+        db, user, start, end, jsonable_encoder(payload), company_id, account_id, active_only
+    )
+    return payload
+
+
 @app.get("/api/report")
 def get_report(
     start: date,
@@ -3718,7 +3734,7 @@ def get_report(
     active_only: bool = False,
 ):
     require(u, "analytics")
-    return f.report(db, u, start, end, company_id, account_id, active_only)
+    return _full_finance_report(db, u, start, end, company_id, account_id, active_only)
 
 
 @app.get("/api/reports/executive.xlsx")
@@ -3733,7 +3749,7 @@ def executive_xlsx(
     require(u, "analytics")
     if end < start:
         raise HTTPException(422, "Конечная дата раньше начальной")
-    report = f.report(db, u, start, end, company_id, account_id)
+    report = _full_finance_report(db, u, start, end, company_id, account_id)
     raw = reporting_xlsx.executive_workbook(report, start, end)
     filename = f"QOR-report-{start}-{end}.xlsx"
     return Response(
@@ -3757,7 +3773,7 @@ def report_from_template(document_id: int, start: date, end: date, account_id: i
     path = Path(document.path)
     if not path.is_file():
         raise HTTPException(404, "Файл образца отсутствует в хранилище")
-    report = f.report(db, u, start, end, document.company_id, account_id)
+    report = _full_finance_report(db, u, start, end, document.company_id, account_id)
     try:
         if document.mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" and document.name.lower().endswith(".xlsx"):
             raw = reporting_xlsx.workbook_from_template(path.read_bytes(), report, start, end)
@@ -4020,7 +4036,7 @@ def forecast(
     # historical finance report for short ranges that can never produce a result.
     if (end - start).days + 1 < 7:
         return ai.forecast({"start": str(start), "end": str(end), "daily": [], "units": 0})
-    return ai.forecast(f.report(db, u, start, end, company_id))
+    return ai.forecast(_full_finance_report(db, u, start, end, company_id))
 
 
 @app.get("/api/alerts")
