@@ -269,15 +269,15 @@ def refresh_full_one(db):
     historical_cutoff = current - timedelta(hours=2)
 
     for scope_key, company_id in scopes:
-        for active_only in (True, False):
-            key = f"full:{scope_key}:{'active' if active_only else 'all'}"
-            for start, end in ranges:
+        for start, end in ranges:
+            for active_only in (True, False):
+                key = f"full:{scope_key}:{'active' if active_only else 'all'}"
                 row = db.scalar(select(DashboardReportCache).where(
                     DashboardReportCache.scope_key == key,
                     DashboardReportCache.start_date == start,
                     DashboardReportCache.end_date == end,
                 ))
-                cutoff = recent_cutoff if end >= today - timedelta(days=1) else historical_cutoff
+                cutoff_age = timedelta(minutes=10) if end >= today - timedelta(days=1) else timedelta(hours=2)
                 if row and row.refreshed_at:
                     refreshed_at = row.refreshed_at
                     compare_now = current
@@ -285,7 +285,7 @@ def refresh_full_one(db):
                         compare_now = compare_now.replace(tzinfo=None)
                     elif refreshed_at.tzinfo is not None and compare_now.tzinfo is None:
                         refreshed_at = refreshed_at.replace(tzinfo=None)
-                    if refreshed_at > compare_now - (current - cutoff):
+                    if refreshed_at > compare_now - cutoff_age:
                         continue
                 payload = jsonable_encoder(finance.report(
                     db, owner, start, end, company_id, active_only=active_only
