@@ -65,6 +65,8 @@ services:
     restart: 'no'
   report-cache-worker:
     <<: *app
+    environment:
+      QOR_FULL_REPORT_CACHE: "1"
     command: ["python", "-m", "app.report_cache"]
     depends_on:
       report-cache-warmup:
