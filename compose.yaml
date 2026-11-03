@@ -9,6 +9,8 @@ x-app: &app
     FRONTEND_DIST: /srv/frontend
     QOR_INPROCESS_REPORT_CACHE: "0"
     QOR_FULL_REPORT_CACHE: "1"
+    DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+    DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
   volumes:
     - uploads:/srv/uploads
   depends_on:
@@ -31,7 +33,7 @@ services:
     restart: unless-stopped
   migrate:
     <<: *app
-    command: ["alembic", "upgrade", "head"]
+    command: ["sh", "-c", "alembic upgrade head && if [ \"${DEMO_MODE:-false}\" = \"true\" ]; then python -m app.seed --demo; else python -m app.seed; fi"]
     restart: 'no'
   web:
     <<: *app
