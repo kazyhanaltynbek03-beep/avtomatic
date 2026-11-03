@@ -107,6 +107,47 @@ def sync_status_for_display(account, at=None):
     return status, error
 
 
+def kaspi_period_status_for_display(account, start, end, report_mode="issued", at=None):
+    """Show the selected bounded report state even if the long archive is paused.
+
+    Returns status, message, and the selected period's successful sync time.
+    The generic integration status continues to describe the full archive.
+    """
+    status, error = sync_status_for_display(account, at)
+    if (getattr(account, "channel", None) != "Kaspi"
+            or not _kaspi_sync_paused_for(getattr(account, "id", None))):
+        return status, error, None
+
+    settings = dict(getattr(account, "integration_settings", None) or {})
+    period_key = _kaspi_period_sync_key(report_mode, start, end)
+    coverage = dict(settings.get("kaspi_period_sync") or {})
+    if coverage.get(period_key):
+        try:
+            synced_at = datetime.fromisoformat(str(coverage[period_key]))
+            if synced_at.tzinfo is None:
+                synced_at = synced_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            synced_at = None
+        return "done", "", synced_at
+
+    job = dict(settings.get("kaspi_period_job") or {})
+    same_period = (
+        job.get("start") == str(start)
+        and job.get("end") == str(end)
+        and job.get("mode", "issued") == report_mode
+    )
+    if same_period and job.get("status") in {"running", "retry"}:
+        heartbeat = getattr(account, "last_sync", None)
+        reference = at or now()
+        if heartbeat is not None and heartbeat.tzinfo is None:
+            heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        if heartbeat is not None and heartbeat >= reference - timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS):
+            return "running", "", heartbeat
+    return status, error, None
+
+
 def _kaspi_issued_scan_start(today_local):
     """Configured backfill horizon, not a claim about Kaspi retention limits."""
     return today_local - timedelta(days=KASPI_API_HISTORY_DAYS)
@@ -1754,14 +1795,22 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
             raise HTTPException(404, "Магазин выбранного маркетплейса не найден")
         accounts = [selected]
     ids = [a.id for a in accounts]; by_id = {a.id:a for a in accounts}
-    display_sync = [sync_status_for_display(a) for a in accounts]
+    if channel == "Kaspi":
+        period_sync = [kaspi_period_status_for_display(a, start, end) for a in accounts]
+        display_sync = [(status, error) for status, error, _synced_at in period_sync]
+        period_sync_times = [synced_at for _status, _error, synced_at in period_sync if synced_at]
+    else:
+        display_sync = [sync_status_for_display(a) for a in accounts]
+        period_sync_times = []
     sync_in_progress = any(status == 'running' for status, _error in display_sync)
     sync_status = ('failed' if any(x[0] == 'failed' for x in display_sync) else
                    'running' if any(x[0] == 'running' for x in display_sync) else
                    'partial' if any(x[0] == 'partial' for x in display_sync) else
                    'done' if any(x[0] == 'done' for x in display_sync) else 'never')
     sync_errors = [error for status, error in display_sync if error and status != 'running']
-    last_sync = max((a.last_sync for a in accounts if a.last_sync), default=None)
+    sync_times = [a.last_sync for a in accounts if a.last_sync] + period_sync_times
+    sync_times = [value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value for value in sync_times]
+    last_sync = max(sync_times, default=None)
     if not ids:
         return {'channel':channel,'start':str(start),'end':str(end),'revenue':0,'units':0,'api_gross_revenue':None,'api_revenue':None,'api_units':None,'api_returns':None,'api_return_units':None,'api_logistics':None,'api_logistics_rows':0,'api_return_logistics':None,'api_return_logistics_rows':0,'api_undated_return_units':0,'api_unconverted':0,'api_data_available':False,'sync_status':'not_connected','sync_errors':[],'last_sync':None,'pending_sales':0,'pending_reasons':{},'financial_complete':True,'cogs':0,'costs':0,'commission':0,'logistics':0,'return_logistics':0,'kaspi_estimated_proceeds':None,'advertising':0,'marketplace_fines':None,'marketplace_fines_rows':0,'returns':0,'return_units':0,'settlement_accrued':0,'settlement_rows':0,'settlement_unconverted':0,'net_profit':0,'margin':None,'sync_in_progress':False,'source_complete':True}
 

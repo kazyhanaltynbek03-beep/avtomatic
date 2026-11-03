@@ -997,10 +997,22 @@ def _cached_executive_snapshot(db, user, start, end, company_id=None, account_id
             if cached is not None and not has_inactive:
                 snapshot = cached
             else:
-                snapshot = report_headline(db, user, start, end, company_id, active_only=False)
+                pending_days = report_cache.get_pending_source_days(
+                    db, user, company_id, active_only=False,
+                )
+                snapshot = report_headline(
+                    db, user, start, end, company_id,
+                    pending_source_days=pending_days, active_only=False,
+                )
         else:
             # Headline uses bounded SQL aggregates and preserves finance formulas.
-            snapshot = report_headline(db, user, start, end, company_id, active_only=False)
+            pending_days = report_cache.get_pending_source_days(
+                db, user, company_id, active_only=False,
+            )
+            snapshot = report_headline(
+                db, user, start, end, company_id,
+                pending_source_days=pending_days, active_only=False,
+            )
 
     # report_headline is a compact KPI response, while AI tool responses use
     # the full report contract. Restore period and currency metadata before caching.

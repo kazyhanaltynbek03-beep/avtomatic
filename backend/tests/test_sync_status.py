@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.main import SYNC_RUNNING_TIMEOUT_SECONDS, sync_status_for_display
@@ -39,6 +39,41 @@ def test_terminal_status_and_error_are_preserved():
     )
 
     assert sync_status_for_display(account) == ("partial", "catalog unavailable")
+
+
+def test_kaspi_bounded_report_status_is_not_hidden_by_archive_pause(monkeypatch):
+    from app.main import kaspi_period_status_for_display
+
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    monkeypatch.setenv("KASPI_PAUSE_ACCOUNT_IDS", "77")
+    account = SimpleNamespace(
+        id=77, channel="Kaspi", sync_status="running", sync_error="KASPI_PERIOD_SYNC:lease",
+        last_sync=now, integration_settings={"kaspi_period_job": {
+            "start": "2026-10-01", "end": "2026-10-31", "mode": "issued", "status": "running",
+        }},
+    )
+
+    assert kaspi_period_status_for_display(
+        account, date(2026, 10, 1), date(2026, 10, 31), at=now,
+    ) == ("running", "", now)
+
+
+def test_kaspi_completed_period_uses_its_own_coverage_timestamp(monkeypatch):
+    from app.kaspi_integrity import period_key
+    from app.main import kaspi_period_status_for_display
+
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    synced = datetime(2026, 11, 3, 11, tzinfo=timezone.utc)
+    start, end = date(2026, 10, 1), date(2026, 10, 31)
+    monkeypatch.setenv("KASPI_PAUSE_ACCOUNT_IDS", "77")
+    account = SimpleNamespace(
+        id=77, channel="Kaspi", sync_status="partial", sync_error="KASPI_PERIOD_PAUSED",
+        last_sync=now, integration_settings={"kaspi_period_sync": {
+            period_key("issued", start, end): synced.isoformat(),
+        }},
+    )
+
+    assert kaspi_period_status_for_display(account, start, end, at=now) == ("done", "", synced)
 
 
 def test_marketplace_summary_does_not_keep_timed_out_sync_spinner(client):

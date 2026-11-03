@@ -4,9 +4,17 @@ The snapshots use the existing deterministic finance engine. They are a read-thr
 performance layer only; financial formulas and the ERP ledger remain authoritative.
 """
 from datetime import timedelta
+import threading
+from time import monotonic
 from sqlalchemy import select
 from .models import Account, Company, DashboardReportCache, User, business_today, now
 from . import finance
+
+
+_PENDING_SOURCE_DAYS_TTL_SECONDS = 30
+_PENDING_SOURCE_DAYS_CACHE = {}
+_PENDING_SOURCE_DAYS_LOCKS = {}
+_PENDING_SOURCE_DAYS_GUARD = threading.Lock()
 
 
 def _month_start(day):
@@ -120,6 +128,32 @@ def store_ai_snapshot(db, user, start, end, payload, company_id=None, account_id
     return True
 
 
+def get_pending_source_days(db, user, company_id=None, active_only=True):
+    """Reuse the expensive source-event scan across nearby report calculations.
+
+    The finance rows themselves are still queried for every period. Only the
+    completeness signal is memoized, for a short window while the background
+    worker warms the standard ranges.
+    """
+    key = (int(user.id), int(company_id) if company_id is not None else None, bool(active_only))
+    with _PENDING_SOURCE_DAYS_GUARD:
+        lock = _PENDING_SOURCE_DAYS_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        cached = _PENDING_SOURCE_DAYS_CACHE.get(key)
+        current = monotonic()
+        if cached and current - cached[0] < _PENDING_SOURCE_DAYS_TTL_SECONDS:
+            return cached[1]
+        days = tuple(finance.marketplace_source_event_days(
+            db, user, company_id, active_only=active_only,
+        ))
+        _PENDING_SOURCE_DAYS_CACHE[key] = (monotonic(), days)
+        if len(_PENDING_SOURCE_DAYS_CACHE) > 128:
+            oldest = sorted(_PENDING_SOURCE_DAYS_CACHE.items(), key=lambda item: item[1][0])[:32]
+            for old_key, _value in oldest:
+                _PENDING_SOURCE_DAYS_CACHE.pop(old_key, None)
+        return days
+
+
 def refresh_one(db):
     """Refresh one missing/stale standard range per worker turn."""
     owner = db.scalar(select(User).where(
@@ -144,7 +178,7 @@ def refresh_one(db):
             ))
             if row and row.refreshed_at and row.refreshed_at > current - refresh_interval:
                 continue
-            pending_days = finance.marketplace_source_event_days(db, owner, company_id)
+            pending_days = get_pending_source_days(db, owner, company_id)
             payload = finance.report_headline(db, owner, start, end, company_id, pending_days)
             if row is None:
                 row = DashboardReportCache(

@@ -406,9 +406,11 @@ def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
     stored = {}
     monkeypatch.setattr(ai.report_cache, "store_ai_snapshot", lambda *args: stored.update(payload=args[4]))
     monkeypatch.setattr(ai.report_cache, "get", lambda *args: None)
+    monkeypatch.setattr(ai.report_cache, "get_pending_source_days", lambda *args, **kwargs: ())
 
-    def headline(db, user, start, end, company_id, active_only):
+    def headline(db, user, start, end, company_id, active_only, pending_source_days=None):
         captured["active_only"] = active_only
+        captured["pending_source_days"] = pending_source_days
         return expected
 
     monkeypatch.setattr(ai, "report_headline", headline)
@@ -422,6 +424,7 @@ def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
     assert result["money_unit"] == "tiyn"
     assert ai._agent_tool_data(result, "get_executive_summary")["revenue"] == 456
     assert captured["active_only"] is False
+    assert captured["pending_source_days"] == ()
     assert stored["payload"]["start"] == "2026-10-01"
 
 
