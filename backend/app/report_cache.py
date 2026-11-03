@@ -5,6 +5,7 @@ performance layer only; financial formulas and the ERP ledger remain authoritati
 """
 from datetime import timedelta
 import threading
+import os
 from time import monotonic
 from sqlalchemy import select
 from .models import Account, Company, DashboardReportCache, User, business_today, now
@@ -74,6 +75,55 @@ def get(db, user, start, end, company_id=None):
         DashboardReportCache.end_date == end,
     ))
     return row.payload if row else None
+
+
+def _full_scope_key(user, company_id=None, active_only=False):
+    # Full snapshots are currently warmed for the owner, whose scope covers the
+    # entire workspace. Other roles keep their own authorization-filtered reads.
+    if user.role != "Owner":
+        return None
+    scope = f"company:{int(company_id)}" if company_id is not None else "all"
+    return f"full:{scope}:{'active' if active_only else 'all'}"
+
+
+def get_full_report(db, user, start, end, company_id=None, account_id=None, active_only=False):
+    """Return a precomputed full report, including its saved historical detail."""
+    if account_id is not None:
+        return None
+    key = _full_scope_key(user, company_id, active_only)
+    if key is None:
+        return None
+    row = db.scalar(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key == key,
+        DashboardReportCache.start_date == start,
+        DashboardReportCache.end_date == end,
+    ))
+    return row.payload if row else None
+
+
+def store_full_report(db, user, start, end, payload, company_id=None,
+                      account_id=None, active_only=False):
+    if account_id is not None:
+        return False
+    key = _full_scope_key(user, company_id, active_only)
+    if key is None:
+        return False
+    row = db.scalar(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key == key,
+        DashboardReportCache.start_date == start,
+        DashboardReportCache.end_date == end,
+    ))
+    if row is None:
+        row = DashboardReportCache(
+            scope_key=key, start_date=start, end_date=end,
+            payload=payload, refreshed_at=now(),
+        )
+        db.add(row)
+    else:
+        row.payload = payload
+        row.refreshed_at = now()
+    db.commit()
+    return True
 
 
 def _ai_scope_key(user, company_id=None, account_id=None):
@@ -194,6 +244,66 @@ def refresh_one(db):
     return False
 
 
+def refresh_full_one(db):
+    """Prepare one complete finance report outside the request path."""
+    from fastapi.encoders import jsonable_encoder
+
+    owner = db.scalar(select(User).where(
+        User.active.is_(True), User.role == "Owner"
+    ).order_by(User.id).limit(1))
+    if owner is None:
+        return False
+
+    today = business_today()
+    ranges = standard_ranges(today)
+    company_ids = list(db.scalars(
+        select(Company.id).where(Company.active.is_(True)).order_by(Company.id)
+    ))
+    scopes = [("all", None)] + [
+        (f"company:{company_id}", company_id) for company_id in company_ids
+    ]
+    current = now()
+    # Refresh recent operational periods frequently; older snapshots are still
+    # rebuilt regularly so late marketplace backfills are reflected.
+    recent_cutoff = current - timedelta(minutes=10)
+    historical_cutoff = current - timedelta(hours=2)
+
+    for scope_key, company_id in scopes:
+        for active_only in (True, False):
+            key = f"full:{scope_key}:{'active' if active_only else 'all'}"
+            for start, end in ranges:
+                row = db.scalar(select(DashboardReportCache).where(
+                    DashboardReportCache.scope_key == key,
+                    DashboardReportCache.start_date == start,
+                    DashboardReportCache.end_date == end,
+                ))
+                cutoff = recent_cutoff if end >= today - timedelta(days=1) else historical_cutoff
+                if row and row.refreshed_at:
+                    refreshed_at = row.refreshed_at
+                    compare_now = current
+                    if refreshed_at.tzinfo is None and compare_now.tzinfo is not None:
+                        compare_now = compare_now.replace(tzinfo=None)
+                    elif refreshed_at.tzinfo is not None and compare_now.tzinfo is None:
+                        refreshed_at = refreshed_at.replace(tzinfo=None)
+                    if refreshed_at > compare_now - (current - cutoff):
+                        continue
+                payload = jsonable_encoder(finance.report(
+                    db, owner, start, end, company_id, active_only=active_only
+                ))
+                if row is None:
+                    row = DashboardReportCache(
+                        scope_key=key, start_date=start, end_date=end,
+                        payload=payload, refreshed_at=current,
+                    )
+                    db.add(row)
+                else:
+                    row.payload = payload
+                    row.refreshed_at = current
+                db.commit()
+                return True
+    return False
+
+
 def cache_ready(db):
     owner = db.scalar(select(User).where(
         User.active.is_(True), User.role == "Owner"
@@ -224,6 +334,8 @@ if __name__ == "__main__":
                 if warming and cache_ready(db):
                     break
                 refreshed = refresh_one(db)
+                if os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}:
+                    refreshed = refresh_full_one(db) or refreshed
         except Exception:
             logging.exception("Dashboard report cache refresh failed")
             refreshed = False
