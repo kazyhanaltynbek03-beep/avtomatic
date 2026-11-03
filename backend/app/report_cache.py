@@ -99,7 +99,16 @@ def get_full_report(db, user, start, end, company_id=None, account_id=None, acti
         DashboardReportCache.start_date == start,
         DashboardReportCache.end_date == end,
     ))
-    return row.payload if row else None
+    if row is None or row.refreshed_at is None:
+        return None
+    current = now()
+    refreshed_at = row.refreshed_at
+    if refreshed_at.tzinfo is None and current.tzinfo is not None:
+        current = current.replace(tzinfo=None)
+    elif refreshed_at.tzinfo is not None and current.tzinfo is None:
+        refreshed_at = refreshed_at.replace(tzinfo=None)
+    max_age = timedelta(minutes=60) if end >= business_today() - timedelta(days=1) else timedelta(hours=12)
+    return row.payload if refreshed_at >= current - max_age else None
 
 
 def store_full_report(db, user, start, end, payload, company_id=None,
