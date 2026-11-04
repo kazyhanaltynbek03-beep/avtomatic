@@ -38,6 +38,7 @@ def _full_cache_enabled():
 def standard_ranges(today=None):
     today = today or business_today()
     yesterday = today - timedelta(days=1)
+    day_before_yesterday = today - timedelta(days=2)
     monday = today - timedelta(days=today.weekday())
     previous_week_start = monday - timedelta(days=7)
     previous_week_end = monday - timedelta(days=1)
@@ -50,8 +51,8 @@ def standard_ranges(today=None):
     previous_year_end = year_start - timedelta(days=1)
     six_month_start = _shift_month(current_month, -5)
     windows = [
-        (today, today), (yesterday, yesterday), (monday, today),
-        (previous_week_start, previous_week_end), (current_month, today),
+        (today, today), (yesterday, yesterday), (day_before_yesterday, day_before_yesterday),
+        (monday, today), (previous_week_start, previous_week_end), (current_month, today),
         (previous_month_start, previous_month_end), (quarter_start, today),
         (six_month_start, today), (year_start, today),
         (previous_year_start, previous_year_end),
@@ -448,7 +449,7 @@ def refresh_full_one(db):
     return False
 
 def cache_ready(db):
-    """Wait until every standard-period snapshot exists for each analytics scope."""
+    """Wait until quick finance and marketplace snapshots exist before web starts."""
     users = _analytics_users(db)
     if not users:
         return True
@@ -459,26 +460,46 @@ def cache_ready(db):
     ).order_by(Company.id)))
     expected = []
     full_expected = []
+    marketplace_expected = []
     for user in users:
-        for scope_key, _company_id in _scopes_for(user, company_ids):
+        scopes = _scopes_for(user, company_ids)
+        for scope_key, company_id in scopes:
             expected.append(scope_key)
             for variant in (True, False):
-                full_expected.append(_full_scope_key(user, _company_id, variant))
+                full_expected.append(_full_scope_key(user, company_id, variant))
+            for channel in ("Kaspi", "Wildberries", "Ozon"):
+                marketplace_expected.append(_marketplace_scope_key(user, channel, company_id))
     expected = list(dict.fromkeys(expected))
-    full_expected = list(dict.fromkeys(full_expected))
     rows = db.scalars(select(DashboardReportCache).where(
         DashboardReportCache.scope_key.in_(expected),
     )).all()
     ready = {(row.scope_key, row.start_date, row.end_date) for row in rows}
     if not all((key, start, end) in ready for key in expected for start, end in ranges):
         return False
-    if os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() not in {"1", "true", "yes"}:
-        return True
-    full_rows = db.scalars(select(DashboardReportCache).where(
-        DashboardReportCache.scope_key.in_(full_expected),
+
+    if _full_cache_enabled():
+        full_expected = list(dict.fromkeys(full_expected))
+        full_rows = db.scalars(select(DashboardReportCache).where(
+            DashboardReportCache.scope_key.in_(full_expected),
+        )).all()
+        full_ready = {(row.scope_key, row.start_date, row.end_date) for row in full_rows}
+        if not all((key, start, end) in full_ready for key in full_expected for start, end in ranges):
+            return False
+
+    # Marketplace panels use a smaller set of fast periods; the remaining
+    # historical snapshots continue warming after the web service is available.
+    quick_ranges = ranges[:5]
+    marketplace_expected = list(dict.fromkeys(marketplace_expected))
+    marketplace_rows = db.scalars(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key.in_(marketplace_expected),
     )).all()
-    full_ready = {(row.scope_key, row.start_date, row.end_date) for row in full_rows}
-    return all((key, start, end) in full_ready for key in full_expected for start, end in ranges)
+    marketplace_ready = {
+        (row.scope_key, row.start_date, row.end_date) for row in marketplace_rows
+    }
+    return all(
+        (key, start, end) in marketplace_ready
+        for key in marketplace_expected for start, end in quick_ranges
+    )
 
 
 if __name__ == "__main__":
@@ -488,14 +509,22 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
     warming = "--warm" in __import__("sys").argv[1:]
+    cycle = 0
     while True:
         try:
+            full_cache_enabled = _full_cache_enabled()
+            phase_count = 3 if full_cache_enabled else 2
+            phase = cycle % phase_count
+            cycle += 1
             with SessionLocal() as db:
                 if warming and cache_ready(db):
                     break
-                refreshed = refresh_one(db)
-                if os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}:
-                    refreshed = refresh_full_one(db) or refreshed
+                if phase == 0:
+                    refreshed = refresh_one(db)
+                elif phase == 1 and full_cache_enabled:
+                    refreshed = refresh_full_one(db)
+                else:
+                    refreshed = refresh_marketplace_one(db)
         except Exception:
             logging.exception("Dashboard report cache refresh failed")
             refreshed = False

@@ -287,6 +287,117 @@ def start_wb_weekly_scheduler():
     thread.start()
 
 
+def _auto_sync_kaspi_day(account_id, owner_id, day):
+    """Refresh one bounded Kaspi creation-date day without touching the archive cursor."""
+    import asyncio
+
+    tasks = BackgroundTasks()
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        owner = db.get(User, owner_id)
+        if not account or not owner or not account.active or account.channel != "Kaspi":
+            return {"status": "skipped"}
+        result = sync_kaspi_period(
+            account.id, tasks, day, day, report_mode="created", force=False,
+            u=owner, db=db,
+        )
+        db.commit()
+    if tasks.tasks:
+        asyncio.run(tasks())
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        final_status = account.sync_status if account else "missing"
+    return {**result, "final_status": final_status}
+
+
+def _auto_sync_wildberries(account_id, owner_id):
+    """Run the existing cursor-based incremental WB streams in the background."""
+    import asyncio
+
+    tasks = BackgroundTasks()
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        owner = db.get(User, owner_id)
+        if not account or not owner or not account.active or account.channel != "Wildberries":
+            return {"status": "skipped"}
+        result = account_sync_now(
+            account.id, tasks, background=True, u=owner, db=db,
+        )
+        db.commit()
+    if tasks.tasks:
+        asyncio.run(tasks())
+    with SessionLocal() as db:
+        account = db.get(Account, account_id)
+        final_status = account.sync_status if account else "missing"
+    return {**result, "final_status": final_status}
+
+
+def _automatic_marketplace_sync_loop():
+    """Keep recent Kaspi and WB sales current without running sync on page requests."""
+    try:
+        interval = max(300, int(os.getenv("QOR_MARKETPLACE_SYNC_INTERVAL_SECONDS", "600")))
+    except (TypeError, ValueError):
+        interval = 600
+    while True:
+        try:
+            with SessionLocal() as db:
+                owner = db.scalar(select(User).where(
+                    User.active.is_(True), User.role == "Owner"
+                ).order_by(User.id).limit(1))
+                accounts = list(db.execute(select(Account.id, Account.channel, Account.last_sync).where(
+                    Account.active.is_(True),
+                    Account.mode == "api",
+                    Account.channel.in_(("Kaspi", "Wildberries")),
+                ).order_by(Account.id)))
+                owner_id = owner.id if owner else None
+            if owner_id is not None:
+                today = datetime.now(ZoneInfo("Asia/Almaty")).date()
+                for account_id, channel, last_sync in accounts:
+                    try:
+                        if channel == "Kaspi":
+                            # The period helper has per-day cursors and cache TTLs.
+                            # Recent creation-date windows avoid restarting the 370-day archive.
+                            for offset in (0, 1, 2):
+                                day = today - timedelta(days=offset)
+                                result = _auto_sync_kaspi_day(account_id, owner_id, day)
+                                if result.get("already_running") or result.get("final_status") == "running":
+                                    break
+                                logger.info(
+                                    "Automatic Kaspi refresh account=%s day=%s status=%s",
+                                    account_id, day, result.get("final_status", result.get("status")),
+                                )
+                        elif channel == "Wildberries":
+                            synced_at = last_sync
+                            if synced_at is not None and synced_at.tzinfo is None:
+                                synced_at = synced_at.replace(tzinfo=timezone.utc)
+                            if synced_at and synced_at > now() - timedelta(seconds=interval):
+                                continue
+                            result = _auto_sync_wildberries(account_id, owner_id)
+                            logger.info(
+                                "Automatic Wildberries refresh account=%s status=%s",
+                                account_id, result.get("final_status", result.get("status")),
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Automatic marketplace sync failed for account=%s channel=%s",
+                            account_id, channel,
+                        )
+        except Exception:
+            logger.exception("Automatic marketplace sync cycle failed")
+        time.sleep(interval)
+
+
+@app.on_event("startup")
+def start_automatic_marketplace_sync():
+    enabled = os.getenv("QOR_AUTO_MARKETPLACE_SYNC", "1").strip().lower() not in {"0", "false", "no"}
+    if enabled and not os.getenv("PYTEST_CURRENT_TEST"):
+        threading.Thread(
+            target=_automatic_marketplace_sync_loop,
+            name="automatic-marketplace-sync",
+            daemon=True,
+        ).start()
+
+
 def _dashboard_report_cache_loop():
     """Warm compact, full and marketplace summaries one bounded job at a time."""
     cycle = 0
