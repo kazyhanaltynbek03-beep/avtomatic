@@ -294,11 +294,14 @@ def _dashboard_report_cache_loop():
         try:
             with SessionLocal() as db:
                 refreshed = report_cache.refresh_one(db)
+                full_cache_enabled = os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
+                if full_cache_enabled:
+                    refreshed = report_cache.refresh_full_one(db) or refreshed
         except Exception:
             logger.exception("Dashboard report cache refresh failed")
-        # Move through missing/stale periods steadily, then check again in the
-        # background. Dashboard requests still calculate a bounded headline on a
-        # cold cache; AI KPI requests no longer need the full historical report.
+        # Prepare one compact snapshot and one full report at a time. The request
+        # path serves saved standard-period reports when QOR_FULL_REPORT_CACHE is
+        # enabled; this loop advances through missing/stale ranges without a burst.
         time.sleep(1 if refreshed else 10)
 
 
