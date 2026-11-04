@@ -5572,9 +5572,16 @@ def account_sync_now(id: int, tasks: BackgroundTasks, background: bool = False, 
     scope(u, acc.company_id)
     if not acc.active:
         raise HTTPException(409, "Аккаунт отключён. Подключите его заново перед синхронизацией")
+    stale_kaspi_period_claim = and_(
+        Account.channel == "Kaspi",
+        Account.sync_error.like("KASPI_PERIOD_SYNC:%"),
+        or_(Account.last_sync.is_(None), Account.last_sync < now()-timedelta(minutes=5)),
+    )
     claimed = db.execute(update(Account).where(Account.id == id,
         Account.active.is_(True),
-        or_(Account.sync_status != 'running', Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None)))
+        or_(Account.sync_status != 'running',
+            Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS),
+            Account.last_sync.is_(None), stale_kaspi_period_claim))
         .values(sync_status='running', sync_error='', last_sync=now()))
     if claimed.rowcount != 1:
         raise HTTPException(409, 'Синхронизация уже выполняется')
