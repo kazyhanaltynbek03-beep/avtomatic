@@ -356,7 +356,7 @@ def _automatic_marketplace_sync_loop():
                         for offset in (0, 1, 2):
                             day = today - timedelta(days=offset)
                             result = _auto_sync_kaspi_day(account_id, owner_id, day)
-                            if result.get("status") == "running" or result.get("already_running"):
+                            if result.get("already_running") or result.get("final_status") == "running":
                                 break
                             logger.info(
                                 "Automatic Kaspi refresh account=%s day=%s status=%s",
