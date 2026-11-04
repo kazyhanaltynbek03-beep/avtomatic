@@ -5572,6 +5572,15 @@ def account_sync_now(id: int, tasks: BackgroundTasks, background: bool = False, 
     scope(u, acc.company_id)
     if not acc.active:
         raise HTTPException(409, "Аккаунт отключён. Подключите его заново перед синхронизацией")
+    if acc.channel == "Kaspi" and acc.mode == "api":
+        # Manual sync refreshes a bounded recent window. The durable archive cursor
+        # remains available, but normal dashboard updates must never resume a 370-day scan.
+        from zoneinfo import ZoneInfo
+        local_today = datetime.now(ZoneInfo("Asia/Almaty")).date()
+        return sync_kaspi_period(
+            id, tasks, local_today - timedelta(days=6), local_today,
+            report_mode="created", force=True, u=u, db=db,
+        )
     stale_kaspi_period_claim = and_(
         Account.channel == "Kaspi",
         Account.sync_error.like("KASPI_PERIOD_SYNC:%"),
