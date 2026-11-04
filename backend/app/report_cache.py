@@ -38,6 +38,7 @@ def _full_cache_enabled():
 def standard_ranges(today=None):
     today = today or business_today()
     yesterday = today - timedelta(days=1)
+    day_before_yesterday = today - timedelta(days=2)
     monday = today - timedelta(days=today.weekday())
     previous_week_start = monday - timedelta(days=7)
     previous_week_end = monday - timedelta(days=1)
@@ -50,8 +51,8 @@ def standard_ranges(today=None):
     previous_year_end = year_start - timedelta(days=1)
     six_month_start = _shift_month(current_month, -5)
     windows = [
-        (today, today), (yesterday, yesterday), (monday, today),
-        (previous_week_start, previous_week_end), (current_month, today),
+        (today, today), (yesterday, yesterday), (day_before_yesterday, day_before_yesterday),
+        (monday, today), (previous_week_start, previous_week_end), (current_month, today),
         (previous_month_start, previous_month_end), (quarter_start, today),
         (six_month_start, today), (year_start, today),
         (previous_year_start, previous_year_end),
