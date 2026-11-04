@@ -294,9 +294,12 @@ def _dashboard_report_cache_loop():
         try:
             with SessionLocal() as db:
                 refreshed = report_cache.refresh_one(db)
-                full_cache_enabled = os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
-                if full_cache_enabled:
+            full_cache_enabled = os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
+            if full_cache_enabled:
+                with SessionLocal() as db:
                     refreshed = report_cache.refresh_full_one(db) or refreshed
+            with SessionLocal() as db:
+                refreshed = report_cache.refresh_marketplace_one(db) or refreshed
         except Exception:
             logger.exception("Dashboard report cache refresh failed")
         # Prepare one compact snapshot and one full report at a time. The request
@@ -1780,8 +1783,7 @@ def marketplace_returns_sync_status(company_id: int | None = None,
                       for state, a in db.execute(q)]}
 
 
-@app.get("/api/marketplace-summary")
-def marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None,
+def _calculate_marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None,
                         account_id: int | None = None, u=Depends(current_user), db=Depends(get_db)):
     """Fast marketplace page summary; bounded to the selected channel and period."""
     require(u, "analytics")
@@ -1957,6 +1959,24 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
         'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':source_complete,'source_quality':quality}
 
+
+
+@app.get("/api/marketplace-summary")
+def marketplace_summary(channel: str, start: date, end: date,
+                        company_id: int | None = None, account_id: int | None = None,
+                        u=Depends(current_user), db=Depends(get_db)):
+    """Serve saved standard-period marketplace snapshots; calculate misses once."""
+    require(u, "analytics")
+    if company_id is not None:
+        scope(u, company_id)
+    if account_id is not None:
+        return _calculate_marketplace_summary(channel, start, end, company_id, account_id, u, db)
+    cached = report_cache.get_marketplace_summary(db, u, channel, start, end, company_id)
+    if cached is not None:
+        return cached
+    payload = _calculate_marketplace_summary(channel, start, end, company_id, None, u, db)
+    report_cache.store_marketplace_summary(db, u, channel, start, end, payload, company_id)
+    return {**payload, "report_cached_at": now().isoformat()}
 
 
 @app.get("/api/expenses/operations")
