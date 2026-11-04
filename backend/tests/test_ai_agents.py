@@ -383,7 +383,11 @@ def test_ai_executive_snapshot_uses_warm_cache_without_full_report(monkeypatch):
     result = ai._cached_executive_snapshot(
         DB(), SimpleNamespace(role="Owner"), "2026-10-01", "2026-10-31"
     )
-    assert result is cached
+    assert result is not cached
+    assert result["revenue"] == cached["revenue"]
+    assert result["start"] == cached["start"]
+    assert result["end"] == cached["end"]
+    assert result["currency"] == "KZT"
 
 
 def test_ai_executive_snapshot_uses_fast_headline_on_cache_miss(monkeypatch):
