@@ -1851,17 +1851,26 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
             except marketplace_pipeline.Pending:
                 pass
         try:
-            if src=='wildberries' and typ=='sale' and not str(p.get('saleID') or '').upper().startswith('R') and not p.get('isStorno'):
+            if src=='wildberries' and typ=='sale' and not p.get('isStorno'):
+                sale_id=str(p.get('saleID') or p.get('saleId') or '').upper()
                 dt=p.get('date'); day=marketplace_pipeline._day(dt)
                 if start<=day<=end:
-                    api_units += 1; amount=p.get('priceWithDisc') if p.get('priceWithDisc') is not None else p.get('finishedPrice')
-                    try: api_revenue += marketplace_pipeline._cents(amount,by_id[account_id],p.get('currency') or 'RUB',db,dt)
+                    api_data_available = True
+                    amount=p.get('priceWithDisc') if p.get('priceWithDisc') is not None else p.get('finishedPrice')
+                    try:
+                        amount_cents=marketplace_pipeline._cents(amount,by_id[account_id],p.get('currency') or 'RUB',db,dt)
+                        if sale_id.startswith('R'):
+                            api_returns += abs(amount_cents); api_return_units += 1
+                            api_revenue -= abs(amount_cents); api_units -= 1
+                        else:
+                            api_gross_revenue += amount_cents; api_revenue += amount_cents; api_units += 1
                     except marketplace_pipeline.Pending: api_unconverted += 1
             elif src=='wildberries' and typ=='realization':
                 dt=p.get('rrDate') or p.get('rr_dt') or p.get('saleDt') or p.get('sale_dt'); day=marketplace_pipeline._day(dt)
                 if start<=day<=end:
                     value=next((p.get(k) for k in ('forPay','ppvzForPay','ppvz_for_pay') if p.get(k) is not None), None)
                     if value is not None:
+                        api_data_available = True
                         try: settlement_accrued += marketplace_pipeline._cents(wb_weekly.signed_wb_sale_amount(p, value),by_id[account_id],p.get('currency') or p.get('currency_name') or 'RUB',db,dt); settlement_rows += 1
                         except marketplace_pipeline.Pending: settlement_unconverted += 1
             elif src=='ozon' and typ=='posting' and str(p.get('status') or '').lower() in {'delivered','completed'}:
