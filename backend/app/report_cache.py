@@ -327,7 +327,12 @@ def refresh_one(db):
                     DashboardReportCache.end_date == end,
                 ))
                 span_days = (end - start).days
-                refresh_age = timedelta(minutes=60) if span_days <= 7 and end >= today - timedelta(days=1) else timedelta(hours=12)
+                if span_days <= 1 and end >= today - timedelta(days=1):
+                    refresh_age = timedelta(minutes=5)
+                elif span_days <= 7 and end >= today - timedelta(days=7):
+                    refresh_age = timedelta(minutes=15)
+                else:
+                    refresh_age = timedelta(hours=12)
                 if row and row.refreshed_at and row.refreshed_at > current - refresh_age:
                     continue
                 pending_days = get_pending_source_days(db, user, company_id)
@@ -383,7 +388,8 @@ def refresh_marketplace_one(db):
                     if row is None:
                         row = DashboardReportCache(
                             scope_key=key, start_date=start, end_date=end,
-                            payload=payload, refreshed_at=current,
+                            payload={**payload, "report_cached_at": current.isoformat()},
+                            refreshed_at=current,
                         )
                         db.add(row)
                     else:
@@ -421,7 +427,12 @@ def refresh_full_one(db):
                         DashboardReportCache.end_date == end,
                     ))
                     span_days = (end - start).days
-                    refresh_age = timedelta(minutes=60) if span_days <= 7 and end >= today - timedelta(days=1) else timedelta(hours=12)
+                    if span_days <= 1 and end >= today - timedelta(days=1):
+                    refresh_age = timedelta(minutes=5)
+                elif span_days <= 7 and end >= today - timedelta(days=7):
+                    refresh_age = timedelta(minutes=15)
+                else:
+                    refresh_age = timedelta(hours=12)
                     if row and row.refreshed_at and row.refreshed_at > current - refresh_age:
                         continue
                     payload = jsonable_encoder(finance.report(
