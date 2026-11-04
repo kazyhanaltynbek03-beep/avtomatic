@@ -428,11 +428,11 @@ def refresh_full_one(db):
                     ))
                     span_days = (end - start).days
                     if span_days <= 1 and end >= today - timedelta(days=1):
-                    refresh_age = timedelta(minutes=5)
-                elif span_days <= 7 and end >= today - timedelta(days=7):
-                    refresh_age = timedelta(minutes=15)
-                else:
-                    refresh_age = timedelta(hours=12)
+                        refresh_age = timedelta(minutes=5)
+                    elif span_days <= 7 and end >= today - timedelta(days=7):
+                        refresh_age = timedelta(minutes=15)
+                    else:
+                        refresh_age = timedelta(hours=12)
                     if row and row.refreshed_at and row.refreshed_at > current - refresh_age:
                         continue
                     payload = jsonable_encoder(finance.report(
