@@ -1163,6 +1163,10 @@ function ReportPage({ page, ctx }) {
   if (page === "dashboard" && !dash?.report && dashError) return <section className="panel dashboard-load-warning" role="alert"><ErrorBox error={dashError}/><button className="secondary" type="button" onClick={ctx.reload}>Повторить загрузку</button></section>;
   if (page === "dashboard") {
     const fast = dash?.report || {};
+    const apiQuickRows = [
+      {name: "Kaspi", state: dashboardKaspiSummary},
+      {name: "Wildberries", state: dashboardWbSummary},
+    ];
     const headline = [
       ["Оборот сегодня", dash?.today?.revenue, "На " + (dash?.as_of || "")],
       ["Прибыль сегодня", dash?.today?.net_profit, "Чистая прибыль"],
@@ -1214,6 +1218,34 @@ function ReportPage({ page, ctx }) {
             <strong>{value == null ? "—" : index === 3 ? decimal(value) : money(value)}</strong><small>{note}</small>
           </article>)}
         </div>
+        <section className="panel" aria-label="Продажи по данным API">
+          <div className="panel-heading"><div><h2>Продажи по данным API</h2><span>{ctx.start} — {ctx.end}</span></div></div>
+          <p className="panel-note">Подтверждённые суммы из Kaspi и Wildberries доступны до привязки SKU и заполнения себестоимости. Прибыль и финансовые итоги выше остаются по операциям, проведённым в ERP.</p>
+          <div className="qor-quick-marketplaces">
+            {apiQuickRows.map(({name, state}) => {
+              const data = state.data;
+              const available = Boolean(data?.api_data_available && data?.api_revenue != null);
+              const lastSync = data?.last_sync ? new Date(data.last_sync).toLocaleString("ru-RU") : null;
+              const status = state.error
+                ? "Не удалось обновить источник"
+                : state.loading
+                  ? "Обновляем данные…"
+                  : data?.sync_in_progress
+                    ? "Идёт синхронизация; данные могут быть неполными"
+                    : available
+                      ? `Обновлено · ${lastSync || "время не указано"}`
+                      : "Нет подтверждённых данных за этот период";
+              return <article className={`qor-quick-marketplace qor-quick-marketplace--${name === "Wildberries" ? "wildberries" : "kaspi"}`} key={name}>
+                <div className="qor-quick-marketplace-mark">{name === "Wildberries" ? "WB" : "K"}</div>
+                <div className="qor-quick-marketplace-body">
+                  <div><strong>{name}</strong><span>{available ? `${decimal(Number(data.api_units) || 0)} шт. · возвраты ${money(Number(data.api_returns) || 0)}` : "Сводка API за выбранный период"}</span></div>
+                  <b>{available ? money(data.api_revenue) : state.loading ? "Загрузка…" : "—"}</b>
+                  <small>{status}</small>
+                </div>
+              </article>;
+            })}
+          </div>
+        </section>
         <section className="qor-quick-marketplaces" aria-label="Продажи по каналам">
           {marketplaceCards.map((row) => {
             const key = row.name.toLowerCase(), color = channelColors[key];
