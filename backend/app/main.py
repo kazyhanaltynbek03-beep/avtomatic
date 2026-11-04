@@ -334,7 +334,10 @@ def _auto_sync_wildberries(account_id, owner_id):
 
 def _automatic_marketplace_sync_loop():
     """Keep recent Kaspi and WB sales current without running sync on page requests."""
-    interval = max(300, int(os.getenv("QOR_MARKETPLACE_SYNC_INTERVAL_SECONDS", "600")))
+    try:
+        interval = max(300, int(os.getenv("QOR_MARKETPLACE_SYNC_INTERVAL_SECONDS", "600")))
+    except (TypeError, ValueError):
+        interval = 600
     while True:
         try:
             with SessionLocal() as db:
@@ -350,28 +353,34 @@ def _automatic_marketplace_sync_loop():
             if owner_id is not None:
                 today = datetime.now(ZoneInfo("Asia/Almaty")).date()
                 for account_id, channel, last_sync in accounts:
-                    if channel == "Kaspi":
-                        # Today and yesterday refresh frequently. The day before
-                        # is checked hourly by sync_kaspi_period's bounded cache.
-                        for offset in (0, 1, 2):
-                            day = today - timedelta(days=offset)
-                            result = _auto_sync_kaspi_day(account_id, owner_id, day)
-                            if result.get("already_running") or result.get("final_status") == "running":
-                                break
+                    try:
+                        if channel == "Kaspi":
+                            # The period helper has per-day cursors and cache TTLs.
+                            # Recent creation-date windows avoid restarting the 370-day archive.
+                            for offset in (0, 1, 2):
+                                day = today - timedelta(days=offset)
+                                result = _auto_sync_kaspi_day(account_id, owner_id, day)
+                                if result.get("already_running") or result.get("final_status") == "running":
+                                    break
+                                logger.info(
+                                    "Automatic Kaspi refresh account=%s day=%s status=%s",
+                                    account_id, day, result.get("final_status", result.get("status")),
+                                )
+                        elif channel == "Wildberries":
+                            synced_at = last_sync
+                            if synced_at is not None and synced_at.tzinfo is None:
+                                synced_at = synced_at.replace(tzinfo=timezone.utc)
+                            if synced_at and synced_at > now() - timedelta(seconds=interval):
+                                continue
+                            result = _auto_sync_wildberries(account_id, owner_id)
                             logger.info(
-                                "Automatic Kaspi refresh account=%s day=%s status=%s",
-                                account_id, day, result.get("final_status", result.get("status")),
+                                "Automatic Wildberries refresh account=%s status=%s",
+                                account_id, result.get("final_status", result.get("status")),
                             )
-                    elif channel == "Wildberries":
-                        synced_at = last_sync
-                        if synced_at is not None and synced_at.tzinfo is None:
-                            synced_at = synced_at.replace(tzinfo=timezone.utc)
-                        if synced_at and synced_at > now() - timedelta(seconds=interval):
-                            continue
-                        result = _auto_sync_wildberries(account_id, owner_id)
-                        logger.info(
-                            "Automatic Wildberries refresh account=%s status=%s",
-                            account_id, result.get("final_status", result.get("status")),
+                    except Exception:
+                        logger.exception(
+                            "Automatic marketplace sync failed for account=%s channel=%s",
+                            account_id, channel,
                         )
         except Exception:
             logger.exception("Automatic marketplace sync cycle failed")
