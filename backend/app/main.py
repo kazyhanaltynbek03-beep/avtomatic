@@ -5573,6 +5573,8 @@ def account_sync_now(id: int, tasks: BackgroundTasks, background: bool = False, 
     if not acc.active:
         raise HTTPException(409, "Аккаунт отключён. Подключите его заново перед синхронизацией")
     if acc.channel == "Kaspi" and acc.mode == "api":
+        # Validate credentials before reporting a scheduled refresh as successful.
+        _kaspi_api_context(id, u, db)
         # Manual sync refreshes a bounded recent window. The durable archive cursor
         # remains available, but normal dashboard updates must never resume a 370-day scan.
         from zoneinfo import ZoneInfo
