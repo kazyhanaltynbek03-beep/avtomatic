@@ -116,6 +116,61 @@ def get(db, user, start, end, company_id=None):
     return row.payload if row else None
 
 
+def _marketplace_scope_key(user, channel, company_id=None):
+    if company_id is not None:
+        scope = f"company:{int(company_id)}"
+    elif user.role == "Owner":
+        scope = "all"
+    else:
+        scope = f"user:{int(user.id)}:all"
+    return f"marketplace:{channel}:{scope}"
+
+
+def get_marketplace_summary(db, user, channel, start, end, company_id=None):
+    key = _marketplace_scope_key(user, channel, company_id)
+    row = db.scalar(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key == key,
+        DashboardReportCache.start_date == start,
+        DashboardReportCache.end_date == end,
+    ))
+    return row.payload if row else None
+
+
+def store_marketplace_summary(db, user, channel, start, end, payload, company_id=None):
+    key = _marketplace_scope_key(user, channel, company_id)
+    data = dict(payload)
+    data["report_cached_at"] = now().isoformat()
+    row = db.scalar(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key == key,
+        DashboardReportCache.start_date == start,
+        DashboardReportCache.end_date == end,
+    ))
+    if row is None:
+        row = DashboardReportCache(
+            scope_key=key, start_date=start, end_date=end,
+            payload=data, refreshed_at=now(),
+        )
+        db.add(row)
+    else:
+        row.payload = data
+        row.refreshed_at = now()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        row = db.scalar(select(DashboardReportCache).where(
+            DashboardReportCache.scope_key == key,
+            DashboardReportCache.start_date == start,
+            DashboardReportCache.end_date == end,
+        ))
+        if row is None:
+            raise
+        row.payload = data
+        row.refreshed_at = now()
+        db.commit()
+    return True
+
+
 def _full_scope_key(user, company_id=None, active_only=False):
     scope = f"company:{int(company_id)}" if company_id is not None else "all"
     if user.role == "Owner":
@@ -289,6 +344,58 @@ def refresh_one(db):
                 db.commit()
                 return True
     return False
+
+def refresh_marketplace_one(db):
+    """Prepare one raw-marketplace summary for a standard period and scope."""
+    from .main import _calculate_marketplace_summary
+
+    users = _analytics_users(db)
+    if not users:
+        return False
+    today = business_today()
+    ranges = standard_ranges(today)
+    company_ids = list(db.scalars(select(Company.id).where(
+        Company.active.is_(True)
+    ).order_by(Company.id)))
+    current = now()
+    for user in users:
+        for _scope, company_id in _scopes_for(user, company_ids):
+            for channel in ("Kaspi", "Wildberries", "Ozon"):
+                key = _marketplace_scope_key(user, channel, company_id)
+                for start, end in ranges:
+                    row = db.scalar(select(DashboardReportCache).where(
+                        DashboardReportCache.scope_key == key,
+                        DashboardReportCache.start_date == start,
+                        DashboardReportCache.end_date == end,
+                    ))
+                    span_days = (end - start).days
+                    if span_days <= 1 and end >= today - timedelta(days=1):
+                        refresh_age = timedelta(minutes=5)
+                    elif span_days <= 7 and end >= today - timedelta(days=7):
+                        refresh_age = timedelta(minutes=15)
+                    else:
+                        refresh_age = timedelta(hours=6)
+                    if row and row.refreshed_at and row.refreshed_at > current - refresh_age:
+                        continue
+                    payload = _calculate_marketplace_summary(
+                        channel, start, end, company_id, None, user, db
+                    )
+                    if row is None:
+                        row = DashboardReportCache(
+                            scope_key=key, start_date=start, end_date=end,
+                            payload=payload, refreshed_at=current,
+                        )
+                        db.add(row)
+                    else:
+                        row.payload = {**payload, "report_cached_at": current.isoformat()}
+                        row.refreshed_at = current
+                    db.commit()
+                    logging.getLogger(__name__).info(
+                        "Prepared marketplace summary %s for %s..%s", key, start, end
+                    )
+                    return True
+    return False
+
 
 def refresh_full_one(db):
     """Prepare one full finance report per turn for every analytics user."""
