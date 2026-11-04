@@ -288,23 +288,26 @@ def start_wb_weekly_scheduler():
 
 
 def _dashboard_report_cache_loop():
-    """Keep standard dashboard periods warm outside the user's request path."""
+    """Warm compact, full and marketplace summaries one bounded job at a time."""
+    cycle = 0
     while True:
         refreshed = False
         try:
-            with SessionLocal() as db:
-                refreshed = report_cache.refresh_one(db)
             full_cache_enabled = os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
-            if full_cache_enabled:
-                with SessionLocal() as db:
-                    refreshed = report_cache.refresh_full_one(db) or refreshed
+            phase_count = 3 if full_cache_enabled else 2
+            phase = cycle % phase_count
+            cycle += 1
             with SessionLocal() as db:
-                refreshed = report_cache.refresh_marketplace_one(db) or refreshed
+                if phase == 0:
+                    refreshed = report_cache.refresh_one(db)
+                elif phase == 1 and full_cache_enabled:
+                    refreshed = report_cache.refresh_full_one(db)
+                else:
+                    refreshed = report_cache.refresh_marketplace_one(db)
         except Exception:
             logger.exception("Dashboard report cache refresh failed")
-        # Prepare one compact snapshot and one full report at a time. The request
-        # path serves saved standard-period reports when QOR_FULL_REPORT_CACHE is
-        # enabled; this loop advances through missing/stale ranges without a burst.
+        # A single snapshot is built per turn so background preparation does not
+        # compete with login, page requests or marketplace sync for CPU and RAM.
         time.sleep(1 if refreshed else 10)
 
 
