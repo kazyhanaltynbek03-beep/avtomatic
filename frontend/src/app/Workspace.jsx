@@ -1218,33 +1218,55 @@ function ReportPage({ page, ctx }) {
             <strong>{value == null ? "—" : index === 3 ? decimal(value) : money(value)}</strong><small>{note}</small>
           </article>)}
         </div>
-        <section className="panel" aria-label="Продажи по данным API">
-          <div className="panel-heading"><div><h2>Продажи по данным API</h2><span>{ctx.start} — {ctx.end}</span></div></div>
-          <p className="panel-note">Подтверждённые суммы из Kaspi и Wildberries доступны до привязки SKU и заполнения себестоимости. Прибыль и финансовые итоги выше остаются по операциям, проведённым в ERP.</p>
+        <section className="panel" aria-label="Расчёты по синхронизации маркетплейсов">
+          <div className="panel-heading"><div><h2>Продажи и расчёты из синхронизации</h2><span>{ctx.start} — {ctx.end}</span></div></div>
+          <p className="panel-note">Здесь собраны подтверждённые данные API за выбранный период. Сумма продаж после возвратов рассчитывается из синхронизированных строк. Себестоимость и прибыль ERP останутся неполными, пока клиент не свяжет карточки и не заполнит себестоимость.</p>
           <div className="qor-quick-marketplaces">
             {apiQuickRows.map(({name, state}) => {
               const data = state.data;
               const available = Boolean(data?.api_data_available && data?.api_revenue != null);
               const lastSync = data?.last_sync ? new Date(data.last_sync).toLocaleString("ru-RU") : null;
               const status = state.error
-                ? "Не удалось обновить источник"
+                ? "Не удалось получить сводку источника"
                 : state.loading
-                  ? "Обновляем данные…"
+                  ? "Обновляем сводку…"
                   : data?.sync_in_progress
-                    ? "Идёт синхронизация; данные могут быть неполными"
+                    ? "Синхронизация идёт; показатели могут быть неполными"
                     : available
-                      ? `Обновлено · ${lastSync || "время не указано"}`
-                      : "Нет подтверждённых данных за этот период";
+                      ? `Последнее обновление: ${lastSync || "время не указано"}`
+                      : "Нет подтверждённых данных API за период";
+              const rows = [
+                ["Продажи до возвратов", data?.api_gross_revenue],
+                ["Возвраты API", data?.api_returns],
+                ["Продажи после возвратов", data?.api_revenue],
+                ["Количество продано (нетто)", data?.api_units, "units"],
+                ["Количество возвратов", data?.api_return_units, "units"],
+                ...(name === "Kaspi" ? [
+                  ["Доставка за счёт продавца · API", data?.api_logistics],
+                  ["Оценка комиссии QOR", data?.commission_estimated],
+                ] : [
+                  ["Начислено к выплате · WB Finance", data?.settlement_accrued],
+                ]),
+              ];
               return <article className={`qor-quick-marketplace qor-quick-marketplace--${name === "Wildberries" ? "wildberries" : "kaspi"}`} key={name}>
                 <div className="qor-quick-marketplace-mark">{name === "Wildberries" ? "WB" : "K"}</div>
                 <div className="qor-quick-marketplace-body">
-                  <div><strong>{name}</strong><span>{available ? `${decimal(Number(data.api_units) || 0)} шт. · возвраты ${money(Number(data.api_returns) || 0)}` : "Сводка API за выбранный период"}</span></div>
+                  <div><strong>{name}</strong><span>{status}</span></div>
                   <b>{available ? money(data.api_revenue) : state.loading ? "Загрузка…" : "—"}</b>
-                  <small>{status}</small>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:"8px",marginTop:"10px"}}>
+                    {rows.map(([label,value,kind]) => <div key={label} style={{minWidth:0,padding:"8px",borderRadius:"8px",background:"rgba(30,70,55,.05)"}}>
+                      <small style={{display:"block",fontSize:"11px"}}>{label}</small>
+                      <strong style={{fontSize:"13px",overflowWrap:"anywhere"}}>{value == null ? "—" : kind === "units" ? decimal(value) : money(value)}</strong>
+                    </div>)}
+                  </div>
+                  {name === "Wildberries" && data?.settlement_rows > 0 && <small style={{display:"block",marginTop:"8px"}}>Строк WB Finance: {decimal(data.settlement_rows)} · не является прибылью или подтверждением выплаты.</small>}
+                  {data?.api_unconverted > 0 && <small style={{display:"block",marginTop:"6px"}}>Не преобразовано строк: {decimal(data.api_unconverted)}. Итог может быть неполным.</small>}
+                  {state.error && <small style={{display:"block",marginTop:"6px",color:"#b42318"}}>Сводка API сейчас недоступна; показаны только те сохранённые показатели, которые вернул сервер.</small>}
                 </div>
               </article>;
             })}
           </div>
+          <p className="panel-note">Комиссия Kaspi здесь помечена как оценка QOR; начисление WB взято из финансовых строк WB, если они есть. Эти показатели не подменяют официальный финансовый отчёт и не используют выдуманную себестоимость.</p>
         </section>
         <section className="qor-quick-marketplaces" aria-label="Продажи по каналам">
           {marketplaceCards.map((row) => {

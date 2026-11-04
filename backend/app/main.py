@@ -288,17 +288,26 @@ def start_wb_weekly_scheduler():
 
 
 def _dashboard_report_cache_loop():
-    """Keep standard dashboard periods warm outside the user's request path."""
+    """Warm compact, full and marketplace summaries one bounded job at a time."""
+    cycle = 0
     while True:
         refreshed = False
         try:
+            full_cache_enabled = os.getenv("QOR_FULL_REPORT_CACHE", "0").strip().lower() in {"1", "true", "yes"}
+            phase_count = 3 if full_cache_enabled else 2
+            phase = cycle % phase_count
+            cycle += 1
             with SessionLocal() as db:
-                refreshed = report_cache.refresh_one(db)
+                if phase == 0:
+                    refreshed = report_cache.refresh_one(db)
+                elif phase == 1 and full_cache_enabled:
+                    refreshed = report_cache.refresh_full_one(db)
+                else:
+                    refreshed = report_cache.refresh_marketplace_one(db)
         except Exception:
             logger.exception("Dashboard report cache refresh failed")
-        # Move through missing/stale periods steadily, then check again in the
-        # background. Dashboard requests still calculate a bounded headline on a
-        # cold cache; AI KPI requests no longer need the full historical report.
+        # A single snapshot is built per turn so background preparation does not
+        # compete with login, page requests or marketplace sync for CPU and RAM.
         time.sleep(1 if refreshed else 10)
 
 
@@ -1777,8 +1786,7 @@ def marketplace_returns_sync_status(company_id: int | None = None,
                       for state, a in db.execute(q)]}
 
 
-@app.get("/api/marketplace-summary")
-def marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None,
+def _calculate_marketplace_summary(channel: str, start: date, end: date, company_id: int | None = None,
                         account_id: int | None = None, u=Depends(current_user), db=Depends(get_db)):
     """Fast marketplace page summary; bounded to the selected channel and period."""
     require(u, "analytics")
@@ -1851,17 +1859,26 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
             except marketplace_pipeline.Pending:
                 pass
         try:
-            if src=='wildberries' and typ=='sale' and not str(p.get('saleID') or '').upper().startswith('R') and not p.get('isStorno'):
+            if src=='wildberries' and typ=='sale' and not p.get('isStorno'):
+                sale_id=str(p.get('saleID') or p.get('saleId') or '').upper()
                 dt=p.get('date'); day=marketplace_pipeline._day(dt)
                 if start<=day<=end:
-                    api_units += 1; amount=p.get('priceWithDisc') if p.get('priceWithDisc') is not None else p.get('finishedPrice')
-                    try: api_revenue += marketplace_pipeline._cents(amount,by_id[account_id],p.get('currency') or 'RUB',db,dt)
+                    api_data_available = True
+                    amount=p.get('priceWithDisc') if p.get('priceWithDisc') is not None else p.get('finishedPrice')
+                    try:
+                        amount_cents=marketplace_pipeline._cents(amount,by_id[account_id],p.get('currency') or 'RUB',db,dt)
+                        if sale_id.startswith('R'):
+                            api_returns += abs(amount_cents); api_return_units += 1
+                            api_revenue -= abs(amount_cents); api_units -= 1
+                        else:
+                            api_gross_revenue += amount_cents; api_revenue += amount_cents; api_units += 1
                     except marketplace_pipeline.Pending: api_unconverted += 1
             elif src=='wildberries' and typ=='realization':
                 dt=p.get('rrDate') or p.get('rr_dt') or p.get('saleDt') or p.get('sale_dt'); day=marketplace_pipeline._day(dt)
                 if start<=day<=end:
                     value=next((p.get(k) for k in ('forPay','ppvzForPay','ppvz_for_pay') if p.get(k) is not None), None)
                     if value is not None:
+                        api_data_available = True
                         try: settlement_accrued += marketplace_pipeline._cents(wb_weekly.signed_wb_sale_amount(p, value),by_id[account_id],p.get('currency') or p.get('currency_name') or 'RUB',db,dt); settlement_rows += 1
                         except marketplace_pipeline.Pending: settlement_unconverted += 1
             elif src=='ozon' and typ=='posting' and str(p.get('status') or '').lower() in {'delivered','completed'}:
@@ -1945,6 +1962,24 @@ def marketplace_summary(channel: str, start: date, end: date, company_id: int | 
         'settlement_accrued':settlement_accrued if settlement_rows else None,'settlement_rows':settlement_rows,'settlement_unconverted':settlement_unconverted,'net_profit':profit,
         'margin':round(profit/revenue*100,2) if revenue and profit is not None else None,'sync_in_progress':sync_in_progress,'source_complete':source_complete,'source_quality':quality}
 
+
+
+@app.get("/api/marketplace-summary")
+def marketplace_summary(channel: str, start: date, end: date,
+                        company_id: int | None = None, account_id: int | None = None,
+                        u=Depends(current_user), db=Depends(get_db)):
+    """Serve saved standard-period marketplace snapshots; calculate misses once."""
+    require(u, "analytics")
+    if company_id is not None:
+        scope(u, company_id)
+    if account_id is not None:
+        return _calculate_marketplace_summary(channel, start, end, company_id, account_id, u, db)
+    cached = report_cache.get_marketplace_summary(db, u, channel, start, end, company_id)
+    if cached is not None:
+        return cached
+    payload = _calculate_marketplace_summary(channel, start, end, company_id, None, u, db)
+    report_cache.store_marketplace_summary(db, u, channel, start, end, payload, company_id)
+    return {**payload, "report_cached_at": now().isoformat()}
 
 
 @app.get("/api/expenses/operations")
