@@ -5454,6 +5454,17 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                   {"start":str(start),"end":str(end),"report_mode":report_mode,"status_only":status_only,"records":records,"pages":pages,
                    "inserted":inserted_total,"updated":updated_total})
             db.commit()
+            refresh_end = end
+            if report_mode == "created":
+                refresh_end = max(end, today_local.date())
+            invalidated = report_cache.invalidate_marketplace_reports(
+                db, "Kaspi", start, refresh_end, acc.company_id
+            )
+            if invalidated:
+                logger.info(
+                    "Invalidated %s prepared Kaspi report snapshots for %s..%s",
+                    invalidated, start, refresh_end,
+                )
         except Exception as exc:
             logger.exception("Kaspi period sync failed for account %s", account_id)
             db.rollback()
