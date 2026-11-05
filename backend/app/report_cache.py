@@ -8,7 +8,7 @@ import threading
 import os
 import logging
 from time import monotonic
-from sqlalchemy import delete, select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from .models import Account, Company, DashboardReportCache, User, business_today, now
 from . import finance
@@ -57,8 +57,9 @@ def standard_ranges(today=None):
         (six_month_start, today), (year_start, today),
         (previous_year_start, previous_year_end),
     ]
-    if _full_cache_enabled():
-        windows.append((today - timedelta(days=369), today))  # rolling 370-day window
+    # Keep only the named reporting windows used by the UI. A rolling 370-day
+    # full-report snapshot is intentionally omitted; year and half-year reports
+    # are still prepared from the already-synced ledger below.
     unique = {}
     for start, end in windows:
         unique[(start, end)] = (start, end)
@@ -106,11 +107,11 @@ def _scopes_for(user, active_company_ids):
     ]
 
 def invalidate_marketplace_reports(db, channel, start, end, company_id=None):
-    """Invalidate prepared dashboard and marketplace snapshots after source sync.
+    """Mark affected snapshots stale while keeping them readable during refresh.
 
-    A sync can update rows that were already represented by a fresh snapshot.
-    Delete only scopes that include the changed company and ranges that overlap
-    the changed event window; the background cache loop immediately rebuilds them.
+    A sync can change rows already represented by a prepared report. Preserve the
+    last snapshot for immediate reads, then make the background worker rebuild only
+    scopes and periods that overlap the changed event window.
     """
     if not channel or end < start:
         return 0
@@ -130,11 +131,11 @@ def invalidate_marketplace_reports(db, channel, start, end, company_id=None):
                 scope_keys.add(_full_scope_key(user, scoped_company, False))
     if not scope_keys:
         return 0
-    result = db.execute(delete(DashboardReportCache).where(
+    result = db.execute(update(DashboardReportCache).where(
         DashboardReportCache.scope_key.in_(scope_keys),
         DashboardReportCache.start_date <= end,
         DashboardReportCache.end_date >= start,
-    ))
+    ).values(refreshed_at=now() - timedelta(days=1)))
     db.commit()
     return int(result.rowcount or 0)
 
@@ -483,7 +484,7 @@ def refresh_full_one(db):
     return False
 
 def cache_ready(db):
-    """Wait until quick finance and marketplace snapshots exist before web starts."""
+    """Wait until every UI report period is snapshotted before web starts."""
     users = _analytics_users(db)
     if not users:
         return True
@@ -520,9 +521,9 @@ def cache_ready(db):
         if not all((key, start, end) in full_ready for key in full_expected for start, end in ranges):
             return False
 
-    # Marketplace panels use a smaller set of fast periods; the remaining
-    # historical snapshots continue warming after the web service is available.
-    quick_ranges = ranges[:5]
+    # Gate web startup on every period exposed by the report controls. This
+    # prevents a cold synchronous calculation when a customer selects month,
+    # half-year, or year immediately after the VPS starts.
     marketplace_expected = list(dict.fromkeys(marketplace_expected))
     marketplace_rows = db.scalars(select(DashboardReportCache).where(
         DashboardReportCache.scope_key.in_(marketplace_expected),
@@ -532,7 +533,7 @@ def cache_ready(db):
     }
     return all(
         (key, start, end) in marketplace_ready
-        for key in marketplace_expected for start, end in quick_ranges
+        for key in marketplace_expected for start, end in ranges
     )
 
 
