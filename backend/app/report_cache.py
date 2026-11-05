@@ -152,6 +152,40 @@ def get(db, user, start, end, company_id=None):
     return row.payload if row else None
 
 
+def _store_cache_row(db, key, start, end, payload, refreshed_at=None):
+    """Insert or update a snapshot, recovering if another worker inserts it first."""
+    refreshed_at = refreshed_at or now()
+    row = db.scalar(select(DashboardReportCache).where(
+        DashboardReportCache.scope_key == key,
+        DashboardReportCache.start_date == start,
+        DashboardReportCache.end_date == end,
+    ))
+    if row is None:
+        db.add(DashboardReportCache(
+            scope_key=key, start_date=start, end_date=end,
+            payload=payload, refreshed_at=refreshed_at,
+        ))
+    else:
+        row.payload = payload
+        row.refreshed_at = refreshed_at
+    try:
+        db.commit()
+    except IntegrityError:
+        # Warmup and the always-on worker may calculate the same cold period.
+        db.rollback()
+        row = db.scalar(select(DashboardReportCache).where(
+            DashboardReportCache.scope_key == key,
+            DashboardReportCache.start_date == start,
+            DashboardReportCache.end_date == end,
+        ))
+        if row is None:
+            raise
+        row.payload = payload
+        row.refreshed_at = refreshed_at
+        db.commit()
+    return True
+
+
 def _marketplace_scope_key(user, channel, company_id=None):
     if company_id is not None:
         scope = f"company:{int(company_id)}"
@@ -299,22 +333,7 @@ def store_ai_snapshot(db, user, start, end, payload, company_id=None, account_id
     key = _ai_scope_key(user, company_id, account_id)
     if key is None:
         return False
-    row = db.scalar(select(DashboardReportCache).where(
-        DashboardReportCache.scope_key == key,
-        DashboardReportCache.start_date == start,
-        DashboardReportCache.end_date == end,
-    ))
-    if row is None:
-        row = DashboardReportCache(
-            scope_key=key, start_date=start, end_date=end,
-            payload=payload, refreshed_at=now(),
-        )
-        db.add(row)
-    else:
-        row.payload = payload
-        row.refreshed_at = now()
-    db.commit()
-    return True
+    return _store_cache_row(db, key, start, end, payload)
 
 
 def get_pending_source_days(db, user, company_id=None, active_only=True):
@@ -373,16 +392,7 @@ def refresh_one(db):
                     continue
                 pending_days = get_pending_source_days(db, user, company_id)
                 payload = finance.report_headline(db, user, start, end, company_id, pending_days)
-                if row is None:
-                    row = DashboardReportCache(
-                        scope_key=key, start_date=start, end_date=end,
-                        payload=payload, refreshed_at=current,
-                    )
-                    db.add(row)
-                else:
-                    row.payload = payload
-                    row.refreshed_at = current
-                db.commit()
+                _store_cache_row(db, key, start, end, payload, current)
                 return True
     return False
 
@@ -421,17 +431,8 @@ def refresh_marketplace_one(db):
                     payload = _calculate_marketplace_summary(
                         channel, start, end, company_id, None, user, db
                     )
-                    if row is None:
-                        row = DashboardReportCache(
-                            scope_key=key, start_date=start, end_date=end,
-                            payload={**payload, "report_cached_at": current.isoformat()},
-                            refreshed_at=current,
-                        )
-                        db.add(row)
-                    else:
-                        row.payload = {**payload, "report_cached_at": current.isoformat()}
-                        row.refreshed_at = current
-                    db.commit()
+                    cached_payload = {**payload, "report_cached_at": current.isoformat()}
+                    _store_cache_row(db, key, start, end, cached_payload, current)
                     logging.getLogger(__name__).info(
                         "Prepared marketplace summary %s for %s..%s", key, start, end
                     )
