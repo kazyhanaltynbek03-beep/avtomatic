@@ -123,3 +123,51 @@ def test_kaspi_period_sync_is_idempotent_while_account_sync_runs(client):
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "running"
     assert response.json()["already_running"] is True
+
+
+def test_kaspi_period_sync_reclaims_stale_unleased_heartbeat_after_archive_pause(client, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+    from app.db import SessionLocal
+    from app.main import KASPI_JOB_RECOVERY_GRACE_SECONDS
+    from app.models import Account
+
+    monkeypatch.setenv("KASPI_PAUSE_ACCOUNT_IDS", "1")
+    monkeypatch.setattr("app.main._background_kaspi_period_sync", lambda *args, **kwargs: None)
+    stale_at = datetime.now(timezone.utc) - timedelta(
+        seconds=KASPI_JOB_RECOVERY_GRACE_SECONDS + 1
+    )
+    with SessionLocal() as db:
+        account = db.get(Account, 1)
+        account.mode = "api"
+        account.sync_status = "running"
+        account.sync_error = ""
+        account.last_sync = stale_at
+        account.integration_settings = {
+            "kaspi_period_job": {
+                "start": "2026-07-08",
+                "end": "2026-09-25",
+                "mode": "issued",
+                "status": "paused",
+            }
+        }
+        db.commit()
+
+    today = datetime.now(ZoneInfo("Asia/Almaty")).date().isoformat()
+    response = client.post(
+        f"/api/accounts/1/sync-kaspi-period?start={today}&end={today}&report_mode=created"
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "running"
+    assert response.json().get("already_running") is not True
+    with SessionLocal() as db:
+        account = db.get(Account, 1)
+        job = account.integration_settings["kaspi_period_job"]
+        assert job["status"] == "running"
+        assert job["start"] == today
+        assert job["end"] == today
+        assert account.sync_error.startswith("KASPI_PERIOD_SYNC:")
+        paused = account.integration_settings["kaspi_period_paused_jobs"]
+        assert paused[-1]["start"] == "2026-07-08"
+        assert paused[-1]["end"] == "2026-09-25"
