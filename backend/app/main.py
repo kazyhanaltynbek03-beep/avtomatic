@@ -5491,6 +5491,18 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     sync_error = str(acc.sync_error or "")
     current_period_job = dict((acc.integration_settings or {}).get("kaspi_period_job") or {})
     current_period_job_active = current_period_job.get("status") in {"running", "retry"}
+    # SQLAlchemy can return naive timestamps with SQLite and aware timestamps
+    # with Postgres. Normalize before comparing so stale-lock recovery works in
+    # both environments.
+    last_sync = acc.last_sync
+    if last_sync is not None and last_sync.tzinfo is None:
+        last_sync = last_sync.replace(tzinfo=timezone.utc)
+    stale_sync_cutoff = now() - timedelta(seconds=KASPI_JOB_RECOVERY_GRACE_SECONDS)
+    if stale_sync_cutoff.tzinfo is None:
+        stale_sync_cutoff = stale_sync_cutoff.replace(tzinfo=timezone.utc)
+    abandoned_period_cutoff = now() - timedelta(minutes=5)
+    if abandoned_period_cutoff.tzinfo is None:
+        abandoned_period_cutoff = abandoned_period_cutoff.replace(tzinfo=timezone.utc)
     # A process restart can leave the generic account lock set to "running"
     # even though the only durable Kaspi archive job is paused. Recent-period
     # refreshes use their own lease, so reclaim an old unleased status after the
@@ -5500,14 +5512,14 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
         and acc.sync_status == "running"
         and not sync_error.startswith("KASPI_PERIOD_SYNC:")
         and not current_period_job_active
-        and acc.last_sync is not None
-        and acc.last_sync < now()-timedelta(seconds=KASPI_JOB_RECOVERY_GRACE_SECONDS)
+        and last_sync is not None
+        and last_sync < stale_sync_cutoff
     )
     abandoned_kaspi_period_sync = (
         sync_is_running
         and acc.channel == "Kaspi"
         and sync_error.startswith("KASPI_PERIOD_SYNC")
-        and (acc.last_sync is None or acc.last_sync < now()-timedelta(minutes=5))
+        and (last_sync is None or last_sync < abandoned_period_cutoff)
     )
     if sync_is_running and not abandoned_kaspi_period_sync and not stale_unleased_kaspi_sync:
         return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
