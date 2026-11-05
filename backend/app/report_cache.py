@@ -8,7 +8,7 @@ import threading
 import os
 import logging
 from time import monotonic
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from .models import Account, Company, DashboardReportCache, User, business_today, now
 from . import finance
@@ -104,6 +104,40 @@ def _scopes_for(user, active_company_ids):
         (f"user:{int(user.id)}:company:{company_id}", company_id)
         for company_id in active_company_ids if company_id in allowed_ids
     ]
+
+def invalidate_marketplace_reports(db, channel, start, end, company_id=None):
+    """Invalidate prepared dashboard and marketplace snapshots after source sync.
+
+    A sync can update rows that were already represented by a fresh snapshot.
+    Delete only scopes that include the changed company and ranges that overlap
+    the changed event window; the background cache loop immediately rebuilds them.
+    """
+    if not channel or end < start:
+        return 0
+    users = _analytics_users(db)
+    company_ids = list(db.scalars(select(Company.id).where(
+        Company.active.is_(True)
+    ).order_by(Company.id)))
+    scope_keys = set()
+    for user in users:
+        for dashboard_scope, scoped_company in _scopes_for(user, company_ids):
+            if company_id is not None and scoped_company not in (None, company_id):
+                continue
+            scope_keys.add(dashboard_scope)
+            scope_keys.add(_marketplace_scope_key(user, channel, scoped_company))
+            if _full_cache_enabled():
+                scope_keys.add(_full_scope_key(user, scoped_company, True))
+                scope_keys.add(_full_scope_key(user, scoped_company, False))
+    if not scope_keys:
+        return 0
+    result = db.execute(delete(DashboardReportCache).where(
+        DashboardReportCache.scope_key.in_(scope_keys),
+        DashboardReportCache.start_date <= end,
+        DashboardReportCache.end_date >= start,
+    ))
+    db.commit()
+    return int(result.rowcount or 0)
+
 
 def get(db, user, start, end, company_id=None):
     key = _scope_key(user, company_id)

@@ -5454,6 +5454,17 @@ def _background_kaspi_period_sync(account_id, user_id, start, end, extra_order_i
                   {"start":str(start),"end":str(end),"report_mode":report_mode,"status_only":status_only,"records":records,"pages":pages,
                    "inserted":inserted_total,"updated":updated_total})
             db.commit()
+            refresh_end = end
+            if report_mode == "created":
+                refresh_end = max(end, today_local.date())
+            invalidated = report_cache.invalidate_marketplace_reports(
+                db, "Kaspi", start, refresh_end, acc.company_id
+            )
+            if invalidated:
+                logger.info(
+                    "Invalidated %s prepared Kaspi report snapshots for %s..%s",
+                    invalidated, start, refresh_end,
+                )
         except Exception as exc:
             logger.exception("Kaspi period sync failed for account %s", account_id)
             db.rollback()
@@ -5488,13 +5499,40 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     if end < start or (end - start).days > 366:
         raise HTTPException(422, "Укажите корректный период не длиннее 367 дней")
     sync_is_running = sync_status_for_display(acc)[0] == "running"
+    sync_error = str(acc.sync_error or "")
+    current_period_job = dict((acc.integration_settings or {}).get("kaspi_period_job") or {})
+    current_period_job_active = current_period_job.get("status") in {"running", "retry"}
+    # SQLAlchemy can return naive timestamps with SQLite and aware timestamps
+    # with Postgres. Normalize before comparing so stale-lock recovery works in
+    # both environments.
+    last_sync = acc.last_sync
+    if last_sync is not None and last_sync.tzinfo is None:
+        last_sync = last_sync.replace(tzinfo=timezone.utc)
+    stale_sync_cutoff = now() - timedelta(seconds=KASPI_JOB_RECOVERY_GRACE_SECONDS)
+    if stale_sync_cutoff.tzinfo is None:
+        stale_sync_cutoff = stale_sync_cutoff.replace(tzinfo=timezone.utc)
+    abandoned_period_cutoff = now() - timedelta(minutes=5)
+    if abandoned_period_cutoff.tzinfo is None:
+        abandoned_period_cutoff = abandoned_period_cutoff.replace(tzinfo=timezone.utc)
+    # A process restart can leave the generic account lock set to "running"
+    # even though the only durable Kaspi archive job is paused. Recent-period
+    # refreshes use their own lease, so reclaim an old unleased status after the
+    # shorter recovery grace without touching an active period job.
+    stale_unleased_kaspi_sync = (
+        acc.channel == "Kaspi"
+        and acc.sync_status == "running"
+        and not sync_error.startswith("KASPI_PERIOD_SYNC:")
+        and not current_period_job_active
+        and last_sync is not None
+        and last_sync < stale_sync_cutoff
+    )
     abandoned_kaspi_period_sync = (
         sync_is_running
         and acc.channel == "Kaspi"
-        and str(acc.sync_error or "").startswith("KASPI_PERIOD_SYNC")
-        and (acc.last_sync is None or acc.last_sync < now()-timedelta(minutes=5))
+        and sync_error.startswith("KASPI_PERIOD_SYNC")
+        and (last_sync is None or last_sync < abandoned_period_cutoff)
     )
-    if sync_is_running and not abandoned_kaspi_period_sync:
+    if sync_is_running and not abandoned_kaspi_period_sync and not stale_unleased_kaspi_sync:
         return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
                 "start":str(start),"end":str(end),"report_mode":report_mode}
     local_today = datetime.now(ZoneInfo("Asia/Almaty")).date()
@@ -5545,8 +5583,22 @@ def sync_kaspi_period(id: int, tasks: BackgroundTasks, start: date, end: date,
     job.update(status="running", failures=0)
     settings["kaspi_period_job"] = job
     lease = "KASPI_PERIOD_SYNC:" + uuid.uuid4().hex
+    claim_conditions = [
+        Account.sync_status != "running",
+        Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS),
+        Account.last_sync.is_(None),
+        stale_period_claim,
+    ]
+    if stale_unleased_kaspi_sync:
+        # Compare the observed heartbeat and status so a concurrent worker that
+        # refreshed the lock cannot be reclaimed by this request.
+        claim_conditions.append(and_(
+            Account.sync_status == "running",
+            Account.sync_error == acc.sync_error,
+            Account.last_sync == acc.last_sync,
+        ))
     claimed = db.execute(update(Account).where(Account.id == id,
-        or_(Account.sync_status != "running", Account.last_sync < now()-timedelta(seconds=SYNC_RUNNING_TIMEOUT_SECONDS), Account.last_sync.is_(None), stale_period_claim))
+        or_(*claim_conditions))
         .values(sync_status="running", sync_error=lease, last_sync=now(), integration_settings=settings))
     if claimed.rowcount != 1:
         return {"ok":True,"status":"running","already_running":True,"account_id":acc.id,
