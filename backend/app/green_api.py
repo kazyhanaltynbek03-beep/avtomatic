@@ -43,24 +43,38 @@ def send_text(db, recipient, message):
         chat_id = f"{digits}@c.us" if 8 <= len(digits) <= 15 else ""
     if not re.fullmatch(r"\d{8,15}@c\.us", chat_id):
         raise RuntimeError("Green-API поддерживает ответы только в личный чат WhatsApp")
-    response = httpx.post(
-        _url(config, "sendMessage"),
-        json={"chatId": chat_id, "message": str(message)[:4096]},
-        timeout=20,
-    )
+    try:
+        response = httpx.post(
+            _url(config, "sendMessage"),
+            json={"chatId": chat_id, "message": str(message)[:4096]},
+            timeout=20,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("Green-API sendMessage transport error (%s)", type(exc).__name__)
+        raise RuntimeError("Не удалось соединиться с Green-API") from None
     if response.is_error:
         logger.warning("Green-API sendMessage failed with HTTP %s", response.status_code)
         raise RuntimeError(f"Green-API не отправил сообщение (HTTP {response.status_code})")
-    return response.json()
+    try:
+        return response.json()
+    except ValueError:
+        raise RuntimeError("Green-API вернул некорректный ответ") from None
 
 
 def test_connection(db):
     config = load_config("whatsapp_cloud", db)
-    response = httpx.get(_url(config, "getStateInstance"), timeout=15)
+    try:
+        response = httpx.get(_url(config, "getStateInstance"), timeout=15)
+    except httpx.HTTPError as exc:
+        logger.warning("Green-API getStateInstance transport error (%s)", type(exc).__name__)
+        raise RuntimeError("Не удалось соединиться с Green-API") from None
     if response.is_error:
         logger.warning("Green-API getStateInstance failed with HTTP %s", response.status_code)
         raise RuntimeError(f"Green-API ответил HTTP {response.status_code}")
-    body = response.json()
+    try:
+        body = response.json()
+    except ValueError:
+        raise RuntimeError("Green-API вернул некорректный ответ") from None
     state = str(body.get("stateInstance") or "unknown")
     return {"ok": state == "authorized", "state": state,
             "message": "Инстанс Green-API авторизован" if state == "authorized" else f"Состояние инстанса: {state}"}
