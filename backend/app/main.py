@@ -4494,7 +4494,9 @@ def site_integrations_get(u=Depends(current_user), db=Depends(get_db)):
                         else ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))
         whatsapp.update({"provider": provider,
                          "inbound_enabled": bool(saved_whatsapp.get("inbound_enabled")),
-                         "inbound_ready": all(bool(saved_whatsapp.get(k)) for k in inbound_keys)})
+                         "inbound_ready": all(bool(saved_whatsapp.get(k)) for k in inbound_keys),
+                         "client_chat_number": saved_whatsapp.get("client_chat_number") or str(getattr(db.get(Setting, 1), "daily_report_recipient", "") or ""),
+                         "owner_chat_number": saved_whatsapp.get("owner_chat_number") or ""})
         claude = ai.key_status(db)
     except SecretStorageError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -4545,6 +4547,7 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
     allowed = {"provider", "access_token", "phone_number_id", "template_name", "language",
                "graph_version", "app_secret", "webhook_verify_token", "inbound_enabled",
                "green_api_url", "green_api_instance_id", "green_api_token", "green_webhook_token",
+               "client_chat_number", "owner_chat_number",
                "clear"}
     if set(p) - allowed:
         raise HTTPException(422, "Недопустимые поля настройки WhatsApp")
@@ -4574,6 +4577,12 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
                 raise HTTPException(422, "Проверьте код языка шаблона WhatsApp")
             if not re.fullmatch(r"v\d+\.\d+", version):
                 raise HTTPException(422, "Версия Graph API должна выглядеть, например, как v26.0")
+            client_chat_number = str(p.get("client_chat_number", config.get("client_chat_number", "")) or "").strip()
+            owner_chat_number = str(p.get("owner_chat_number", config.get("owner_chat_number", "")) or "").strip()
+            if client_chat_number and not daily_reports.PHONE_RE.fullmatch(client_chat_number):
+                raise HTTPException(422, "Номер клиента укажите в формате +77001234567")
+            if owner_chat_number and not daily_reports.PHONE_RE.fullmatch(owner_chat_number):
+                raise HTTPException(422, "Твой номер укажите в формате +77001234567")
             green_api_url = str(p.get("green_api_url", config.get("green_api_url", "")) or "").strip().rstrip("/")
             green_api_instance_id = str(p.get("green_api_instance_id", config.get("green_api_instance_id", "")) or "").strip()
             green_api_token = str(p.get("green_api_token") or "").strip()
@@ -4604,6 +4613,8 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
                 config["webhook_verify_token"] = verify_token
             config.update({"phone_number_id": phone_id, "template_name": template,
                            "language": language, "graph_version": version,
+                           "client_chat_number": client_chat_number,
+                           "owner_chat_number": owner_chat_number,
                            "inbound_enabled": bool(p.get("inbound_enabled", config.get("inbound_enabled", False)))})
             save_config(db, "whatsapp_cloud", config)
         db.commit()
@@ -4616,11 +4627,14 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
     db.commit()
     saved = load_config("whatsapp_cloud", db)
     provider = str(saved.get("provider") or status.get("provider") or "whatsapp_cloud")
+    legacy_recipient = str(getattr(db.get(Setting, 1), "daily_report_recipient", "") or "")
     inbound_keys = (("green_api_url", "green_api_instance_id", "green_api_token", "green_webhook_token")
                     if provider == "green_api"
                     else ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))
     return {**status, "provider": provider, "inbound_enabled": bool(saved.get("inbound_enabled")),
-            "inbound_ready": all(bool(saved.get(k)) for k in inbound_keys)}
+            "inbound_ready": all(bool(saved.get(k)) for k in inbound_keys),
+            "client_chat_number": saved.get("client_chat_number") or legacy_recipient,
+            "owner_chat_number": saved.get("owner_chat_number") or ""}
 
 
 @app.post("/api/settings/integrations/whatsapp/test")
