@@ -25,8 +25,17 @@ def _recipient_allowed(db, sender):
     setting = db.get(Setting, 1)
     if not setting:
         return False
-    saved = "".join(c for c in str(getattr(setting, "daily_report_recipient", "")) if c.isdigit())
-    return bool(saved and saved == "".join(c for c in str(sender) if c.isdigit()))
+    config = _config(db)
+    client_number = "".join(c for c in str(config.get("client_chat_number") or "") if c.isdigit())
+    owner_number = "".join(c for c in str(config.get("owner_chat_number") or "") if c.isdigit())
+    legacy_number = "".join(c for c in str(getattr(setting, "daily_report_recipient", "")) if c.isdigit())
+    allowed = [number for number in (client_number, owner_number) if number]
+    if not allowed:
+        allowed = [legacy_number] if legacy_number else []
+    elif not client_number and legacy_number:
+        allowed.append(legacy_number)
+    sender_number = "".join(c for c in str(sender) if c.isdigit())
+    return bool(sender_number and sender_number in allowed)
 
 
 def _enqueue_inbound_text(db, sender, text, message_id, provider):

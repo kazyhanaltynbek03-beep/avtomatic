@@ -4962,13 +4962,13 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
   const [dailyReportBusy, setDailyReportBusy] = useState(false);
   const [siteIntegrations, setSiteIntegrations] = useState({claude:{configured:false},whatsapp:{configured:false,inbound_enabled:false,inbound_ready:false}});
   const [claudeKey, setClaudeKey] = useState("");
-  const [whatsappForm, setWhatsappForm] = useState({provider:"green_api",green_api_url:"",green_api_instance_id:"",green_api_token:"",green_webhook_token:"",access_token:"",phone_number_id:"",template_name:"",language:"ru",graph_version:"v26.0",app_secret:"",webhook_verify_token:"",inbound_enabled:false});
+  const [whatsappForm, setWhatsappForm] = useState({provider:"green_api",green_api_url:"",green_api_instance_id:"",green_api_token:"",green_webhook_token:"",client_chat_number:"",owner_chat_number:"",access_token:"",phone_number_id:"",template_name:"",language:"ru",graph_version:"v26.0",app_secret:"",webhook_verify_token:"",inbound_enabled:false});
   const [integrationBusy, setIntegrationBusy] = useState(false);
   useEffect(() => {
     api("/automation/daily-report").then(setDailyReport).catch((e) => setError(e.message));
     api("/settings/integrations").then((data) => {
       setSiteIntegrations(data);
-      setWhatsappForm((current) => ({...current, provider:data.whatsapp?.provider||"green_api",green_api_url:data.whatsapp?.green_api_url||"",green_api_instance_id:data.whatsapp?.green_api_instance_id||"",phone_number_id:data.whatsapp?.phone_number_id||"", template_name:data.whatsapp?.template_name||"", language:data.whatsapp?.language||"ru", graph_version:data.whatsapp?.graph_version||"v26.0",inbound_enabled:!!data.whatsapp?.inbound_enabled}));
+      setWhatsappForm((current) => ({...current, provider:data.whatsapp?.provider||"green_api",green_api_url:data.whatsapp?.green_api_url||"",green_api_instance_id:data.whatsapp?.green_api_instance_id||"",client_chat_number:data.whatsapp?.client_chat_number||"",owner_chat_number:data.whatsapp?.owner_chat_number||"",phone_number_id:data.whatsapp?.phone_number_id||"", template_name:data.whatsapp?.template_name||"", language:data.whatsapp?.language||"ru", graph_version:data.whatsapp?.graph_version||"v26.0",inbound_enabled:!!data.whatsapp?.inbound_enabled}));
     }).catch((e) => setError(e.message));
   }, []);
   const saveClaudeConnection = async (e) => {
@@ -5079,6 +5079,11 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
           <p className="muted">Входящее сообщение клиента попадёт в очередь ИИ ERP, Claude прочитает доступные данные и ответ отправится в тот же WhatsApp-чат.</p>
           <div className="form-grid"><label>Провайдер<select value={whatsappForm.provider} onChange={e=>setWhatsappForm({...whatsappForm,provider:e.target.value})}><option value="green_api">Green-API · тест</option><option value="whatsapp_cloud">Meta WhatsApp Cloud</option></select></label></div>
           <div className={siteIntegrations.whatsapp?.configured?"success-banner":"info-banner"} role="status">WhatsApp · {siteIntegrations.whatsapp?.configured?"подключение настроено":"ожидает настройки"} · входящий Claude {siteIntegrations.whatsapp?.inbound_ready&&siteIntegrations.claude?.configured?"готов к включению":"не настроен"}</div>
+          <div className="form-grid">
+            <label>Номер клиента для Claude<input type="tel" inputMode="tel" value={whatsappForm.client_chat_number} onChange={e=>setWhatsappForm({...whatsappForm,client_chat_number:e.target.value})} placeholder="+77001234567"/></label>
+            <label>Твой номер для проверки<input type="tel" inputMode="tel" value={whatsappForm.owner_chat_number} onChange={e=>setWhatsappForm({...whatsappForm,owner_chat_number:e.target.value})} placeholder="+77001234567"/></label>
+          </div>
+          <p className="muted">Claude отвечает только клиенту и тебе, если сообщение пришло с этих номеров. Ответ приходит в тот же личный чат; это не включает автоматическую рассылку отчётов.</p>
           {whatsappForm.provider==="green_api" ? <>
             <div className="form-grid">
               <label>API URL<input value={whatsappForm.green_api_url} onChange={e=>setWhatsappForm({...whatsappForm,green_api_url:e.target.value})} placeholder="https://7103.api.greenapi.com"/></label>
@@ -5087,7 +5092,7 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
             </div>
             <details className="integration-advanced" open>
               <summary>Входящие сообщения · webhook Green-API</summary>
-              <p className="muted">В Green-API Console укажите этот webhook URL. В поле токена авторизации укажите Bearer, пробел и тот же секретный токен, который сохраните ниже. Включите incomingWebhook. Номер клиента должен быть сохранён в поле «Номер получателя» ниже.</p>
+              <p className="muted">В Green-API Console укажите этот webhook URL. В поле токена авторизации укажите Bearer, пробел и тот же секретный токен, который сохраните ниже. Включите incomingWebhook.</p>
               <div className="form-grid">
                 <label>Секрет webhook<input type="password" autoComplete="new-password" value={whatsappForm.green_webhook_token} onChange={e=>setWhatsappForm({...whatsappForm,green_webhook_token:e.target.value})} placeholder={siteIntegrations.whatsapp?.green_webhook_token_saved?"Секрет сохранён — оставьте пустым":"Создайте секрет от 16 символов"}/></label>
                 <label>Webhook URL<input readOnly value={window.location.origin+"/api/webhooks/greenapi"}/></label>
