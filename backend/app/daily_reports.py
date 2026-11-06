@@ -23,12 +23,25 @@ PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 
 def _whatsapp_config(db=None):
     saved = load_config("whatsapp_cloud", db)
+    provider = str(saved.get("provider") or (
+        "whatsapp_cloud" if (
+            saved.get("access_token")
+            or os.getenv("QOR_WHATSAPP_ACCESS_TOKEN", "").strip()
+        ) else "green_api"
+    )).strip()
     return {
+        "provider": provider,
         "access_token": str(saved.get("access_token") or os.getenv("QOR_WHATSAPP_ACCESS_TOKEN", "")).strip(),
         "phone_number_id": str(saved.get("phone_number_id") or os.getenv("QOR_WHATSAPP_PHONE_NUMBER_ID", "")).strip(),
         "template_name": str(saved.get("template_name") or os.getenv("QOR_WHATSAPP_TEMPLATE_NAME", "")).strip(),
         "language": str(saved.get("language") or os.getenv("QOR_WHATSAPP_TEMPLATE_LANGUAGE", "ru")).strip(),
         "graph_version": str(saved.get("graph_version") or os.getenv("QOR_WHATSAPP_GRAPH_VERSION", "v26.0")).strip(),
+        "green_api_url": str(saved.get("green_api_url") or "").strip().rstrip("/"),
+        "green_api_instance_id": str(saved.get("green_api_instance_id") or (
+            saved.get("phone_number_id") if provider == "green_api" else ""
+        ) or "").strip(),
+        "green_api_token": str(saved.get("green_api_token") or "").strip(),
+        "green_webhook_token": str(saved.get("green_webhook_token") or "").strip(),
         "source": "site" if saved else ("server" if any(os.getenv(x, "").strip() for x in (
             "QOR_WHATSAPP_ACCESS_TOKEN", "QOR_WHATSAPP_PHONE_NUMBER_ID", "QOR_WHATSAPP_TEMPLATE_NAME")) else "missing"),
     }
@@ -36,6 +49,19 @@ def _whatsapp_config(db=None):
 
 def provider_status(db=None):
     config = _whatsapp_config(db)
+    if config["provider"] == "green_api":
+        missing = [name for name, value in (
+            ("green_api_url", config["green_api_url"]),
+            ("green_api_instance_id", config["green_api_instance_id"]),
+            ("green_api_token", config["green_api_token"]),
+        ) if not value]
+        return {"provider": "green_api", "configured": not missing, "missing": missing,
+                "source": config["source"], "green_api_url": config["green_api_url"],
+                "green_api_instance_id": config["green_api_instance_id"],
+                "green_api_token_saved": bool(config["green_api_token"]),
+                "green_webhook_token_saved": bool(config["green_webhook_token"]),
+                "template_name": "", "language": config["language"],
+                "graph_version": config["graph_version"]}
     missing = [name for name, value in (
         ("access_token", config["access_token"]),
         ("phone_number_id", config["phone_number_id"]),
@@ -116,7 +142,11 @@ def _send_template(recipient, message, db=None):
         raise ValueError("Номер получателя должен быть в международном формате +XXXXXXXX")
     config = _whatsapp_config(db)
     if not provider_status(db)["configured"]:
-        raise RuntimeError("WhatsApp Business Cloud API не настроен")
+        raise RuntimeError("WhatsApp API не настроен")
+    if config["provider"] == "green_api":
+        from .green_api import send_text
+        result = send_text(db, recipient, message)
+        return str(result.get("idMessage") or result.get("messageId") or "")
     version = config["graph_version"]
     if not re.fullmatch(r"v\d+\.\d+", version):
         raise RuntimeError("Некорректная версия WhatsApp Graph API")
@@ -146,6 +176,12 @@ def _send_template(recipient, message, db=None):
 
 def test_whatsapp_connection(db=None):
     config = _whatsapp_config(db)
+    if config["provider"] == "green_api":
+        from .green_api import test_connection
+        result = test_connection(db)
+        if result.get("state") != "authorized":
+            raise RuntimeError(result.get("message") or "Инстанс Green-API не авторизован")
+        return result
     if not config["access_token"] or not config["phone_number_id"]:
         raise RuntimeError("Укажите токен доступа и ID номера WhatsApp")
     if not re.fullmatch(r"v\d+\.\d+", config["graph_version"]):
@@ -189,17 +225,18 @@ def run_due_daily_reports(at=None):
         sent = 0
         for company in companies:
             scope(owner, company.id)
+            provider_key = _whatsapp_config(db)["provider"]
             delivery = db.scalar(select(DailyReportDelivery).where(
                 DailyReportDelivery.company_id == company.id,
                 DailyReportDelivery.report_date == report_date,
                 DailyReportDelivery.recipient == recipient,
-                DailyReportDelivery.provider == PROVIDER,
+                DailyReportDelivery.provider == provider_key,
             ).with_for_update())
             if delivery and delivery.status == "sent":
                 continue
             if not delivery:
                 delivery = DailyReportDelivery(company_id=company.id, report_date=report_date,
-                                               recipient=recipient, provider=PROVIDER, status="pending")
+                                                recipient=recipient, provider=provider_key, status="pending")
                 db.add(delivery)
                 db.flush()
             last_attempt = delivery.last_attempt_at

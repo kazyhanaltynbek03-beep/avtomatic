@@ -105,10 +105,11 @@ def run_one(job_id=None):
                 db.flush()
                 from .whatsapp_inbound import send_whatsapp_text, send_whatsapp_document, make_report_workbook
                 try:
-                    send_whatsapp_text(db, job.payload["whatsapp_sender"], answer)
+                    provider = job.payload.get("whatsapp_provider")
+                    send_whatsapp_text(db, job.payload["whatsapp_sender"], answer, provider=provider)
                     question = str(job.payload.get("question") or "")
                     wants_excel = re.search(r"(?:\bexcel\b|\bxlsx\b|эксел|эксель|таблиц)", question, re.I)
-                    if report_data and wants_excel:
+                    if report_data and wants_excel and provider != "green_api":
                         workbook = make_report_workbook(report_data, answer, result.get("period"), question)
                         send_whatsapp_document(db, job.payload["whatsapp_sender"], workbook, "qor-report.xlsx")
                 except Exception as delivery_error:
