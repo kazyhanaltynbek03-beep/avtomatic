@@ -4488,7 +4488,13 @@ def site_integrations_get(u=Depends(current_user), db=Depends(get_db)):
     try:
         whatsapp = daily_reports.provider_status(db)
         saved_whatsapp = load_config("whatsapp_cloud", db)
-        whatsapp.update({"inbound_enabled": bool(saved_whatsapp.get("inbound_enabled")), "inbound_ready": all(bool(saved_whatsapp.get(k)) for k in ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))})
+        provider = str(saved_whatsapp.get("provider") or whatsapp.get("provider") or "whatsapp_cloud")
+        inbound_keys = (("green_api_url", "green_api_instance_id", "green_api_token", "green_webhook_token")
+                        if provider == "green_api"
+                        else ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))
+        whatsapp.update({"provider": provider,
+                         "inbound_enabled": bool(saved_whatsapp.get("inbound_enabled")),
+                         "inbound_ready": all(bool(saved_whatsapp.get(k)) for k in inbound_keys)})
         claude = ai.key_status(db)
     except SecretStorageError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -4536,7 +4542,10 @@ def site_claude_connection_test(u=Depends(current_user), db=Depends(get_db)):
 @app.put("/api/settings/integrations/whatsapp")
 def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get_db)):
     require(u, "settings", True)
-    allowed = {"access_token", "phone_number_id", "template_name", "language", "graph_version", "app_secret", "webhook_verify_token", "inbound_enabled", "clear"}
+    allowed = {"provider", "access_token", "phone_number_id", "template_name", "language",
+               "graph_version", "app_secret", "webhook_verify_token", "inbound_enabled",
+               "green_api_url", "green_api_instance_id", "green_api_token", "green_webhook_token",
+               "clear"}
     if set(p) - allowed:
         raise HTTPException(422, "Недопустимые поля настройки WhatsApp")
     try:
@@ -4544,6 +4553,10 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
             delete_config(db, "whatsapp_cloud")
         else:
             config = load_config("whatsapp_cloud", db)
+            provider = str(p.get("provider", config.get("provider") or "green_api")).strip()
+            if provider not in {"green_api", "whatsapp_cloud"}:
+                raise HTTPException(422, "Неизвестный WhatsApp API")
+            config["provider"] = provider
             token = str(p.get("access_token") or "").strip()
             if token:
                 if len(token) > 4096 or any(char.isspace() for char in token):
@@ -4561,6 +4574,24 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
                 raise HTTPException(422, "Проверьте код языка шаблона WhatsApp")
             if not re.fullmatch(r"v\d+\.\d+", version):
                 raise HTTPException(422, "Версия Graph API должна выглядеть, например, как v26.0")
+            green_api_url = str(p.get("green_api_url", config.get("green_api_url", "")) or "").strip().rstrip("/")
+            green_api_instance_id = str(p.get("green_api_instance_id", config.get("green_api_instance_id", "")) or "").strip()
+            green_api_token = str(p.get("green_api_token") or "").strip()
+            green_webhook_token = str(p.get("green_webhook_token") or "").strip()
+            if green_api_url and not re.fullmatch(r"https://[a-zA-Z0-9-]+\.api\.greenapi\.com", green_api_url):
+                raise HTTPException(422, "Укажите HTTPS API URL Green-API, например https://7103.api.greenapi.com")
+            if green_api_instance_id and not re.fullmatch(r"\d{1,12}", green_api_instance_id):
+                raise HTTPException(422, "ID инстанса Green-API должен содержать от 1 до 12 цифр")
+            if green_api_token:
+                if not re.fullmatch(r"[A-Za-z0-9._~-]{8,512}", green_api_token):
+                    raise HTTPException(422, "Проверьте токен инстанса Green-API")
+                config["green_api_token"] = green_api_token
+            if green_webhook_token:
+                if len(green_webhook_token) < 16 or len(green_webhook_token) > 256 or any(char.isspace() for char in green_webhook_token):
+                    raise HTTPException(422, "Webhook token Green-API должен содержать от 16 до 256 символов без пробелов")
+                config["green_webhook_token"] = green_webhook_token
+            config.update({"green_api_url": green_api_url,
+                           "green_api_instance_id": green_api_instance_id})
             app_secret = str(p.get("app_secret") or "").strip()
             verify_token = str(p.get("webhook_verify_token") or "").strip()
             if app_secret:
@@ -4581,9 +4612,15 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
         db.rollback()
         raise HTTPException(503, str(exc)) from exc
     audit(db, u, "update", "integration_secret", 2,
-          {"provider": "whatsapp_cloud", "configured": status["configured"]})
+          {"provider": status.get("provider", "whatsapp_cloud"), "configured": status["configured"]})
     db.commit()
-    return {**status, "inbound_enabled": bool(load_config("whatsapp_cloud", db).get("inbound_enabled")), "inbound_ready": all(bool(load_config("whatsapp_cloud", db).get(k)) for k in ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))}
+    saved = load_config("whatsapp_cloud", db)
+    provider = str(saved.get("provider") or status.get("provider") or "whatsapp_cloud")
+    inbound_keys = (("green_api_url", "green_api_instance_id", "green_api_token", "green_webhook_token")
+                    if provider == "green_api"
+                    else ("app_secret", "webhook_verify_token", "access_token", "phone_number_id"))
+    return {**status, "provider": provider, "inbound_enabled": bool(saved.get("inbound_enabled")),
+            "inbound_ready": all(bool(saved.get(k)) for k in inbound_keys)}
 
 
 @app.post("/api/settings/integrations/whatsapp/test")
