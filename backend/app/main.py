@@ -4587,8 +4587,8 @@ def site_whatsapp_settings_save(p: dict, u=Depends(current_user), db=Depends(get
                     raise HTTPException(422, "Проверьте токен инстанса Green-API")
                 config["green_api_token"] = green_api_token
             if green_webhook_token:
-                if len(green_webhook_token) < 16 or len(green_webhook_token) > 256 or any(char.isspace() for char in green_webhook_token):
-                    raise HTTPException(422, "Webhook token Green-API должен содержать от 16 до 256 символов без пробелов")
+                if not re.fullmatch(r"[A-Za-z0-9._~-]{16,256}", green_webhook_token):
+                    raise HTTPException(422, "Webhook token Green-API должен содержать от 16 до 256 латинских букв, цифр, точек, дефисов или подчёркиваний")
                 config["green_webhook_token"] = green_webhook_token
             config.update({"green_api_url": green_api_url,
                            "green_api_instance_id": green_api_instance_id})
