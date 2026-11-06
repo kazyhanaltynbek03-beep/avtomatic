@@ -5078,7 +5078,7 @@ function Settings({ settings, ctx, onLogout, onSkillsUpdated }) {
           <h2>WhatsApp · Claude для клиента</h2>
           <p className="muted">Входящее сообщение клиента попадёт в очередь ИИ ERP, Claude прочитает доступные данные и ответ отправится в тот же WhatsApp-чат.</p>
           <div className="form-grid"><label>Провайдер<select value={whatsappForm.provider} onChange={e=>setWhatsappForm({...whatsappForm,provider:e.target.value})}><option value="green_api">Green-API · тест</option><option value="whatsapp_cloud">Meta WhatsApp Cloud</option></select></label></div>
-          <div className={siteIntegrations.whatsapp?.configured?"success-banner":"info-banner"} role="status">WhatsApp · {siteIntegrations.whatsapp?.configured?"подключение настроено":"ожидает настройки"} · входящий Claude {siteIntegrations.whatsapp?.inbound_ready?"готов к включению":"не настроен"}</div>
+          <div className={siteIntegrations.whatsapp?.configured?"success-banner":"info-banner"} role="status">WhatsApp · {siteIntegrations.whatsapp?.configured?"подключение настроено":"ожидает настройки"} · входящий Claude {siteIntegrations.whatsapp?.inbound_ready&&siteIntegrations.claude?.configured?"готов к включению":"не настроен"}</div>
           {whatsappForm.provider==="green_api" ? <>
             <div className="form-grid">
               <label>API URL<input value={whatsappForm.green_api_url} onChange={e=>setWhatsappForm({...whatsappForm,green_api_url:e.target.value})} placeholder="https://7103.api.greenapi.com"/></label>
