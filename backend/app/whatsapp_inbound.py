@@ -29,6 +29,46 @@ def _recipient_allowed(db, sender):
     return bool(saved and saved == "".join(c for c in str(sender) if c.isdigit()))
 
 
+def _enqueue_inbound_text(db, sender, text, message_id, provider):
+    owner = db.scalar(select(User).where(
+        User.active.is_(True), User.role.in_(("owner", "admin"))
+    ).order_by(User.id).limit(1))
+    if not owner:
+        logger.error("WhatsApp assistant has no active owner account")
+        return None
+    digits = "".join(char for char in str(sender) if char.isdigit())
+    title = "WhatsApp " + (digits[-6:] or "chat")
+    thread = db.scalar(select(AIThread).where(
+        AIThread.user_id == owner.id, AIThread.title == title, AIThread.archived.is_(False)
+    ).order_by(AIThread.id.desc()).limit(1))
+    if not thread:
+        thread = AIThread(user_id=owner.id, agent="rick", title=title, archived=False)
+        db.add(thread)
+        db.flush()
+    recent = db.scalars(
+        select(AIMessage).where(AIMessage.thread_id == thread.id)
+        .order_by(AIMessage.id.desc()).limit(40)
+    ).all()
+    if any((row.meta or {}).get("whatsapp_message_id") == message_id for row in recent):
+        return None
+    history = [{"role": row.role, "content": row.content}
+               for row in reversed(recent) if row.role in ("user", "assistant")][-10:]
+    db.add(AIMessage(thread_id=thread.id, role="user", content=text, attachments=[],
+                     meta={"channel": "whatsapp", "whatsapp_message_id": message_id}))
+    buyer_request = re.search(
+        r"(закуп|закупить|закупка|покупать|что купить|что закуп|что продавать|хорошо прода|лучше прода|бестсел|лидер продаж|топ продаж|перспектив.*товар|ниша|сатып ал|тауар.*сат|сұраныс|қай тауар|жақсы сат|сатылымы жақсы|what to buy|best.?selling|procure|niche)",
+        text.casefold(),
+    )
+    job = Job(company_id=None, user_id=owner.id, kind="assistant", status="queued",
+              payload={"question": text, "agent": "buyer" if buyer_request else "rick",
+                       "history": history, "read_only": True, "include_tool_data": True,
+                       "thread_id": thread.id, "whatsapp_sender": sender,
+                       "whatsapp_provider": provider})
+    db.add(job)
+    db.commit()
+    return job.id
+
+
 @router.get("/api/webhooks/whatsapp")
 async def verify_whatsapp_webhook(request: Request, db=Depends(get_db)):
     config = _config(db)
@@ -43,7 +83,8 @@ async def verify_whatsapp_webhook(request: Request, db=Depends(get_db)):
 @router.post("/api/webhooks/whatsapp")
 async def receive_whatsapp_webhook(request: Request, background: BackgroundTasks, db=Depends(get_db)):
     config = _config(db)
-    if not config.get("inbound_enabled"):
+    if (config.get("provider", "whatsapp_cloud") not in {"whatsapp_cloud", "meta"}
+            or not config.get("inbound_enabled")):
         return {"ok": True}
     app_secret = str(config.get("app_secret") or "")
     if not app_secret:
@@ -71,39 +112,62 @@ async def receive_whatsapp_webhook(request: Request, background: BackgroundTasks
                 message_id = str(message.get("id") or "")
                 if not sender or not message_id or not text or not _recipient_allowed(db, sender):
                     continue
-                owner = db.scalar(select(User).where(User.active.is_(True), User.role.in_(("owner", "admin"))).order_by(User.id).limit(1))
-                if not owner:
-                    logger.error("WhatsApp assistant has no active owner account")
-                    continue
-                title = "WhatsApp " + sender[-6:]
-                thread = db.scalar(select(AIThread).where(AIThread.user_id == owner.id, AIThread.title == title, AIThread.archived.is_(False)).order_by(AIThread.id.desc()).limit(1))
-                if not thread:
-                    thread = AIThread(user_id=owner.id, agent="rick", title=title, archived=False)
-                    db.add(thread)
-                    db.flush()
-                recent = db.scalars(select(AIMessage).where(AIMessage.thread_id == thread.id).order_by(AIMessage.id.desc()).limit(40)).all()
-                if any((row.meta or {}).get("whatsapp_message_id") == message_id for row in recent):
-                    continue
-                history = [{"role": row.role, "content": row.content} for row in reversed(recent) if row.role in ("user", "assistant")][-10:]
-                db.add(AIMessage(thread_id=thread.id, role="user", content=text, attachments=[], meta={"channel": "whatsapp", "whatsapp_message_id": message_id}))
-                buyer_request = re.search(
-                    r"(закуп|закупить|закупка|покупать|что купить|что закуп|что продавать|хорошо прода|лучше прода|бестсел|лидер продаж|топ продаж|перспектив.*товар|ниша|сатып ал|тауар.*сат|сұраныс|қай тауар|жақсы сат|сатылымы жақсы|what to buy|best.?selling|procure|niche)",
-                    text.casefold(),
-                )
-                agent_id = "buyer" if buyer_request else "rick"
-                job = Job(company_id=None, user_id=owner.id, kind="assistant", status="queued",
-                          payload={"question": text, "agent": agent_id, "history": history,
-                                   "read_only": True, "include_tool_data": True, "thread_id": thread.id, "whatsapp_sender": sender})
-                db.add(job)
-                db.commit()
-                from .worker import run_one
-                background.add_task(run_one, job.id)
+                job_id = _enqueue_inbound_text(db, sender, text, message_id, "whatsapp_cloud")
+                if job_id:
+                    from .worker import run_one
+                    background.add_task(run_one, job_id)
     return {"ok": True}
 
 
-def send_whatsapp_text(db, recipient, message):
+@router.post("/api/webhooks/greenapi")
+async def receive_green_api_webhook(request: Request, background: BackgroundTasks, db=Depends(get_db)):
+    config = _config(db)
+    if config.get("provider") != "green_api" or not config.get("inbound_enabled"):
+        return {"ok": True}
+    webhook_token = str(config.get("green_webhook_token") or "").strip()
+    if not webhook_token:
+        raise HTTPException(503, "Green-API webhook is not configured")
+    supplied = request.headers.get("Authorization", "")
+    if not hmac.compare_digest(supplied, "Bearer " + webhook_token):
+        raise HTTPException(401, "Invalid Green-API webhook authorization")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid Green-API webhook payload")
+    if payload.get("typeWebhook") != "incomingMessageReceived":
+        return {"ok": True}
+    instance_id = str((payload.get("instanceData") or {}).get("idInstance") or "")
+    if instance_id != str(config.get("green_api_instance_id") or ""):
+        logger.warning("Ignoring Green-API webhook for an unconfigured instance")
+        return {"ok": True}
+    sender_data = payload.get("senderData") or {}
+    chat_id = str(sender_data.get("chatId") or "")
+    message_data = payload.get("messageData") or {}
+    message_type = str(message_data.get("typeMessage") or "")
+    if message_type == "textMessage":
+        message_text = str((message_data.get("textMessageData") or {}).get("textMessage") or "").strip()[:3000]
+    elif message_type == "extendedTextMessage":
+        message_text = str((message_data.get("extendedTextMessageData") or {}).get("text") or "").strip()[:3000]
+    else:
+        return {"ok": True}
+    message_id = str(payload.get("idMessage") or "")
+    if (not re.fullmatch(r"\d{8,15}@c\.us", chat_id) or not message_id
+            or not message_text or not _recipient_allowed(db, chat_id)):
+        return {"ok": True}
+    job_id = _enqueue_inbound_text(db, chat_id, message_text, message_id, "green_api")
+    if job_id:
+        from .worker import run_one
+        background.add_task(run_one, job_id)
+    return {"ok": True}
+
+
+def send_whatsapp_text(db, recipient, message, provider=None):
     """Send a user-initiated reply inside WhatsApp's service window."""
     config = _config(db)
+    provider = provider or config.get("provider", "whatsapp_cloud")
+    if provider == "green_api":
+        from .green_api import send_text
+        return send_text(db, recipient, message)
     token = str(config.get("access_token") or "").strip()
     phone_id = str(config.get("phone_number_id") or "").strip()
     version = str(config.get("graph_version") or "v26.0").strip()
