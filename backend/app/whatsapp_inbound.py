@@ -125,6 +125,7 @@ async def receive_whatsapp_webhook(request: Request, background: BackgroundTasks
                 if job_id:
                     from .worker import run_one
                     background.add_task(run_one, job_id)
+                logger.info("Queued WhatsApp assistant job %s", job_id)
     return {"ok": True}
 
 
@@ -167,6 +168,7 @@ async def receive_green_api_webhook(request: Request, background: BackgroundTask
     if job_id:
         from .worker import run_one
         background.add_task(run_one, job_id)
+        logger.info("Queued WhatsApp assistant job %s", job_id)
     return {"ok": True}
 
 
