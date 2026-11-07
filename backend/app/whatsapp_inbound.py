@@ -7,7 +7,7 @@ import re
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from .db import get_db
 from .models import AIMessage, AIThread, Job, Setting, User
@@ -40,7 +40,7 @@ def _recipient_allowed(db, sender):
 
 def _enqueue_inbound_text(db, sender, text, message_id, provider):
     owner = db.scalar(select(User).where(
-        User.active.is_(True), User.role.in_(("owner", "admin"))
+        User.active.is_(True), func.lower(User.role).in_(("owner", "admin"))
     ).order_by(User.id).limit(1))
     if not owner:
         logger.error("WhatsApp assistant has no active owner account")
