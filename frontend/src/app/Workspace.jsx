@@ -2551,10 +2551,30 @@ function WBFinanceReport({ accounts, company, period, start, end }) {
   </section>;
 }
 
+function MarketplaceOrderDetail({channel,target,onClose}) {
+  const params=new URLSearchParams({channel,account_id:String(target.account_id),order_id:String(target.order_id)});
+  const data=useLoad("/marketplace-order-detail?"+params);
+  return <div className="modal-backdrop report-detail-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}>
+    <section className="modal report-detail-modal" role="dialog" aria-modal="true" aria-label={`Заказ ${target.order_id}`}>
+      <div className="modal-heading"><div><h2>Заказ {target.order_id}</h2><p>{channel} · {target.store}</p></div><button className="icon-button" onClick={onClose} aria-label="Закрыть"><X size={20}/></button></div>
+      {data.loading?<Spinner/>:data.error?<ErrorBox error={data.error}/>:data.data&&<>
+        <div className="detail-grid"><div><small>Дата</small><strong>{data.data.date?new Date(data.data.date).toLocaleString("ru-RU"):"—"}</strong></div><div><small>Статус API</small><strong>{data.data.status}</strong></div><div><small>Способ доставки</small><strong>{data.data.delivery_method||"—"}</strong></div><div><small>Сумма заказа</small><strong>{data.data.amount==null?"—":money(Math.round(Number(data.data.amount)*100))}</strong></div></div>
+        <p className="muted">{data.data.finance_status}. {data.data.erp_status}.</p>
+        <div className="table-scroll"><table><thead><tr><th>Товар</th><th>SKU</th><th>Количество</th><th>Сумма позиции</th></tr></thead><tbody>{(data.data.items||[]).map((item,index)=><tr key={`${item.sku}:${index}`}><td>{item.product||"—"}</td><td>{item.sku||"—"}</td><td>{item.quantity??"—"}</td><td>{item.amount==null?"—":money(Math.round(Number(item.amount)*100))}</td></tr>)}{!data.data.items?.length&&<tr><td colSpan={4} className="muted">Состав заказа не сохранён в текущих данных API.</td></tr>}</tbody></table></div>
+        <p className="muted">История статусов: {data.data.status_history_note} Контактные данные покупателя в карточке не отображаются.</p>
+      </>}
+    </section>
+  </div>;
+}
+
 function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefresh}) {
   const [filter,setFilter]=useState("all"),[reload,setReload]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(""),[offset,setOffset]=useState(0);
-  useEffect(()=>setOffset(0),[filter,channel,ctx.company,selectedAccount?.id]);
+  const [searchInput,setSearchInput]=useState(""),[search,setSearch]=useState(""),[start,setStart]=useState(""),[end,setEnd]=useState(""),[detailTarget,setDetailTarget]=useState(null);
+  useEffect(()=>setOffset(0),[filter,channel,ctx.company,selectedAccount?.id,search,start,end]);
   const params=new URLSearchParams({channel,status_filter:filter,limit:"30",offset:String(offset)});
+  if(search) params.set("search",search);
+  if(start) params.set("start",start);
+  if(end) params.set("end",end);
   if(ctx.company) params.set("company_id",ctx.company);
   if(selectedAccount) params.set("account_id",String(selectedAccount.id));
   const data=useLoad("/marketplace-orders?"+params,`${ctx.refresh}:${reload}`);
@@ -2566,10 +2586,17 @@ function MarketplaceOrdersReport({channel,ctx,accounts,selectedAccount,canRefres
     } catch(e) {setError(e.message);} finally {setBusy(false);}
   };
   const summary=data.data?.summary||{};
+  const applyFilters=(event)=>{
+    event.preventDefault();
+    if(start&&end&&start>end){setError("Начальная дата не может быть позже конечной.");return;}
+    setError("");setSearch(searchInput.trim());setOffset(0);
+  };
   return <section className="panel marketplace-orders-report"><div className="section-heading"><div><h3>Заказы и товары в пути</h3><p className="muted">Статус берётся из API выбранных магазинов. Сумма заказа не считается выплатой; финансовые расчёты продаж остаются отдельными.</p></div>{canRefresh&&<button type="button" disabled={busy||!accounts.length} onClick={refresh}>{busy?"Обновляем…":"Обновить статусы API"}</button>}</div>
-    <div className="row-actions" role="group" aria-label="Фильтр статуса заказа">{[["all","Все"],["in_delivery","В доставке"],["delivered","Доставлены"],["waiting","Ожидают"],["canceled","Отменены"],["returns","Возвраты / брак"]].map(([id,label])=><button key={id} type="button" aria-pressed={filter===id} className={filter===id?"primary":""} onClick={()=>setFilter(id)}>{label}{id==="all"?` · ${data.data?.total||0}`:` · ${summary[id]||0}`}</button>)}</div>
-    {error&&<ErrorBox error={error}/ >}{data.loading?<Spinner/>:data.error?<ErrorBox error={data.error}/>:!data.data?.items?.length?<Empty text="Заказы для этого фильтра не найдены."/>:<><div className="table-scroll"><table><thead><tr><th>Магазин</th><th>Дата</th><th>Заказ</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма заказа</th><th>Статус API</th><th>Учёт / деньги</th></tr></thead><tbody>{data.data.items.map((x,i)=><tr key={`${x.account_id}:${x.order_id}:${i}`}><td>{x.store}</td><td>{x.date?new Date(x.date).toLocaleString("ru-RU"):"—"}</td><td>{x.order_id}</td><td>{x.product}{x.sku&&<small className="muted"> · {x.sku}</small>}</td><td>{x.quantity??"—"}</td><td>{x.amount==null?"—":money(Math.round(Number(x.amount)*100))}</td><td><span className={`pill marketplace-order-status marketplace-order-status--${x.group}`}>{marketplaceStatusRu(x.status)}</span></td><td><strong>{x.finance_status}</strong><small className="muted">{x.erp_status}</small></td></tr>)}</tbody></table></div><PageNavigation total={data.data.total||0} offset={offset} pageSize={30} onPage={(page)=>setOffset((page-1)*30)}/></>}
+    <form className="row-actions" onSubmit={applyFilters} aria-label="Поиск и период заказов"><label className="expense-operation-search"><Search size={16}/><input aria-label="Поиск по заказам" value={searchInput} onChange={e=>setSearchInput(e.target.value)} placeholder="Номер заказа, товар, SKU, магазин"/></label><label>С<input type="date" value={start} onChange={e=>setStart(e.target.value)}/></label><label>По<input type="date" value={end} onChange={e=>setEnd(e.target.value)}/></label><button type="submit">Найти</button></form>
+    <div className="row-actions" role="group" aria-label="Фильтр статуса заказа">{[["all","Все"],["in_delivery","В доставке"],["delivered","Доставлены"],["waiting","Ожидают"],["canceled","Отменены"],["returns","Возвраты / брак"]].map(([id,label])=><button key={id} type="button" aria-pressed={filter===id} className={filter===id?"primary":""} onClick={()=>setFilter(id)}>{label}{id==="all"?` · ${data.data?.order_count??0}`:` · ${summary[id]||0}`}</button>)}</div>
+    {error&&<ErrorBox error={error}/ >}{data.loading?<Spinner/>:data.error?<ErrorBox error={data.error}/>:!data.data?.items?.length?<Empty text="Заказы для этого фильтра не найдены."/>:<><div className="table-scroll"><table><thead><tr><th>Магазин</th><th>Дата</th><th>Заказ</th><th>Товар / SKU</th><th>Кол-во</th><th>Сумма заказа</th><th>Статус API</th><th>Учёт / деньги</th></tr></thead><tbody>{data.data.items.map((x,i)=><tr key={`${x.account_id}:${x.order_id}:${i}`}><td>{x.store}</td><td>{x.date?new Date(x.date).toLocaleString("ru-RU"):"—"}</td><td><button type="button" className="text-button" onClick={()=>setDetailTarget({account_id:x.account_id,order_id:x.order_id,store:x.store})}>{x.order_id}</button></td><td>{x.product}{x.sku&&<small className="muted"> · {x.sku}</small>}</td><td>{x.quantity??"—"}</td><td>{x.amount==null?"—":money(Math.round(Number(x.amount)*100))}</td><td><span className={`pill marketplace-order-status marketplace-order-status--${x.group}`}>{marketplaceStatusRu(x.status)}</span></td><td><strong>{x.finance_status}</strong><small className="muted">{x.erp_status}</small></td></tr>)}</tbody></table></div><PageNavigation total={data.data.total||0} offset={offset} pageSize={30} onPage={(page)=>setOffset((page-1)*30)}/></>}
     <p className="muted">Kaspi подтверждает статусы заказа, но не банковское зачисление. Для WB финансовая строка означает наличие строки отчёта реализации, а не подтверждение выплаты банком.</p>
+    {detailTarget&&<MarketplaceOrderDetail channel={channel} target={detailTarget} onClose={()=>setDetailTarget(null)}/>}
   </section>;
 }
 
