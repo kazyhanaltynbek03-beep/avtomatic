@@ -1,4 +1,4 @@
-"""Secure inbound WhatsApp Cloud API webhook for the QOR read-only assistant."""
+"""Secure WhatsApp Cloud API and Green-API webhooks for the QOR read-only assistant."""
 import hashlib
 import hmac
 import logging
@@ -38,6 +38,20 @@ def _recipient_allowed(db, sender):
     return bool(sender_number and sender_number in allowed)
 
 
+def _masked_sender(sender):
+    digits = "".join(char for char in str(sender or "") if char.isdigit())
+    return f"…{digits[-4:]}" if digits else "unknown"
+
+
+def _ignored_green_api_webhook(reason, sender=None, message_type=None):
+    """Log why a provider-accepted callback did not create an assistant job."""
+    safe_type = re.sub(r"[^A-Za-z0-9_.-]", "?", str(message_type or "unknown"))[:40]
+    logger.info(
+        "Green-API inbound ignored reason=%s sender=%s message_type=%s",
+        reason, _masked_sender(sender), safe_type,
+    )
+
+
 def _enqueue_inbound_text(db, sender, text, message_id, provider):
     owner = db.scalar(select(User).where(
         User.active.is_(True), func.lower(User.role).in_(("owner", "admin"))
@@ -59,6 +73,7 @@ def _enqueue_inbound_text(db, sender, text, message_id, provider):
         .order_by(AIMessage.id.desc()).limit(40)
     ).all()
     if any((row.meta or {}).get("whatsapp_message_id") == message_id for row in recent):
+        logger.info("Green-API inbound duplicate ignored sender=%s", _masked_sender(sender))
         return None
     history = [{"role": row.role, "content": row.content}
                for row in reversed(recent) if row.role in ("user", "assistant")][-10:]
@@ -133,6 +148,7 @@ async def receive_whatsapp_webhook(request: Request, background: BackgroundTasks
 async def receive_green_api_webhook(request: Request, background: BackgroundTasks, db=Depends(get_db)):
     config = _config(db)
     if config.get("provider") != "green_api" or not config.get("inbound_enabled"):
+        _ignored_green_api_webhook("provider_or_inbound_disabled")
         return {"ok": True}
     webhook_token = str(config.get("green_webhook_token") or "").strip()
     if not webhook_token:
@@ -145,10 +161,13 @@ async def receive_green_api_webhook(request: Request, background: BackgroundTask
     except Exception:
         raise HTTPException(400, "Invalid Green-API webhook payload")
     if payload.get("typeWebhook") != "incomingMessageReceived":
+        logger.debug("Green-API inbound ignored reason=non_message_webhook")
         return {"ok": True}
     instance_id = str((payload.get("instanceData") or {}).get("idInstance") or "")
     if instance_id != str(config.get("green_api_instance_id") or ""):
-        logger.warning("Ignoring Green-API webhook for an unconfigured instance")
+        instance_suffix = "".join(char for char in instance_id if char.isdigit())[-4:] or "unknown"
+        logger.warning("Green-API inbound ignored reason=instance_mismatch instance_suffix=%s",
+                       instance_suffix)
         return {"ok": True}
     sender_data = payload.get("senderData") or {}
     chat_id = str(sender_data.get("chatId") or "")
@@ -159,16 +178,26 @@ async def receive_green_api_webhook(request: Request, background: BackgroundTask
     elif message_type == "extendedTextMessage":
         message_text = str((message_data.get("extendedTextMessageData") or {}).get("text") or "").strip()[:3000]
     else:
+        _ignored_green_api_webhook("unsupported_message_type", sender_data.get("chatId"), message_type)
         return {"ok": True}
     message_id = str(payload.get("idMessage") or "")
-    if (not re.fullmatch(r"\d{8,15}@c\.us", chat_id) or not message_id
-            or not message_text or not _recipient_allowed(db, chat_id)):
+    if not re.fullmatch(r"\d{8,15}@c\.us", chat_id):
+        _ignored_green_api_webhook("not_a_direct_chat", chat_id, message_type)
+        return {"ok": True}
+    if not message_id:
+        _ignored_green_api_webhook("missing_message_id", chat_id, message_type)
+        return {"ok": True}
+    if not message_text:
+        _ignored_green_api_webhook("empty_message", chat_id, message_type)
+        return {"ok": True}
+    if not _recipient_allowed(db, chat_id):
+        _ignored_green_api_webhook("recipient_not_allowed", chat_id, message_type)
         return {"ok": True}
     job_id = _enqueue_inbound_text(db, chat_id, message_text, message_id, "green_api")
     if job_id:
         from .worker import run_one
         background.add_task(run_one, job_id)
-        logger.info("Queued WhatsApp assistant job %s", job_id)
+        logger.info("Green-API inbound queued job=%s sender=%s", job_id, _masked_sender(chat_id))
     return {"ok": True}
 
 
