@@ -96,7 +96,6 @@ def run_one(job_id=None):
                     "designer": ai.designer,
                 }[job.kind](db, user, job.payload)
             report_data = result.pop("report_data", None) if isinstance(result, dict) else None
-            job.result = __import__("fastapi").encoders.jsonable_encoder(result)
             if job.kind == "assistant" and job.payload.get("whatsapp_sender"):
                 answer = str(result.get("answer") or "Не удалось сформировать ответ по данным ERP.")[:4000]
                 thread_id = int(job.payload.get("thread_id") or 0)
@@ -104,17 +103,34 @@ def run_one(job_id=None):
                     db.add(AIMessage(thread_id=thread_id, role="assistant", content=answer, attachments=[], meta={"channel": "whatsapp"}))
                 db.flush()
                 from .whatsapp_inbound import send_whatsapp_text, send_whatsapp_document, make_report_workbook
+                delivery_state = "sent"
+                delivery_failure = None
+                reply_sent = False
                 try:
                     provider = job.payload.get("whatsapp_provider")
                     send_whatsapp_text(db, job.payload["whatsapp_sender"], answer, provider=provider)
+                    reply_sent = True
                     question = str(job.payload.get("question") or "")
                     wants_excel = re.search(r"(?:\bexcel\b|\bxlsx\b|эксел|эксель|таблиц)", question, re.I)
                     if report_data and wants_excel and provider != "green_api":
                         workbook = make_report_workbook(report_data, answer, result.get("period"), question)
                         send_whatsapp_document(db, job.payload["whatsapp_sender"], workbook, "qor-report.xlsx")
-                except Exception as delivery_error:
-                    logging.warning("WhatsApp assistant reply or report could not be delivered (%s)", type(delivery_error).__name__)
-            job.status = "done"
+                except Exception as exc:
+                    delivery_state = "partial" if reply_sent else "failed"
+                    logging.warning("WhatsApp assistant delivery %s for job %s (%s): %s",
+                                    delivery_state, jid, type(exc).__name__, str(exc)[:240])
+                    delivery_failure = exc
+                if isinstance(result, dict):
+                    result["whatsapp_delivery_status"] = delivery_state
+                job.result = __import__("fastapi").encoders.jsonable_encoder(result)
+                if delivery_failure:
+                    job.status = "failed"
+                    job.error = f"WhatsApp delivery {delivery_state}: {str(delivery_failure)}"[:500]
+                else:
+                    job.status = "done"
+            else:
+                job.result = __import__("fastapi").encoders.jsonable_encoder(result)
+                job.status = "done"
             db.commit()
         except Exception as e:
             db.rollback()
