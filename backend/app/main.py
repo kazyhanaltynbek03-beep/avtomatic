@@ -830,7 +830,8 @@ def marketplace_records(
 
 @app.get("/api/marketplace-orders")
 def marketplace_orders_report(channel: str = Query(...), company_id: int | None = None,
-    account_id: int | None = None, status_filter: str = "all",
+    account_id: int | None = None, status_filter: str = "all", search: str = Query("", max_length=200),
+    start: date | None = None, end: date | None = None,
     limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
     u=Depends(current_user), db=Depends(get_db)):
     """Marketplace order lifecycle view; values are operational, not booked cash."""
@@ -877,10 +878,142 @@ def marketplace_orders_report(channel: str = Query(...), company_id: int | None 
             group="returns" if w=="defect" else "canceled" if "cancel" in (w or s) else "delivered" if w in ("sold","ready_for_pickup") else "in_delivery" if w in ("sorted","accepted_by_carrier","sent_to_carrier","postponed_delivery") or s=="complete" else "waiting"
             fp=finance.get((aid,str(p.get("rid") or "")))
             rows.append({"account_id":aid,"store":accs[aid].name,"order_id":str(p.get("id") or oid),"date":p.get("createdAt"),"product":p.get("article") or "—","sku":", ".join(map(str,p.get("skus") or [])),"quantity":1,"amount":None,"status":label,"group":group,"erp_status":"Заказ не считается продажей до подтверждения финансовой строки","finance_status":"Строка отчёта WB найдена" if fp else ("Ожидает строки финансового отчёта WB" if group=="delivered" else "Нет финансовой строки"),"finance_amount":(fp.get("forPay") or fp.get("ppvzForPay") or fp.get("retailAmount")) if fp else None})
-    summary={k:sum(1 for r in rows if r["group"]==k) for k in ("in_delivery","delivered","waiting","canceled","returns")}
+    if start and end and start > end:
+        raise HTTPException(422, "Начальная дата не может быть позже конечной")
+    if start or end:
+        timezone_name = "Asia/Almaty" if channel == "Kaspi" else None
+        ranged = []
+        for row in rows:
+            try:
+                row_day = marketplace_pipeline._day(row.get("date"), timezone_name)
+            except (ValueError, TypeError, OverflowError):
+                continue
+            if start is not None and row_day < start:
+                continue
+            if end is not None and row_day > end:
+                continue
+            ranged.append(row)
+        rows = ranged
+    needle = str(search or "").strip().casefold()
+    if needle:
+        rows = [row for row in rows if needle in " ".join(str(row.get(key) or "") for key in
+                 ("order_id", "product", "sku", "store")).casefold()]
+    summary={key:len({(row["account_id"],str(row["order_id"])) for row in rows if row["group"]==key})
+             for key in ("in_delivery","delivered","waiting","canceled","returns")}
+    order_count=len({(row["account_id"],str(row["order_id"])) for row in rows})
     if status_filter!="all": rows=[r for r in rows if r["group"]==status_filter]
     rows.sort(key=lambda r:str(r.get("date") or ""),reverse=True); total=len(rows)
-    return {"items":rows[offset:offset+limit],"total":total,"summary":summary,"stores":[{"id":a.id,"name":a.name,"sync_status":a.sync_status,"last_sync":a.last_sync} for a in accounts]}
+    return {"items":rows[offset:offset+limit],"total":total,"order_count":order_count,"summary":summary,
+            "stores":[{"id":a.id,"name":a.name,"sync_status":a.sync_status,"last_sync":a.last_sync} for a in accounts]}
+
+
+@app.get("/api/marketplace-order-detail")
+def marketplace_order_detail(channel: str = Query(...), account_id: int = Query(..., ge=1),
+    order_id: str = Query(..., min_length=1, max_length=160), company_id: int | None = None,
+    u=Depends(current_user), db=Depends(get_db)):
+    # Return privacy-safe order fields from stored marketplace snapshots only.
+    require(u, "analytics")
+    if channel not in ("Kaspi", "Wildberries"):
+        raise HTTPException(422, "Поддерживаются Kaspi и Wildberries")
+    account = db.scalar(select(Account).where(Account.id == account_id, Account.channel == channel))
+    if account is None:
+        raise HTTPException(404, "Заказ не найден")
+    scope(u, account.company_id)
+    if company_id is not None:
+        scope(u, company_id)
+        if account.company_id != company_id:
+            raise HTTPException(404, "Заказ не найден")
+
+    record_type = MarketplaceRecord.payload["record_type"].as_string()
+    if channel == "Kaspi":
+        order_record = db.scalar(select(MarketplaceRecord).where(
+            MarketplaceRecord.account_id == account.id, record_type == "order",
+            or_(MarketplaceRecord.payload["order_id"].as_string() == order_id,
+                MarketplaceRecord.payload["code"].as_string() == order_id),
+        ).order_by(MarketplaceRecord.id.desc()).limit(1))
+        if order_record is None:
+            raise HTTPException(404, "Заказ не найден")
+        order = order_record.payload or {}
+        internal_id = str(order.get("order_id") or order_id)
+        entry_records = db.scalars(select(MarketplaceRecord).where(
+            MarketplaceRecord.account_id == account.id, record_type == "order_entry",
+            MarketplaceRecord.payload["order_id"].as_string() == internal_id,
+        ).order_by(MarketplaceRecord.id.asc())).all()
+        entries = [row.payload or {} for row in entry_records]
+        status_code = str(order.get("status") or "")
+        names = {"APPROVED_BY_BANK":"Ожидает продавца","ACCEPTED_BY_MERCHANT":"Принят продавцом",
+                 "COMPLETED":"Выдан покупателю","CANCELLED":"Отменён","CANCELLING":"Отмена в процессе",
+                 "KASPI_DELIVERY_RETURN_REQUESTED":"Запрошен возврат","RETURNED":"Возвращён"}
+        status = names.get(status_code, status_code or "Статус не передан")
+        state = str(order.get("state") or "")
+        if status_code == "ACCEPTED_BY_MERCHANT" and state:
+            status += " · " + ("Kaspi доставка" if state == "KASPI_DELIVERY" else
+                               "доставка продавца" if state == "DELIVERY" else state)
+        items = [{"product": item.get("product_name") or item.get("name") or "—",
+                  "sku": item.get("sku") or item.get("offer_id") or "",
+                  "quantity": item.get("quantity"),
+                  "amount": item.get("total_price") if item.get("total_price") is not None else None}
+                 for item in entries]
+        return {"channel":channel,"account_id":account.id,"store":account.name,
+                "order_id":internal_id,"date":order.get("creation_date"),
+                "status_code":status_code,"status":status,
+                "delivery_method":order.get("deliveryType") or order.get("delivery_type") or order.get("deliveryMode") or state or None,
+                "amount":order.get("total_price") if order.get("total_price") is not None else None,
+                "currency":order.get("currency") or "KZT","items":items,
+                "erp_status":"Заказ не считается фактической продажей до подтверждения API-перехода и данных для проведения",
+                "finance_status":"Статус заказа не подтверждает зачисление денег","finance_amount":None,
+                "status_history":[],"status_history_note":"В базе хранится последний снимок статуса; предыдущие переходы API отдельно не сохраняются.",
+                "privacy_note":"Контактные данные покупателя не включены в эту карточку."}
+
+    external_keys = (MarketplaceRecord.payload["id"].as_string(),
+                     MarketplaceRecord.payload["rid"].as_string(),
+                     MarketplaceRecord.payload["srid"].as_string(),
+                     MarketplaceRecord.payload["orderUid"].as_string())
+    order_filter = [key == order_id for key in external_keys]
+    order_filter.append(MarketplaceRecord.external_id == order_id)
+    order_record = db.scalar(select(MarketplaceRecord).where(
+        MarketplaceRecord.account_id == account.id, record_type.in_(("assembly_order","new_order")),
+        or_(*order_filter),
+    ).order_by(MarketplaceRecord.id.desc()).limit(1))
+    if order_record is None:
+        raise HTTPException(404, "Заказ не найден")
+    order = order_record.payload or {}
+    rid = str(order.get("rid") or order.get("srid") or order.get("orderUid") or order_id)
+    finance_record = db.scalar(select(MarketplaceRecord).where(
+        MarketplaceRecord.account_id == account.id, record_type == "realization",
+        or_(MarketplaceRecord.payload["srid"].as_string() == rid,
+            MarketplaceRecord.payload["rid"].as_string() == rid),
+    ).order_by(MarketplaceRecord.id.desc()).limit(1))
+    supplier_status = str(order.get("supplierStatus") or "")
+    wb_status = str(order.get("wbStatus") or "")
+    status_names = {"new":"Новый заказ","confirm":"Подтверждён, сборка","complete":"Передан в доставку",
+                    "cancel":"Отменён продавцом","cancel_carrier":"Отменён перевозчиком"}
+    wb_names = {"waiting":"Ожидает передачи WB","sorted":"Сортируется","sold":"Выкуплен",
+                "canceled":"Отменён","canceled_by_client":"Отменён клиентом",
+                "declined_by_client":"Отклонён клиентом","defect":"Брак",
+                "ready_for_pickup":"В ПВЗ, ждёт покупателя","postponed_delivery":"Доставка перенесена",
+                "accepted_by_carrier":"Принят перевозчиком","sent_to_carrier":"Передан перевозчику",
+                "canceled_by_carrier":"Отменён перевозчиком"}
+    status = wb_names.get(wb_status) or status_names.get(supplier_status) or "Статус пока не передан"
+    finance = (finance_record.payload or {}) if finance_record else {}
+    finance_amount = next((finance[key] for key in ("forPay","ppvzForPay","retailAmount")
+                           if finance.get(key) is not None), None)
+    skus = order.get("skus") or []
+    if not isinstance(skus, list):
+        skus = [skus]
+    items = [{"product":order.get("article") or order.get("subject") or "—",
+              "sku":", ".join(str(value) for value in skus if value is not None),
+              "quantity":1,"amount":None}]
+    return {"channel":channel,"account_id":account.id,"store":account.name,
+            "order_id":str(order.get("id") or order.get("rid") or order_id),
+            "date":order.get("createdAt"),"status_code":wb_status or supplier_status,
+            "status":status,"delivery_method":order.get("deliveryType") or order.get("delivery_type") or None,
+            "amount":None,"currency":None,"items":items,
+            "erp_status":"Заказ не считается продажей до подтверждения финансовой строки WB",
+            "finance_status":"Строка начисления WB найдена; это не банковская выплата" if finance_record else "Финансовая строка WB не найдена",
+            "finance_amount":finance_amount,"status_history":[],
+            "status_history_note":"В базе хранится последний снимок статуса; предыдущие переходы API отдельно не сохраняются.",
+            "privacy_note":"Контактные данные покупателя не включены в эту карточку."}
 
 
 @app.get("/api/marketplace-products")
